@@ -1,0 +1,67 @@
+package app.gamenative.diagnostics
+
+import kotlinx.serialization.json.Json
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+class DiagnosticLogStoreTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @Test
+    fun `recent returns chronological tail across rotations`() {
+        val directory = temporaryFolder.newFolder("diagnostics")
+        val store = DiagnosticLogStore(directory, json, maxFileBytes = 1, maxFiles = 2)
+
+        repeat(4) { index -> store.append(event(index.toLong())) }
+
+        assertEquals(listOf(2L, 3L), store.recent(10).map { it.timestampEpochMs })
+        assertTrue(directory.listFiles().orEmpty().size <= 2)
+    }
+
+    @Test
+    fun `append drops unknown keys and redacts forbidden approved values`() {
+        val store = DiagnosticLogStore(
+            temporaryFolder.newFolder("privacy"),
+            json,
+        )
+        store.append(
+            event(1).copy(
+                attributes = mapOf(
+                    "unapproved" to "steam:76561198000000000:620",
+                    "reason" to "failed at https://example.invalid/private",
+                ),
+            ),
+        )
+
+        val attributes = store.recent(1).single().attributes
+        assertFalse(attributes.containsKey("unapproved"))
+        assertEquals("[redacted]", attributes["reason"])
+    }
+
+    @Test
+    fun `clear removes every rotated file`() {
+        val directory = temporaryFolder.newFolder("diagnostics")
+        val store = DiagnosticLogStore(directory, json, maxFileBytes = 220, maxFiles = 3)
+        repeat(8) { index -> store.append(event(index.toLong())) }
+
+        store.clear()
+
+        assertTrue(directory.listFiles().orEmpty().isEmpty())
+        assertTrue(store.recent(10).isEmpty())
+    }
+
+    private fun event(timestamp: Long) = DiagnosticEvent(
+        timestampEpochMs = timestamp,
+        sessionId = "session",
+        area = DiagnosticArea.APP,
+        name = DiagnosticEventName.APP_STARTED,
+        outcome = DiagnosticOutcome.SUCCEEDED,
+    )
+}
