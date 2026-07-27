@@ -1,6 +1,7 @@
 package app.gamenative.ui.model
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +31,11 @@ import app.gamenative.db.dao.SteamAppDao
 import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.db.dao.EpicGameDao
 import app.gamenative.db.dao.AmazonGameDao
+import app.gamenative.diagnostics.DiagnosticArea
+import app.gamenative.diagnostics.DiagnosticAttribute
+import app.gamenative.diagnostics.DiagnosticEventName
+import app.gamenative.diagnostics.DiagnosticOutcome
+import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonArtwork
@@ -62,6 +68,7 @@ import java.util.EnumSet
 import javax.inject.Inject
 import kotlin.math.max
 import kotlin.math.min
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -542,6 +549,13 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    private fun diagnosticFilterGroups(state: LibraryState): String = buildList {
+        if (state.searchQuery.isNotEmpty()) add("search")
+        if (state.appInfoSortType.isNotEmpty()) add("app_filter")
+        if (state.selectedSteamCollectionIds.isNotEmpty()) add("collection")
+        add("source_tab")
+    }.joinToString(",")
+
     /**
      * Returns true if a game satisfies all active stat filters. Applied per-source (like
      * [GameCompatibilityCache]'s compatible filter) so the per-source tab counts stay accurate.
@@ -565,7 +579,17 @@ class LibraryViewModel @Inject constructor(
 
     private fun onFilterApps(paginationPage: Int = 0): Job {
         Timber.tag("LibraryViewModel").d("onFilterApps - appList.size: ${appList.size}, isFirstLoad: $isFirstLoad")
-        return viewModelScope.launch(Dispatchers.IO) {
+        val diagnosticStartedAt = SystemClock.elapsedRealtime()
+        val diagnosticState = _state.value
+        val job = viewModelScope.launch(Dispatchers.IO) {
+            FeatureDiagnostics.record(
+                area = DiagnosticArea.LIBRARY_FILTER,
+                name = DiagnosticEventName.LIBRARY_FILTER,
+                outcome = DiagnosticOutcome.STARTED,
+                attributes = mapOf(
+                    DiagnosticAttribute.FILTER_GROUPS to diagnosticFilterGroups(diagnosticState),
+                ),
+            )
             _state.update { it.copy(isLoading = true) }
 
             val currentState = _state.value
@@ -1040,6 +1064,36 @@ class LibraryViewModel @Inject constructor(
                     localCount = if (currentState.showCustomGamesInLibrary) customEntries.size else 0,
                     steamCollectionCounts = steamCollectionCounts,
                 )
+            }
+
+            FeatureDiagnostics.record(
+                area = DiagnosticArea.LIBRARY_FILTER,
+                name = DiagnosticEventName.LIBRARY_FILTER,
+                outcome = DiagnosticOutcome.SUCCEEDED,
+                durationMs = SystemClock.elapsedRealtime() - diagnosticStartedAt,
+                attributes = mapOf(
+                    DiagnosticAttribute.RESULT_COUNT to totalFound.toString(),
+                    DiagnosticAttribute.STEAM_COUNT to steamEntries.size.toString(),
+                    DiagnosticAttribute.GOG_COUNT to gogEntries.size.toString(),
+                    DiagnosticAttribute.EPIC_COUNT to epicEntries.size.toString(),
+                    DiagnosticAttribute.AMAZON_COUNT to amazonEntries.size.toString(),
+                    DiagnosticAttribute.CUSTOM_COUNT to customEntries.size.toString(),
+                ),
+            )
+        }
+        return job.also { filterJob ->
+            filterJob.invokeOnCompletion { error ->
+                if (error != null && error !is CancellationException) {
+                    FeatureDiagnostics.record(
+                        area = DiagnosticArea.LIBRARY_FILTER,
+                        name = DiagnosticEventName.LIBRARY_FILTER,
+                        outcome = DiagnosticOutcome.FAILED,
+                        durationMs = SystemClock.elapsedRealtime() - diagnosticStartedAt,
+                        attributes = mapOf(
+                            DiagnosticAttribute.ERROR_TYPE to error.javaClass.simpleName,
+                        ),
+                    )
+                }
             }
         }
     }

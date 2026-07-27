@@ -57,6 +57,12 @@ import app.gamenative.PluviaApp
 import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.GameSource
+import app.gamenative.diagnostics.DiagnosticArea
+import app.gamenative.diagnostics.DiagnosticAttribute
+import app.gamenative.diagnostics.DiagnosticEventName
+import app.gamenative.diagnostics.DiagnosticOutcome
+import app.gamenative.diagnostics.DiagnosticRedactor
+import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.enums.AppTheme
 import app.gamenative.enums.LoginResult
 import app.gamenative.enums.PathType
@@ -199,7 +205,19 @@ private fun resolveGameAppId(context: Context, appId: String): GameResolutionRes
         }
     }
 
+    val diagnosticAttributes = mapOf(
+        DiagnosticAttribute.SOURCE to gameSource.name,
+        DiagnosticAttribute.CORRELATION_ID to DiagnosticRedactor.correlationId(appId),
+    )
+
     if (!isInstalled) {
+        FeatureDiagnostics.record(
+            area = DiagnosticArea.ACTION_ROUTING,
+            name = DiagnosticEventName.GAME_RESOLUTION,
+            outcome = DiagnosticOutcome.FAILED,
+            attributes = diagnosticAttributes +
+                (DiagnosticAttribute.REASON to "copy_not_installed"),
+        )
         return GameResolutionResult.NotFound(
             gameId = gameId,
             originalAppId = appId,
@@ -209,6 +227,13 @@ private fun resolveGameAppId(context: Context, appId: String): GameResolutionRes
     val isSteamInstalled = gameSource == GameSource.STEAM && isInstalled
     val isCustomGame = gameSource == GameSource.CUSTOM_GAME
 
+    FeatureDiagnostics.record(
+        area = DiagnosticArea.ACTION_ROUTING,
+        name = DiagnosticEventName.GAME_RESOLUTION,
+        outcome = DiagnosticOutcome.SUCCEEDED,
+        attributes = diagnosticAttributes +
+            (DiagnosticAttribute.REASON to "installed_copy_resolved"),
+    )
     return GameResolutionResult.Success(
         finalAppId = appId,
         gameId = gameId,
@@ -262,6 +287,16 @@ private fun consumePendingSteamLoginError(context: Context) {
 
 private fun trackGameLaunched(appId: String) {
     val gameSource = ContainerUtils.extractGameSourceFromContainerId(appId)
+    FeatureDiagnostics.record(
+        area = DiagnosticArea.ACTION_ROUTING,
+        name = DiagnosticEventName.ACTION_ROUTE,
+        outcome = DiagnosticOutcome.STARTED,
+        attributes = mapOf(
+            DiagnosticAttribute.SOURCE to gameSource.name,
+            DiagnosticAttribute.OPERATION to "play",
+            DiagnosticAttribute.CORRELATION_ID to DiagnosticRedactor.correlationId(appId),
+        ),
+    )
     val gameName = ContainerUtils.resolveGameName(appId)
     PostHog.capture(
         event = "game_launched",
