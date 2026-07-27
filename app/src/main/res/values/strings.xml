@@ -1038,6 +1038,14 @@
 
     <!-- Settings: Debug Group -->
     <string name="settings_debug_title">Debug</string>
+    <string name="settings_debug_export_feature_diagnostics_title">Export feature diagnostics</string>
+    <string name="settings_debug_export_feature_diagnostics_subtitle">Save a privacy-filtered report for library, metadata, and launch troubleshooting</string>
+    <string name="settings_debug_clear_feature_diagnostics_title">Clear feature diagnostics</string>
+    <string name="settings_debug_clear_feature_diagnostics_subtitle">Delete locally stored feature events</string>
+    <string name="settings_debug_feature_diagnostics_exported">Diagnostic report saved</string>
+    <string name="settings_debug_feature_diagnostics_cleared">Feature diagnostics cleared</string>
+    <string name="settings_debug_feature_diagnostics_export_failed">Could not save diagnostic report</string>
+    <string name="settings_debug_feature_diagnostics_clear_failed">Could not clear feature diagnostics</string>
     <string name="settings_debug_wine_channels_title">Select Wine Debug Channels</string>
     <string name="settings_debug_wine_logs_title">Enable Wine Debug Logs</string>
     <string name="settings_debug_wine_logs_subtitle">Write Wine debug output to file</string>

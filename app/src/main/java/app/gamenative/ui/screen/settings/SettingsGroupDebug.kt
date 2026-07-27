@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -19,6 +20,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.stringResource
 import app.gamenative.CrashHandler
+import app.gamenative.diagnostics.DiagnosticReportBuilder
+import app.gamenative.diagnostics.FeatureDiagnostics
 import coil.annotation.ExperimentalCoilApi
 import coil.imageLoader
 import app.gamenative.R
@@ -34,6 +37,7 @@ import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.ui.theme.settingsTileColorsAlt
 import com.winlator.PrefManager as WinlatorPrefManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlinx.serialization.decodeFromString
@@ -45,6 +49,7 @@ import app.gamenative.ui.component.dialog.WineDebugChannelsDialog
 @Composable
 fun SettingsGroupDebug() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val isPreview = LocalInspectionMode.current
     if (!isPreview) {
         PrefManager.init(context)
@@ -128,6 +133,26 @@ fun SettingsGroupDebug() {
         }
     }
 
+    val saveFeatureDiagnostics = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { resultUri ->
+        resultUri?.let { uri ->
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        val outputStream = checkNotNull(context.contentResolver.openOutputStream(uri))
+                        outputStream.use {
+                            it.write(DiagnosticReportBuilder.build(context).toByteArray(Charsets.UTF_8))
+                        }
+                    }
+                    SnackbarManager.show(context.getString(R.string.settings_debug_feature_diagnostics_exported))
+                } catch (_: Exception) {
+                    SnackbarManager.show(context.getString(R.string.settings_debug_feature_diagnostics_export_failed))
+                }
+            }
+        }
+    }
+
     if (showLogcatDialog && latestCrashFile != null) {
         val crashText by produceState("Loading...", latestCrashFile) {
             value = withContext(Dispatchers.IO) { readTail(latestCrashFile) }
@@ -183,6 +208,29 @@ fun SettingsGroupDebug() {
             title = { Text(text = stringResource(R.string.settings_save_logcat_title)) },
             subtitle = { Text(text = stringResource(R.string.settings_save_logcat_subtitle)) },
             onClick = { saveLogCat.launch("app_logs_${CrashHandler.timestamp}.txt") },
+        )
+        SettingsMenuLink(
+            colors = settingsTileColorsAlt(),
+            title = { Text(text = stringResource(R.string.settings_debug_export_feature_diagnostics_title)) },
+            subtitle = { Text(text = stringResource(R.string.settings_debug_export_feature_diagnostics_subtitle)) },
+            onClick = {
+                saveFeatureDiagnostics.launch("gamenative_feature_diagnostics_${CrashHandler.timestamp}.txt")
+            },
+        )
+        SettingsMenuLink(
+            colors = settingsTileColors(),
+            title = { Text(text = stringResource(R.string.settings_debug_clear_feature_diagnostics_title)) },
+            subtitle = { Text(text = stringResource(R.string.settings_debug_clear_feature_diagnostics_subtitle)) },
+            onClick = {
+                scope.launch {
+                    val message = if (withContext(Dispatchers.IO) { FeatureDiagnostics.clear() }) {
+                        R.string.settings_debug_feature_diagnostics_cleared
+                    } else {
+                        R.string.settings_debug_feature_diagnostics_clear_failed
+                    }
+                    SnackbarManager.show(context.getString(message))
+                }
+            },
         )
         // Link to open channel selector
         SettingsMenuLink(
