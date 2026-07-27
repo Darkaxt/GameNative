@@ -15,6 +15,8 @@ The fork will introduce a Steam-normalized presentation layer. When a non-Steam 
 
 Games owned on more than one storefront will appear as one canonical library card. The card will retain all owned copies and route install, play, update, and uninstall actions to the selected copy. Low-confidence matches will never merge automatically.
 
+**Product north star:** Make the library Steam-first, show one card per actual game, provide a native store-like page that quickly explains unfamiliar titles, and let users cut through a roughly 900-game collection with genres, multi-tag matching, popularity, and other useful metadata. The detailed architecture below exists to make those four outcomes safe and maintainable.
+
 The user interface will follow GameNative's existing Compose design language. The game page will preserve the current full-bleed hero and integrated action bar, followed by four GameNative-style pill tabs:
 
 1. Overview
@@ -47,7 +49,8 @@ The desired outcome is a library where an unfamiliar title can be understood wit
 - Normalize confidently matched GOG, Epic, and Amazon games to their Steam equivalent for consistent tags, metadata, artwork, and layout.
 - Keep ownership and all executable actions attached to the actual owning storefront.
 - Collapse multiple owned copies into one canonical library card without losing source-specific state.
-- Add fast, offline-capable genre and tag filtering across all classified titles.
+- Add fast, offline-capable genre and tag filtering across all classified titles, including explicit Match Any/All multi-tag behavior.
+- Add popularity filtering and sorting using last-known Steam review count as a transparent community-activity proxy, without inventing a proprietary score.
 - Display Steam user reviews in a native Reviews tab.
 - Display Steam community discussion listings and readable threads in a native Discussions tab, while opening Steam for authenticated posting actions.
 - Work well with a library of at least 900 owned titles.
@@ -122,7 +125,7 @@ The feature will be divided into focused modules rather than being added directl
 
 #### `GameFacetRepository`
 
-- Stores and exposes canonical genres, tags, feature categories, platforms, and classification coverage.
+- Stores and exposes canonical genres, tags, feature categories, platforms, classification coverage, and lightweight discovery metrics such as Steam review count.
 - Resolves Steam genre/tag/category identifiers into localized labels.
 - Computes filter counts over unique canonical games.
 
@@ -221,6 +224,7 @@ A source adapter resolves `OwnedCopyKey` to the current local row and provider f
 | `releaseYear` | Normalized year used in matching and display. |
 | `developerKey` | Normalized developer identifier used in matching. |
 | `classificationState` | Classified, partially classified, or unclassified; independent of match rejection state. |
+| `steamReviewCount` | Nullable last-known total Steam review count used as the transparent popularity metric. |
 | `createdAt` / `updatedAt` | Canonical record timestamps. |
 
 ### 7.3 `StoreMatchEntity`
@@ -417,13 +421,13 @@ Uninstall and update never operate on more than one copy without an explicit sep
 
 ### 11.1 Filter UI
 
-The existing left-side Options panel will gain collapsible Genres and Tags sections using the established GameNative option rows, typography, focus rings, spacing, and panel animation.
+The existing left-side Options panel will gain collapsible Genres, Tags, and Popularity sections using the established GameNative option rows, typography, focus rings, spacing, and panel animation.
 
 The library surface will show:
 
 - Result count
 - Removable active-filter pills
-- Classification coverage
+- Classification and popularity coverage
 - A "Review unclassified games" action when coverage is incomplete
 
 Genres and tags will be searchable inside the panel. Frequently used values appear first, followed by a complete localized list.
@@ -432,17 +436,21 @@ Genres and tags will be searchable inside the panel. Frequently used values appe
 
 - Multiple genres use OR semantics.
 - Tags support an explicit Match Any or Match All control.
+- Popularity uses the last-known total Steam review count. The initial minimum-community-activity choices are Any, 100+, 1,000+, and 10,000+ reviews; the values are displayed directly rather than hidden behind labels such as "popular."
+- Popularity sorting orders by review count descending and places games with unknown popularity last.
 - Different filter groups combine with AND semantics.
-- Source, status, compatibility, collection, search, genre, and tag filters compose rather than replace one another.
+- Source, status, compatibility, collection, search, genre, tag, and popularity filters compose rather than replace one another.
 - Search checks the canonical title and source-native aliases.
 - Unknown/unclassified games are excluded from active genre/tag results.
-- Clearing genre/tag filters immediately restores unclassified games to normal library results.
-- Selected genre/tag filters and Match Any/All mode persist in preferences consistently with existing library filters.
+- Games with unknown popularity are excluded only while a minimum-popularity filter is active and are included in the visible coverage count.
+- Clearing genre, tag, and popularity filters immediately restores unknown/unclassified games to normal library results.
+- Selected genre/tag filters, Match Any/All mode, popularity threshold, and popularity sort persist in preferences consistently with existing library filters.
 
 ### 11.3 Facet population
 
 - Steam games use genre, category, supported-language, and store-tag fields parsed from synchronized PICS app-info where those fields are present. The current persisted `SteamApp` projection does not yet retain this complete index, so Phase 1 adds explicit parsing, storage, and update triggers.
 - A Steam AppID matched from a non-Steam copy is not assumed to exist in the owned-Steam PICS set. `SteamCatalogProvider` retrieves or reuses public catalog/app-info for that AppID through its approved keyless transport.
+- Popularity uses the latest available total Steam review count from synchronized PICS review aggregates or the lightweight AppReviews summary. All copies matched to the same Steam AppID share that value. Unmatched games remain popularity-unknown rather than mixing incomparable storefront metrics.
 - The Steam tag dictionary is cached per locale through a separately specified dictionary transport. If the transport is unavailable, raw tag IDs remain stored while unlabeled tags stay out of the filter UI; genres and features continue to work.
 - Steam-matched non-Steam games inherit Steam facets.
 - Unmatched GOG and Epic games use their persisted genres/tags mapped into the normalized taxonomy.
@@ -537,7 +545,8 @@ During normal library synchronization, GameNative builds or refreshes:
 - Genres
 - Tags
 - Feature categories
-- Classification coverage
+- Steam review count for popularity filtering/sorting
+- Classification and popularity coverage
 
 This data is sufficient for grouping, sorting, filtering, and card badges.
 
@@ -643,6 +652,7 @@ Development builds can enable components independently only when their prerequis
 - Install/play/update/uninstall/save and extended source-action routing matrix
 - Captured action targets fail closed after account, entitlement, or install-state changes
 - Genre OR and tag Any/All semantics
+- Popularity thresholds, descending sort, unknown-last behavior, and coverage
 - Cross-group AND semantics
 - Classification coverage and unclassified exclusion
 - Metadata precedence and fallback
@@ -682,7 +692,7 @@ Development builds can enable components independently only when their prerequis
 ### 18.5 Scale and regression tests
 
 - A fixed synthetic data fixture containing Room rows and source-adapter runtime snapshots for at least 1,500 source entries with duplicates and 900+ canonical games
-- A named canonical filter/query matrix covering source, status, search, genre OR, tag Any/All, and representative combinations in warm and cold-cache cases
+- A named canonical filter/query matrix covering source, status, search, genre OR, tag Any/All, popularity threshold/sort, and representative combinations in warm and cold-cache cases
 - Facet filtering meets a p95 budget under 100 ms in the JVM benchmark fixture and produces no main-thread work above the Android frame budget in a representative device trace
 - Canonical grouping occurs before pagination and produces stable ordering
 - Existing install, play, update, uninstall, cloud-save, collection, compatibility, recommendation, and custom-game flows continue to work
@@ -702,8 +712,8 @@ Development builds can enable components independently only when their prerequis
 
 ### Phase 2: Library discovery
 
-- Add genre/tag sections to the existing Options panel.
-- Add active-filter pills, counts, coverage, and unclassified review flow.
+- Add genre/tag and popularity sections to the existing Options panel, including multi-tag Any/All and explicit review-count thresholds.
+- Add active-filter pills, popularity sorting, counts, coverage, and unclassified/unknown review flows.
 - Validate source tabs, counts, sorting, search aliases, pagination, and 900-game performance.
 
 ### Phase 3: Native rich details
@@ -735,7 +745,7 @@ The feature is complete when all of the following are true:
 4. Install, play, update, uninstall, saves, and store links capture an explicitly selected or deterministic owned-copy key, resolve it through the correct source adapter, and fail closed if account, entitlement, state, or capability changes before execution.
 5. Low-confidence candidates never merge without user confirmation.
 6. Users can fix or reject a match and the decision persists.
-7. Genre and tag filters work across unique canonical games, expose Any/All tag modes, compose with existing filters, and report unclassified exclusions.
+7. Genre and tag filters work across unique canonical games, expose Any/All tag modes, compose with existing filters, and report unclassified exclusions; popularity filtering/sorting uses visible Steam review-count values and reports unknown coverage.
 8. The native detail screen visually follows GameNative and has exactly Overview, Reviews, Discussions, and Details tabs.
 9. Media appears at the top of Overview; there is no separate Media tab.
 10. Steam-matched GOG, Epic, and Amazon games use available Steam artwork, media, descriptions, tags, features, last-verified store/package information, review data, and discussions while retaining visible ownership provenance and honest unavailable states.
@@ -774,7 +784,7 @@ The feature is complete when all of the following are true:
 - The owning storefront remains authoritative for execution and entitlement.
 - Duplicate owned copies collapse into one canonical card when the match is Verified or High.
 - Ambiguous install/play actions use a remembered, user-visible copy selection.
-- Genre and tag filtering is first-class scope.
+- Genre, multi-tag, and transparent Steam-review-count popularity filtering are first-class scope.
 - Unclassified games are reported honestly rather than silently treated as matches.
 - Canonical IDs are immutable internal identities; owned-copy keys, provider catalog IDs, and resolved action targets remain distinct.
 - User preferences and matching corrections are transactional and outrank automated refresh.
