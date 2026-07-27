@@ -607,6 +607,9 @@ Each detail section has independent loading, stale, empty, and error states.
 - Discussion and review text is treated as untrusted user-generated content.
 - The first version will not maintain a Steam Community WebView session, attach a general cookie jar to community requests, or copy community cookies into GameNative.
 - Analytics will record feature usage, source type, match method, and success/failure categories only when analytics is enabled. Review text, discussion text, usernames, SteamIDs, search text, and match-candidate titles will not be sent.
+- Feature diagnostics are separate from analytics: structured events are stored in a bounded app-private rotation and leave the device only through an explicit manual export. There is no automatic diagnostic upload.
+- Diagnostic attributes are enum-allowlisted and sanitized again at the storage boundary. They may contain event categories, counts, durations, source names, capability names, reason codes, error classes, HTTP status, and short hashed correlation IDs.
+- Diagnostic events and their report never contain tokens, account IDs, SteamIDs, usernames, game or candidate titles, search text, install paths, full URLs, review bodies, or discussion bodies. Existing raw logcat and crash-log exports remain visibly separate actions and are not included in the privacy-filtered feature diagnostic report.
 
 ## 16. Database Migration and Compatibility
 
@@ -621,7 +624,7 @@ Each detail section has independent loading, stale, empty, and error states.
 
 ## 17. Rollout Controls
 
-The work will be delivered behind independently controllable capabilities:
+The bounded local feature-diagnostic foundation is installed before these capabilities and remains independent of their switches so a failed rollout can still be explained. The work will be delivered behind independently controllable capabilities:
 
 - Canonical identity and owned-copy grouping
 - Genre/tag facet index and filters
@@ -658,6 +661,7 @@ Development builds can enable components independently only when their prerequis
 - Metadata precedence and fallback
 - HTML sanitization
 - Steam PICS, store-detail, review, discussion-list, and discussion-thread parsing fixtures
+- Diagnostic attribute allowlisting, sensitive-value redaction, hashed correlation stability, deterministic JSONL rotation, chronological report ordering, and clear behavior
 
 ### 18.2 Database tests
 
@@ -700,6 +704,13 @@ Development builds can enable components independently only when their prerequis
 - No external live endpoint is required for deterministic CI tests; live contract checks are separate diagnostics
 
 ## 19. Delivery Sequence
+
+### Phase 0: Feature diagnostics
+
+- Add bounded, app-private structured event storage before changing library identity or routing behavior.
+- Add manual export and clear actions plus a structured diagnostic tail in crash reports.
+- Instrument current startup, filtering, game resolution, and launch-request boundaries without recording private text or identities.
+- Cross-check every later phase against this design and add events at each new failure boundary.
 
 ### Phase 1: Canonical foundation
 
@@ -756,6 +767,7 @@ The feature is complete when all of the following are true:
 15. A 900+ game library remains responsive and does not prefetch all heavy media/content.
 16. The new versioned canonical detail route works, and existing source-native launch intents and core install/launch flows remain compatible on supported upgrade paths.
 17. No Steam Web API key is embedded or required for the feature.
+18. A release build can manually export and clear a bounded privacy-filtered diagnostic report covering startup, canonical indexing, matching, metadata, facets, filtering, details, community loading, and action routing without a diagnostic network upload.
 
 ## 21. Risks and Mitigations
 
@@ -770,6 +782,7 @@ The feature is complete when all of the following are true:
 | Account or entitlement changes during an action | Re-resolve the captured copy through its source adapter and fail closed without silently choosing another copy. |
 | Large migration or enrichment queue | Idempotent resumable index construction, supported-schema migration tests, persisted bounded work, visible progress, and cached-first UI. |
 | Community cache grows without bound | Separate byte/item budgets, LRU eviction, and a user-visible clear-community-cache action. |
+| Diagnostic events leak private library or account data | Accept only enum-allowlisted attributes, sanitize again before persistence, prohibit private text and raw identities, test exported reports with seeded forbidden values, bound local storage, and require manual export. |
 | Fast upstream changes cause merge conflicts | Keep provider, resolver, cache, filter, and screen modules isolated; minimize edits to source service managers and legacy screens. |
 | Community content exposes unsafe markup | Treat all content as untrusted, sanitize descriptions, render review/discussion text as text, and validate external URLs. |
 | Store taxonomy conflicts | Prefer Steam for matched games, normalize only unambiguous fallback genres, preserve provenance, and keep raw provider identifiers available. |
@@ -789,4 +802,5 @@ The feature is complete when all of the following are true:
 - Canonical IDs are immutable internal identities; owned-copy keys, provider catalog IDs, and resolved action targets remain distinct.
 - User preferences and matching corrections are transactional and outrank automated refresh.
 - Keyless Steam catalog, review, tag, and community transports are best-effort capabilities with cached, external, or unavailable fallbacks rather than guaranteed APIs.
+- Feature diagnostics are bounded, privacy-filtered, manually exported, and independent of analytics; they never upload automatically.
 - The public fork and APK are accepted project scope; licensing/notices are preserved but are not a design blocker.
