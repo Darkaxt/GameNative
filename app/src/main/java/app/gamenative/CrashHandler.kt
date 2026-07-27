@@ -1,6 +1,12 @@
 package app.gamenative
 
 import android.content.Context
+import app.gamenative.diagnostics.DiagnosticArea
+import app.gamenative.diagnostics.DiagnosticAttribute
+import app.gamenative.diagnostics.DiagnosticEventName
+import app.gamenative.diagnostics.DiagnosticOutcome
+import app.gamenative.diagnostics.DiagnosticReportBuilder
+import app.gamenative.diagnostics.FeatureDiagnostics
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -90,6 +96,14 @@ class CrashHandler(
     }
 
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
+        FeatureDiagnostics.record(
+            area = DiagnosticArea.APP,
+            name = DiagnosticEventName.APP_CRASHED,
+            outcome = DiagnosticOutcome.FAILED,
+            attributes = mapOf(
+                DiagnosticAttribute.ERROR_TYPE to throwable.javaClass.simpleName,
+            ),
+        )
         PrefManager.recentlyCrashed = true
 
         saveCrashToFile(throwable)
@@ -123,6 +137,9 @@ class CrashHandler(
                 appendLine()
                 appendLine("---------- Logcat ----------")
                 appendLine(recentLogcat)
+                appendLine()
+                appendLine("---------- Feature Diagnostics ----------")
+                appendLine(DiagnosticReportBuilder.build(context, eventLimit = 100))
             }
 
             File(crashFileDir, "pluvia_crash_$timestamp.txt").writeText(crashReport)

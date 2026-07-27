@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.navigation.NavController
 import app.gamenative.db.dao.AmazonGameDao
 import app.gamenative.db.dao.GOGGameDao
+import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.events.EventDispatcher
 import app.gamenative.service.ActiveGameRegistry
 import app.gamenative.service.DownloadService
@@ -70,7 +71,9 @@ class PluviaApp : SplitCompatApplication() {
 
         NetworkMonitor.init(this)
 
-        // Init our custom crash handler.
+        FeatureDiagnostics.initialize(this)
+
+        // Init our custom crash handler after diagnostics so crashes include the event tail.
         CrashHandler.initialize(this)
 
         // Init our datastore preferences.
