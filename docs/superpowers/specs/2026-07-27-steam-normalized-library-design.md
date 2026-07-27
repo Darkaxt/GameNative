@@ -1,6 +1,6 @@
 # Steam-Normalized Library and Native Game Details
 
-**Status:** Design approved for specification
+**Status:** Refined design awaiting implementation planning
 
 **Date:** 2026-07-27
 
@@ -9,7 +9,7 @@
 
 ## 1. Summary
 
-GameNative can install and launch games from Steam, GOG, Epic Games Store, and Amazon Games, but its library presentation exposes only a small portion of the metadata it already receives. This becomes a serious usability problem for libraries containing hundreds of promotional or unfamiliar titles.
+GameNative can install and launch games from Steam, GOG, Epic Games Store, and Amazon Games, but its library presentation exposes only a small portion of the metadata available from its synchronized source data and public storefront transports. Some rich Steam fields require new retrieval, parsing, sanitization, and persistence rather than merely exposing an existing presentation model. This gap becomes a serious usability problem for libraries containing hundreds of promotional or unfamiliar titles.
 
 The fork will introduce a Steam-normalized presentation layer. When a non-Steam entitlement can be confidently matched to a Steam application, Steam becomes the canonical source for artwork, title, descriptions, trailers, screenshots, tags, genres, supported features, languages, requirements, reviews, and community discussions. The owning storefront remains authoritative for entitlement, installation, launch, updates, save synchronization, and source-specific state.
 
@@ -109,10 +109,10 @@ The feature will be divided into focused modules rather than being added directl
 
 #### `CanonicalLibraryRepository`
 
-- Projects existing Steam, GOG, Epic, Amazon, and custom-game entities into canonical games and owned copies.
+- Projects existing Steam, GOG, Epic, Amazon, and custom-game entities together with observed install and play-history state into canonical games and owned copies.
 - Groups copies that share a confirmed canonical identity.
 - Provides canonical library flows, source-aware counts, and detail entry points.
-- Does not perform network calls itself.
+- Does not perform network calls itself. Volatile copy state is supplied by source adapters rather than persisted as canonical metadata.
 
 #### `CanonicalGameResolver`
 
@@ -150,11 +150,19 @@ The feature will be divided into focused modules rather than being added directl
 - Keeps parsing isolated behind stable domain models and fixture tests.
 - Produces an external Steam URL for every thread and authenticated action.
 
+#### `OwnedCopySourceAdapter`
+
+- Defines the stable owned-copy key for one source and resolves it to the source's current local row and provider identifiers.
+- Observes volatile installation, update, download, branch, container, save, and play-history state from the source's existing managers.
+- Declares source capabilities and executes source-native operations without exposing credentials to the canonical layer.
+- Revalidates account scope, entitlement, and current state before an operation begins.
+
 #### `OwnedCopyActionRouter`
 
-- Selects the correct source adapter for install, play, update, uninstall, store-page, and save actions.
+- Selects the correct source adapter for install, play, update, uninstall, store-page, save, branch, container, launch-configuration, diagnostics, shortcut, mod, and other source-supported actions.
+- Resolves a durable owned-copy key to an immutable action target when the user invokes an action, then revalidates it immediately before execution.
 - Remembers the preferred copy for each canonical game.
-- Never uses presentation provenance to choose an executable action.
+- Never uses presentation provenance, title matching, or mutable list position to choose an executable action.
 
 #### `GameDetailViewModel`
 
@@ -183,18 +191,30 @@ interface GameMetadataProvider {
 }
 ```
 
-`ProviderResult` will distinguish fresh data, stale cached data, unavailable data, unsupported data, and recoverable errors. Providers can change their transport or parsing implementation without changing the UI.
+`ProviderGameIdentity` identifies catalog metadata, not an owned or executable copy. It contains the provider and the minimum provider-native catalog identifiers needed for lookup. It never serves as an action target.
+
+`ProviderResult` distinguishes fresh data, stale cached data, unavailable data, unsupported data, and recoverable errors. Each provider documents which fields and query modes its transport actually supports. Providers can change transport or parsing implementation without changing the UI, but unsupported fields are not synthesized to satisfy the presentation model.
 
 ## 7. Data Model
 
-Existing `SteamApp`, `GOGGame`, `EpicGame`, `AmazonGame`, and custom-game storage remain authoritative for ownership and source-specific state. The canonical layer references those rows rather than duplicating credentials, manifests, paths, or entitlement state.
+Existing `SteamApp`, `GOGGame`, `EpicGame`, `AmazonGame`, and custom-game storage remain authoritative for ownership and source-specific state. The canonical layer references those records through source adapters rather than duplicating credentials, manifests, paths, or entitlement state. Because current sources use different combinations of local row IDs and provider IDs, a generic integer or unscoped string is not a valid cross-source action identity.
 
-### 7.1 `CanonicalGameEntity`
+### 7.1 Identity boundaries
+
+Three identities remain distinct:
+
+- `canonicalId` is an immutable, opaque internal identifier for presentation grouping. Matching or correcting a Steam AppID never changes it.
+- `OwnedCopyKey(accountScope, source, stableSourceId)` durably identifies one entitlement or custom-game copy. `accountScope` is a non-secret stable account discriminator; `stableSourceId` has a source-defined format and is not assumed to be numeric.
+- Provider catalog identities such as Steam AppID, Epic namespace/catalog ID, Amazon product/entitlement ID, and GOG game ID are stored or resolved by the corresponding source adapter. They do not become generic executable identifiers.
+
+A source adapter resolves `OwnedCopyKey` to the current local row and provider fields. An action captures the resulting immutable target at the user gesture and revalidates account scope, ownership, installation state, and capabilities immediately before execution. List positions, canonical presentation IDs, and title matches are never action targets.
+
+### 7.2 `CanonicalGameEntity`
 
 | Field | Purpose |
 |---|---|
-| `canonicalId` | Stable primary key. `steam:<appid>` when Steam-normalized; otherwise `<source>:<nativeId>`. |
-| `steamAppId` | Canonical Steam AppID when matched. |
+| `canonicalId` | Immutable opaque primary key generated by GameNative. It does not encode a source or Steam AppID. |
+| `steamAppId` | Unique nullable canonical Steam AppID when matched. |
 | `displayName` | Normalized presentation title. |
 | `primaryMetadataSource` | Steam or fallback storefront. |
 | `appType` | Game, application, tool, demo, DLC, soundtrack, or unknown. |
@@ -203,13 +223,16 @@ Existing `SteamApp`, `GOGGame`, `EpicGame`, `AmazonGame`, and custom-game storag
 | `classificationState` | Classified, partially classified, unclassified, or rejected. |
 | `createdAt` / `updatedAt` | Canonical record timestamps. |
 
-### 7.2 `StoreMatchEntity`
+### 7.3 `StoreMatchEntity`
 
-The composite key is `(source, sourceGameId)`.
+The composite key is `(accountScope, source, stableSourceId)`, matching `OwnedCopyKey`.
 
 | Field | Purpose |
 |---|---|
-| `canonicalId` | Resolved canonical identity. |
+| `accountScope` | Non-secret stable discriminator for the owning account or local custom-game scope. |
+| `source` | Owning storefront or custom source. |
+| `stableSourceId` | Source-defined stable entitlement/copy ID; never assumed to be an integer or an action-ready provider ID. |
+| `canonicalId` | Resolved immutable canonical identity. |
 | `steamAppId` | Resolved Steam AppID, if any. |
 | `matchMethod` | Direct Steam ID, trusted map, exact metadata, optional resolver, fuzzy candidate, or manual. |
 | `confidence` | Verified, high, review-required, rejected, or unmatched. |
@@ -217,9 +240,22 @@ The composite key is `(source, sourceGameId)`.
 | `resolverVersion` | Allows deterministic re-evaluation after resolver changes. |
 | `matchedAt` | Match timestamp. |
 
-User-confirmed and user-rejected rows are immutable to automatic rematching unless the user explicitly resets them.
+User-confirmed and user-rejected rows are immutable to automatic rematching unless the user explicitly resets them. Automatic rows retain enough normalized evidence and resolver version information to explain the confidence category and to support deterministic re-evaluation; the UI displays the category and method rather than an invented percentage.
 
-### 7.3 Canonical facet tables
+### 7.4 `CanonicalGamePreferenceEntity`
+
+One row per canonical game stores user-owned presentation and routing choices:
+
+- Preferred `OwnedCopyKey`, nullable when no valid preference exists
+- Explicit title and artwork overrides
+- Other future field overrides only when they have a clear reset-to-provider behavior
+- Update timestamp
+
+A preferred copy that is temporarily unavailable remains remembered but is not routed until its source adapter confirms it is usable. Automatic metadata refresh never overwrites these preferences.
+
+Canonical merge, unmerge, manual correction, and last-copy removal are single database transactions. They move or invalidate match rows, facets, snapshots, and preferences together; preserve explicit user decisions; and never change an existing `canonicalId`. When two canonical records merge, one immutable ID survives according to a deterministic rule and all dependents are repointed in the same transaction. Source rows and custom-game scans remain application-resolved references rather than polymorphic Room foreign keys.
+
+### 7.5 Canonical facet tables
 
 Normalized cross-reference tables will support fast lookup, counts, localization, and future providers:
 
@@ -228,9 +264,11 @@ Normalized cross-reference tables will support fast lookup, counts, localization
 - `CanonicalGameFeatureCrossRef(canonicalId, featureKey)`
 - `SteamTagDictionaryEntity(tagId, locale, label, fetchedAt)`
 
-Genre keys will be normalized strings with provider aliases mapped to a shared taxonomy where an unambiguous mapping exists. Steam community tags remain Steam tag IDs so localized labels can change without rewriting every relationship.
+Each cross-reference uses its listed columns as a composite primary key, has a reverse index beginning with the facet key, and references `CanonicalGameEntity` with transactional cascade cleanup. Dictionary rows use `(tagId, locale)` as their primary key.
 
-### 7.4 `GameDetailSnapshotEntity`
+Genre keys will be normalized strings with provider aliases mapped to a shared taxonomy where an unambiguous mapping exists. Steam community tags remain Steam tag IDs so localized labels can change without rewriting every relationship. Raw provider identifiers are retained when a normalized mapping is unavailable.
+
+### 7.6 `GameDetailSnapshotEntity`
 
 The key is `(canonicalId, locale, country)`.
 
@@ -253,23 +291,26 @@ The snapshot stores:
 
 The snapshot may contain sanitized limited markup, but raw untrusted HTML will not be rendered directly.
 
-### 7.5 Runtime models
+### 7.7 Runtime models
 
-`OwnedCopy` is a runtime projection of an existing source row:
+`OwnedCopy` is a runtime projection assembled by a source adapter from the authoritative source row plus observed install, update, download, save, and play-history state. Persisted canonical tables do not treat these volatile fields as authoritative:
 
 ```kotlin
 data class OwnedCopy(
-    val source: GameSource,
-    val sourceGameId: String,
+    val key: OwnedCopyKey,
+    val nativeTitle: String,
     val isInstalled: Boolean,
     val installPath: String?,
     val lastPlayed: Instant?,
     val playtime: Duration?,
     val updateAvailable: Boolean,
+    val capabilities: Set<OwnedCopyCapability>,
 )
 ```
 
-`CanonicalLibraryItem` combines one `CanonicalGame` with one or more `OwnedCopy` values, presentation artwork, compatibility, filter facets, and a remembered preferred copy.
+`OwnedCopyKey` is durable and preference-safe, but it is not itself an executable provider request. The source adapter resolves it to a current source row and captures a `ResolvedActionTarget` for the requested operation. Resolution failure or changed account/entitlement state fails closed and returns the user to copy selection instead of falling back to another copy silently.
+
+`CanonicalLibraryItem` combines one `CanonicalGame` with one or more current `OwnedCopy` values, presentation artwork, compatibility, filter facets, and a remembered preferred copy.
 
 ## 8. Steam Resolution and Matching
 
@@ -277,19 +318,19 @@ data class OwnedCopy(
 
 The resolver will apply these methods in order:
 
-1. **Existing Steam identity:** A Steam library entry resolves directly to `steam:<appid>`.
+1. **Existing Steam identity:** A Steam library entry resolves directly to its Steam AppID and creates or reuses an immutable canonical record.
 2. **Stored user decision:** A manual confirmation or rejection is final.
-3. **Trusted direct map:** Existing GameNative GOG mappings, Epic namespace mappings, or another provider's exact external Steam AppID.
+3. **Trusted direct map:** A source-supplied Steam AppID or versioned, validated, one-to-one source-to-Steam map may resolve directly. Indirect joins through another store do not qualify by themselves.
 4. **Exact metadata match:** Compatible app type, exact normalized title including meaningful edition tokens, and matching developer or compatible release year.
 5. **Optional secondary resolver:** SteamGridDB or a future provider may supply a candidate, which is verified against locally known title/developer/type data.
 6. **Fuzzy candidate search:** Produces review-required suggestions only.
-7. **Unmatched fallback:** Creates a source-native canonical identity and uses the source's metadata in the shared presentation layout.
+7. **Unmatched fallback:** Creates an independent canonical record with no Steam AppID and uses the source's metadata in the shared presentation layout.
 
 ### 8.2 Confidence policy
 
-- **Verified:** Direct Steam identity, user confirmation, or trusted exact external-ID map. Automatically canonicalized and eligible for duplicate collapse.
+- **Verified:** Direct Steam identity, user confirmation, source-supplied external Steam ID, or a versioned and validated one-to-one direct map. Automatically canonicalized and eligible for duplicate collapse.
 - **High:** Exact compatible title plus corroborating developer or release-year evidence. Automatically canonicalized and eligible for duplicate collapse.
-- **Review-required:** Fuzzy title, conflicting editions, missing corroboration, or optional-resolver-only evidence. Never automatically merged.
+- **Review-required:** Fuzzy title, conflicting editions, missing corroboration, optional-resolver-only evidence, or an indirect cross-store map. Never automatically merged.
 - **Rejected:** User explicitly rejected the candidate. The resolver must not propose it again unless reset.
 - **Unmatched:** No acceptable candidate. The game remains independent and fully usable.
 
@@ -299,8 +340,11 @@ The resolver will apply these methods in order:
 - Edition tokens such as Deluxe, Definitive, Remastered, Complete, GOTY, and Collection are retained during candidate validation even if a base-title key is also generated.
 - Developer aliases are normalized conservatively; a missing developer does not count as positive evidence.
 - Release years may differ by one year across storefronts, but a large conflict blocks automatic matching.
-- A single source entry can map to only one canonical game.
-- Manual "Fix match" supports search, candidate comparison, confirmation, rejection, and returning to source-native identity.
+- Unknown source app type is not positive evidence and is ineligible for automatic cross-type matching until other evidence proves compatibility.
+- Existing GOG-title indexes, indirect Epic-to-GOG-to-Steam joins, and first-result autocomplete services produce candidates only unless they satisfy the trusted direct-map contract.
+- A single owned-copy key can map to only one canonical game.
+- Matching and correction change the canonical record's Steam association and dependent relationships transactionally; they never rederive an action target or mutate source credentials.
+- Manual "Fix match" supports search, candidate comparison, confirmation, rejection, and returning to an unmatched identity while preserving the immutable canonical ID.
 
 ## 9. Metadata Precedence
 
@@ -315,12 +359,13 @@ This applies to title, artwork, media, description, genres, tags, features, lang
 
 Ownership and execution fields use a different, non-negotiable rule:
 
-1. Selected `OwnedCopy`
-2. Remembered preferred copy
-3. Most recently used installed copy
-4. The only available copy
+1. Copy explicitly selected for the current action
+2. Remembered preferred copy when its adapter confirms it supports the action
+3. Most recently used installed copy for play-only actions
+4. The only copy that currently supports the action
+5. Otherwise, require the copy chooser
 
-Steam presentation metadata must never overwrite source-native entitlement IDs, install paths, manifest IDs, branches, cloud-save configuration, update state, or authentication state.
+The chosen key is captured for the action; a later flow update cannot retarget that invocation. Steam presentation metadata must never overwrite source-native entitlement IDs, install paths, manifest IDs, branches, cloud-save configuration, update state, or authentication state.
 
 ## 10. Duplicate Ownership Behavior
 
@@ -341,9 +386,10 @@ Only Verified and High matches are collapsed. Review-required and unmatched entr
 - If no copy is installed and only one copy exists, Install routes directly to it.
 - If no copy is installed and several copies exist, Install opens a storefront chooser and remembers the choice.
 - If exactly one copy is installed, Play routes directly to it.
-- If several copies are installed, Play defaults to the most recently used installed copy or the remembered preferred copy.
+- If several copies are installed, Play uses a valid remembered preferred copy, then the most recently used installed copy.
 - A secondary "Copies" action always allows choosing a different copy.
 - The preferred copy is stored per canonical game and can be changed without changing the match.
+- Before any action starts, the selected source adapter revalidates the captured copy's account, entitlement, state, and capability. Failure never silently falls through to another copy.
 
 ### 10.3 Copy management
 
@@ -365,7 +411,7 @@ Uninstall and update never operate on more than one copy without an explicit sep
 - Installed-first is true when any copy is installed.
 - Size sorting uses the preferred copy, or the single installed copy, and labels the source in detail UI.
 - Playtime shown in the main detail summary belongs to the active/preferred copy. Playtime is not summed across stores because providers may overlap or measure it differently.
-- Compatibility is canonical-game state and is shared across copies unless future evidence proves a source-specific runtime difference.
+- Compatibility is shown as canonical presentation only when its provider result is confidently associated with the canonical Steam AppID. Existing title-based compatibility retains its lookup title/source provenance and is not silently promoted to stable canonical state.
 
 ## 11. Library Discovery and Filtering
 
@@ -395,13 +441,14 @@ Genres and tags will be searchable inside the panel. Frequently used values appe
 
 ### 11.3 Facet population
 
-- Steam games use genres, category flags, supported-language data, and store-tag IDs already present in PICS.
-- The Steam tag dictionary is cached per locale.
+- Steam games use genre, category, supported-language, and store-tag fields parsed from synchronized PICS app-info where those fields are present. The current persisted `SteamApp` projection does not yet retain this complete index, so Phase 1 adds explicit parsing, storage, and update triggers.
+- A Steam AppID matched from a non-Steam copy is not assumed to exist in the owned-Steam PICS set. `SteamCatalogProvider` retrieves or reuses public catalog/app-info for that AppID through its approved keyless transport.
+- The Steam tag dictionary is cached per locale through a separately specified dictionary transport. If the transport is unavailable, raw tag IDs remain stored while unlabeled tags stay out of the filter UI; genres and features continue to work.
 - Steam-matched non-Steam games inherit Steam facets.
 - Unmatched GOG and Epic games use their persisted genres/tags mapped into the normalized taxonomy.
 - Unmatched Amazon and custom games remain unclassified unless native data or a manual Steam match becomes available.
 
-The facet index is eager and lightweight. Heavy descriptions, review pages, screenshots, and videos are not required for filtering.
+The facet index is eager and lightweight. Heavy descriptions, review pages, screenshots, and videos are not required for filtering. Canonical/facet updates emit an explicit index invalidation signal; the implementation must not rely on source-list row-count changes to notice metadata revisions. The repository may use indexed Room queries or a compact in-memory index, but filtering must occur over canonical IDs before UI pagination and satisfy the benchmark contract in Section 18.5.
 
 ## 12. Native Game Detail Experience
 
@@ -418,7 +465,9 @@ The current full-bleed hero, back button, title treatment, and integrated action
 
 The source line will read in the form:
 
-`Epic owned · Normalized to Steam 620 · 99% match · Fix match`
+`Epic owned · Normalized to Steam 620 · High match (exact metadata) · Fix match`
+
+Match presentation uses the stored categorical confidence and method. A numerical percentage is shown only if a future resolver defines, calibrates, persists, and tests a meaningful score.
 
 ### 12.2 Tabs
 
@@ -442,9 +491,10 @@ The media gallery streams content on demand. The first playable trailer is promi
 The Reviews tab contains:
 
 - Overall and recent Steam review summaries when available
-- Helpful, recent, positive/negative, language, and purchase-type filters
-- Native review cards with recommendation, review text, author, playtime, helpfulness, funny votes, comment count, Steam purchase/free-copy flags, Early Access flag, and developer response
+- Helpful and recent ordering, positive/negative, language, and purchase-type filters supported by the public Steam AppReviews transport. "Helpful" maps to Steam's normal helpfulness ordering rather than an invented endpoint value.
+- Native review cards with recommendation, review text, available author identifier, playtime, helpfulness, funny votes, comment count, Steam purchase/free-copy flags, Early Access flag, and developer response
 - Cursor pagination and pull-to-refresh
+- A display name is optional enrichment; when unavailable the UI uses a privacy-conscious Steam user label or identifier rather than fabricating one.
 - An external Steam action for writing, commenting, voting, reporting, or opening the full review
 
 #### Discussions
@@ -470,7 +520,7 @@ Details contains structured technical and store information:
 - Controller and multiplayer support
 - Content descriptors and age ratings
 - Achievements, DLC, editions, support, website, and manual links
-- Current read-only price, discount, package, and edition information when available
+- Last-verified read-only price, discount, package, and edition information when available, with country, currency, and refresh state
 - Field-group provenance and last refresh state
 
 ## 13. Network and Cache Strategy
@@ -498,23 +548,30 @@ Opening a game loads its cached detail snapshot immediately, then refreshes stal
 ### 13.2 Cache policy
 
 - PICS-derived facets follow Steam change/revision data rather than a wall-clock refresh alone.
-- The Steam tag dictionary is cached per locale and refreshed approximately monthly.
+- The Steam tag dictionary is cached per locale and refreshed approximately monthly when its transport is available.
 - Rich store detail is refreshed after approximately seven days or through manual refresh.
+- Price, discount, package, and purchase-availability fields carry country, currency, and fetch time. Once stale they are labeled "last verified" and are never presented as current availability.
 - Review summaries are refreshed after approximately six hours.
-- Review pages are cached by query and cursor for the active browsing session and may persist for offline rereading.
-- Discussion listings are refreshed after approximately thirty minutes; parsed threads are retained for offline rereading.
-- Stale successful data remains readable indefinitely until replaced or explicitly cleared.
+- Review pages are cached by query and cursor for the active browsing session and may persist within the bounded community cache for offline rereading.
+- Discussion listings are refreshed after approximately thirty minutes; parsed threads may persist within that bounded cache.
+- Successful core metadata remains readable indefinitely until replaced or explicitly cleared. Review and discussion caches use separate byte/item budgets with LRU eviction and a user-visible clear action so browsing a large library cannot grow storage without bound.
 - Image caching continues through Coil. Videos and full screenshot collections are not proactively downloaded.
 
-These durations control freshness, not cancellation. Network work uses structured coroutine cancellation, bounded provider concurrency, retry/backoff for recoverable responses, and no hard cancellation timeouts.
+These durations control freshness rather than UI visibility. Network work uses structured coroutine cancellation, bounded provider concurrency, provider-owned connect/read/call timeouts, retry/backoff that honors recoverable responses, and transport cancellation where supported. A failed or timed-out request keeps the last successful cache entry.
 
-### 13.3 Large-library behavior
+### 13.3 Provider transport contract
+
+Steam catalog detail, AppReviews, tag dictionaries, and community pages are best-effort keyless public transports, not guaranteed internal APIs. Each provider defines its supported request fields, response fixtures, rate-limit handling, and `unsupported`/`unavailable` behavior. The catalog country comes from an existing validated storefront/account country when available or an explicit application setting; it is never silently hardcoded. Locale and country are part of relevant cache keys.
+
+Provider requests construct HTTPS URLs from approved hosts, validate the effective host after redirects, and reject unapproved media or external-link hosts before passing URLs to Coil, media playback, or the browser. Community requests use no app cookie jar, copied Steam session, age-gate bypass, or authenticated scraping. Public HTML parsing may fail independently and always retains the external Steam fallback.
+
+### 13.4 Large-library behavior
 
 - Canonical grouping and facet filtering occur before UI pagination.
 - Rich metadata is deduplicated by canonical Steam AppID, so the same game owned on several stores is fetched once.
 - At most one rich-detail refresh per canonical/locale/country key runs concurrently.
 - Library sync never launches hundreds of simultaneous detail calls.
-- An optional background "Enrich library metadata" operation may process the text/facet queue while on an allowed network, with visible progress and resumable state.
+- The optional background "Enrich library metadata" operation uses unique persisted Android work with network constraints, bounded batches, retry/backoff, transactional checkpoints, account-change cancellation, visible progress, and a foreground notification when platform rules require it. If that lifecycle integration is not ready for the first release, enrichment remains an explicit foreground operation rather than claiming resumability across process death.
 
 ## 14. Offline and Error Behavior
 
@@ -536,18 +593,20 @@ Each detail section has independent loading, stale, empty, and error states.
 - Publisher keys are out of scope.
 - Existing authenticated storefront tokens remain inside their current credential storage and service boundaries.
 - Steam description markup is sanitized to a small allowlist before native rendering.
-- External URLs are validated to supported HTTPS hosts or opened through the system browser with explicit user action.
+- Provider metadata and media requests are HTTPS-only and use provider-specific host allowlists validated after redirects, regardless of the application's broader network-security configuration.
+- External URLs are validated before display. Approved Steam/support links open through the system browser only after explicit user action; unapproved hosts are never fetched silently.
 - Discussion and review text is treated as untrusted user-generated content.
-- The first version will not maintain a Steam Community WebView session or copy community cookies into GameNative.
+- The first version will not maintain a Steam Community WebView session, attach a general cookie jar to community requests, or copy community cookies into GameNative.
 - Analytics will record feature usage, source type, match method, and success/failure categories only when analytics is enabled. Review text, discussion text, usernames, SteamIDs, search text, and match-candidate titles will not be sent.
 
 ## 16. Database Migration and Compatibility
 
 - The Room database version will be incremented with explicit migrations for every new table and index.
-- Existing Steam, GOG, Epic, Amazon, container, install, save, and history rows are not rewritten destructively.
-- Initial canonical rows are generated from existing source tables after migration.
+- Before release, the implementation identifies every public database version supported for direct upgrade and provides a tested, non-destructive chain from each one. Existing destructive fallback does not satisfy this requirement. Any historical version that cannot be supported is documented as an explicit recovery limitation rather than covered by a blanket preservation claim.
+- Existing Steam, GOG, Epic, Amazon, container, install, save, and history rows are not rewritten destructively on supported paths.
+- Initial canonical rows are generated from existing source tables and source adapters after migration.
 - Generation is resumable and idempotent.
-- Existing `LibraryItem.appId` deep links and intents remain accepted through a compatibility resolver that maps them to `(canonicalId, sourceCopy)`.
+- A new versioned detail route accepts `canonicalId` and an optional `OwnedCopyKey`. Existing external launch intents keep their current source/native-ID contract and resolve through the corresponding source adapter; the design does not assume an existing canonical detail deep link where none exists.
 - Frontend sync files continue to use source-native IDs unless their public schema is separately versioned.
 - If the feature is disabled or initialization fails, the existing source-entry library remains available as a recovery path during rollout.
 
@@ -561,18 +620,28 @@ The work will be delivered behind independently controllable capabilities:
 - Steam reviews
 - Steam discussions
 
-Development builds can enable components independently. The public build should enable a component only after its migration, offline behavior, gamepad navigation, and fallback path pass validation.
+Capability dependencies are explicit:
+
+1. Canonical projection, source adapters, migrations, and recovery fallback are prerequisites for every other capability.
+2. A completed facet-index checkpoint is required before genre/tag controls become visible; an incomplete index reports progress rather than misleading coverage.
+3. The shared native detail shell is required before Reviews or Discussions can be enabled.
+4. Reviews and Discussions remain independently switchable and may fail closed to their external Steam actions.
+
+Development builds can enable components independently only when their prerequisites are satisfied. The public build enables a component after its migration, offline behavior, gamepad navigation, cache bounds, and fallback path pass validation. A consumer encountering a missing prerequisite returns to the existing source-entry experience rather than partially interpreting canonical data.
 
 ## 18. Testing Strategy
 
 ### 18.1 Unit tests
 
 - Title, developer, year, app-type, and edition normalization
-- Trusted-map and confidence policy
+- Trusted direct-map boundaries and confidence policy
 - Manual confirmation and rejection precedence
+- Immutable canonical identity across match, correction, merge, and unmerge
+- Account-scoped copy identity and source-adapter resolution
 - Duplicate grouping and ungrouping
-- Preferred-copy selection
-- Install/play/update/uninstall routing matrix
+- Preferred-copy selection, invalid preference handling, and recovery
+- Install/play/update/uninstall/save and extended source-action routing matrix
+- Captured action targets fail closed after account, entitlement, or install-state changes
 - Genre OR and tag Any/All semantics
 - Cross-group AND semantics
 - Classification coverage and unclassified exclusion
@@ -582,12 +651,13 @@ Development builds can enable components independently. The public build should 
 
 ### 18.2 Database tests
 
-- Migration from the current production schema
-- Idempotent canonical index creation
-- Unique constraints and foreign-key cleanup
-- Persistence of manual decisions and preferred copies
+- Migration from every explicitly supported public schema
+- Idempotent and resumable canonical index creation
+- Composite unique constraints, reverse facet indexes, and canonical foreign-key cleanup
+- Transactional merge, unmerge, correction, and last-copy removal
+- Persistence of manual decisions, preferred copies, and presentation overrides
 - Locale-specific tag dictionaries and detail snapshots
-- Recovery from interrupted enrichment
+- Recovery from interrupted enrichment and process death
 
 ### 18.3 View-model and repository tests
 
@@ -597,7 +667,7 @@ Development builds can enable components independently. The public build should 
 - Concurrent request deduplication
 - Offline results
 - Source-tab counts versus All-tab unique counts
-- Source-native deep-link compatibility
+- Versioned canonical detail routes and preservation of existing source-native launch-intent behavior
 
 ### 18.4 Compose tests
 
@@ -611,21 +681,24 @@ Development builds can enable components independently. The public build should 
 
 ### 18.5 Scale and regression tests
 
-- A synthetic library of at least 1,500 source entries with duplicates and 900+ canonical games
-- Facet filtering completes without visible UI stalls; the target filter computation budget is under 100 ms on the JVM benchmark fixture
+- A fixed synthetic Room fixture containing at least 1,500 source entries with duplicates and 900+ canonical games
+- A named canonical filter/query matrix covering source, status, search, genre OR, tag Any/All, and representative combinations in warm and cold-cache cases
+- Facet filtering meets a p95 budget under 100 ms in the JVM benchmark fixture and produces no main-thread work above the Android frame budget in a representative device trace
 - Canonical grouping occurs before pagination and produces stable ordering
 - Existing install, play, update, uninstall, cloud-save, collection, compatibility, recommendation, and custom-game flows continue to work
+- Community cache budgets and eviction are validated against repeated browsing across the large fixture
 - No external live endpoint is required for deterministic CI tests; live contract checks are separate diagnostics
 
 ## 19. Delivery Sequence
 
 ### Phase 1: Canonical foundation
 
-- Add canonical, match, facet, and preference storage.
-- Parse Steam PICS facets and tag IDs.
-- Project existing source rows into owned copies.
-- Implement deterministic matching and manual correction.
-- Group duplicate ownerships and route copy-specific actions.
+- Add immutable canonical identity, account-scoped copy keys, match, facet, preference/override, and migration storage.
+- Extract source adapters that resolve owned-copy keys, observe volatile state, declare capabilities, and execute current source-native actions.
+- Parse and persist Steam PICS facets and tag IDs, including explicit update triggers and non-owned-AppID fallback retrieval.
+- Project existing source rows and runtime state into owned copies.
+- Implement deterministic matching, transactional merge/unmerge, and manual correction.
+- Group duplicate ownerships and route captured copy-specific actions safely.
 
 ### Phase 2: Library discovery
 
@@ -659,31 +732,34 @@ The feature is complete when all of the following are true:
 1. All confidently matched copies share one canonical presentation and one set of Steam-normalized facets.
 2. The All tab shows a single card for a game owned on multiple storefronts.
 3. Source tabs show that canonical game when it is owned on the selected source and preserve source-aware counts.
-4. Install, play, update, uninstall, saves, and store links always use an explicitly selected or deterministic owned copy.
+4. Install, play, update, uninstall, saves, and store links capture an explicitly selected or deterministic owned-copy key, resolve it through the correct source adapter, and fail closed if account, entitlement, state, or capability changes before execution.
 5. Low-confidence candidates never merge without user confirmation.
 6. Users can fix or reject a match and the decision persists.
 7. Genre and tag filters work across unique canonical games, expose Any/All tag modes, compose with existing filters, and report unclassified exclusions.
 8. The native detail screen visually follows GameNative and has exactly Overview, Reviews, Discussions, and Details tabs.
 9. Media appears at the top of Overview; there is no separate Media tab.
-10. Steam-matched GOG, Epic, and Amazon games use Steam artwork, media, descriptions, tags, features, current store/package information, review data, and discussions while retaining visible ownership provenance.
+10. Steam-matched GOG, Epic, and Amazon games use available Steam artwork, media, descriptions, tags, features, last-verified store/package information, review data, and discussions while retaining visible ownership provenance and honest unavailable states.
 11. Unmatched games use the same layout with source metadata and remain fully installable/playable.
-12. Reviews are browsable natively with official API pagination and filters.
+12. Reviews are browsable natively with documented AppReviews cursor pagination, supported query mappings, available author identity, and external actions for unsupported authenticated operations.
 13. Discussions are readable natively when public parsing succeeds, with Steam opened for authenticated actions.
 14. Cached facets and details remain useful offline, and independent network failures do not blank unrelated sections.
 15. A 900+ game library remains responsive and does not prefetch all heavy media/content.
-16. Existing source-native deep links and core install/launch flows remain compatible.
+16. The new versioned canonical detail route works, and existing source-native launch intents and core install/launch flows remain compatible on supported upgrade paths.
 17. No Steam Web API key is embedded or required for the feature.
 
 ## 21. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Steam rich store-detail transport changes | Isolate parsing in `SteamCatalogProvider`, retain fixtures, cache successful data, and fall back to PICS/source metadata and the external store page. |
+| Steam rich store-detail transport changes | Isolate parsing in `SteamCatalogProvider`, retain fixtures, cache successful data, label stale commerce data last-verified, and fall back to PICS/source metadata and the external store page. |
+| Keyless transport is rate-limited, region-gated, or unavailable | Honor retry guidance and circuit breaking, keep country/locale explicit, degrade each capability independently, and never bypass age gates or require copied credentials. |
 | Steam tag-dictionary transport changes | Cache localized dictionaries, preserve raw tag IDs, retain the last successful dictionary, and fall back to genres/features until labels can be refreshed. |
 | Steam discussion HTML changes | Isolate parsing, test saved fixtures, fail only the Discussions section, and retain Open Community. |
-| Incorrect cross-store match | Conservative confidence policy, app-type/edition safeguards, visible provenance, manual correction, and persistent rejection. |
-| Duplicate grouping routes the wrong install | Separate canonical metadata from `OwnedCopy`, centralize routing, require a chooser when ambiguous, and test the full action matrix. |
-| Large migration or enrichment queue | Idempotent resumable index construction, bounded concurrency, visible progress, and cached-first UI. |
+| Incorrect cross-store match | Conservative confidence policy, strict direct-map contract, app-type/edition safeguards, visible provenance, manual correction, and persistent rejection. |
+| Duplicate grouping routes the wrong install | Separate canonical metadata from account-scoped `OwnedCopyKey`, centralize source adapters, capture and revalidate action targets, require a chooser when ambiguous, and test the full capability matrix. |
+| Account or entitlement changes during an action | Re-resolve the captured copy through its source adapter and fail closed without silently choosing another copy. |
+| Large migration or enrichment queue | Idempotent resumable index construction, supported-schema migration tests, persisted bounded work, visible progress, and cached-first UI. |
+| Community cache grows without bound | Separate byte/item budgets, LRU eviction, and a user-visible clear-community-cache action. |
 | Fast upstream changes cause merge conflicts | Keep provider, resolver, cache, filter, and screen modules isolated; minimize edits to source service managers and legacy screens. |
 | Community content exposes unsafe markup | Treat all content as untrusted, sanitize descriptions, render review/discussion text as text, and validate external URLs. |
 | Store taxonomy conflicts | Prefer Steam for matched games, normalize only unambiguous fallback genres, preserve provenance, and keep raw provider identifiers available. |
@@ -700,4 +776,7 @@ The feature is complete when all of the following are true:
 - Ambiguous install/play actions use a remembered, user-visible copy selection.
 - Genre and tag filtering is first-class scope.
 - Unclassified games are reported honestly rather than silently treated as matches.
+- Canonical IDs are immutable internal identities; owned-copy keys, provider catalog IDs, and resolved action targets remain distinct.
+- User preferences and matching corrections are transactional and outrank automated refresh.
+- Keyless Steam catalog, review, tag, and community transports are best-effort capabilities with cached, external, or unavailable fallbacks rather than guaranteed APIs.
 - The public fork and APK are accepted project scope; licensing/notices are preserved but are not a design blocker.
