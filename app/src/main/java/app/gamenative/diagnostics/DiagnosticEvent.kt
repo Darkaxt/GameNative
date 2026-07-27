@@ -33,6 +33,7 @@ enum class DiagnosticOutcome {
     STARTED,
     SUCCEEDED,
     FAILED,
+    DEFERRED,
     SKIPPED,
     CACHE_HIT,
     STALE,

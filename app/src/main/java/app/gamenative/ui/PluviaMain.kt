@@ -172,6 +172,28 @@ private sealed class GameResolutionResult {
     ) : GameResolutionResult()
 }
 
+private fun gameDiagnosticAttributes(appId: String) = mapOf(
+    DiagnosticAttribute.SOURCE to ContainerUtils.extractGameSourceFromContainerId(appId).name,
+    DiagnosticAttribute.CORRELATION_ID to DiagnosticRedactor.correlationId(appId),
+)
+
+private fun actionRouteAttributes(appId: String) = gameDiagnosticAttributes(appId) +
+    (DiagnosticAttribute.OPERATION to "play")
+
+private fun recordActionRoute(
+    appId: String,
+    outcome: DiagnosticOutcome,
+    reason: String,
+) {
+    FeatureDiagnostics.record(
+        area = DiagnosticArea.ACTION_ROUTING,
+        name = DiagnosticEventName.ACTION_ROUTE,
+        outcome = outcome,
+        attributes = actionRouteAttributes(appId) +
+            (DiagnosticAttribute.REASON to reason),
+    )
+}
+
 private fun resolveGameAppId(context: Context, appId: String): GameResolutionResult {
     val gameSource = ContainerUtils.extractGameSourceFromContainerId(appId)
     val gameId = ContainerUtils.extractGameIdFromContainerId(appId)
@@ -205,10 +227,7 @@ private fun resolveGameAppId(context: Context, appId: String): GameResolutionRes
         }
     }
 
-    val diagnosticAttributes = mapOf(
-        DiagnosticAttribute.SOURCE to gameSource.name,
-        DiagnosticAttribute.CORRELATION_ID to DiagnosticRedactor.correlationId(appId),
-    )
+    val diagnosticAttributes = gameDiagnosticAttributes(appId)
 
     if (!isInstalled) {
         FeatureDiagnostics.record(
@@ -281,21 +300,21 @@ private fun consumePendingSteamLoginError(context: Context) {
     val request = MainActivity.peekPendingLaunchRequest() ?: return
     val gameSource = ContainerUtils.extractGameSourceFromContainerId(request.appId)
     if (gameSource != GameSource.STEAM || SteamService.isLoggedIn) return
+    recordActionRoute(
+        appId = request.appId,
+        outcome = DiagnosticOutcome.FAILED,
+        reason = "steam_login_failed",
+    )
     MainActivity.consumePendingLaunchRequest()
     SnackbarManager.show(context.getString(R.string.intent_launch_steam_login_failed))
 }
 
 private fun trackGameLaunched(appId: String) {
     val gameSource = ContainerUtils.extractGameSourceFromContainerId(appId)
-    FeatureDiagnostics.record(
-        area = DiagnosticArea.ACTION_ROUTING,
-        name = DiagnosticEventName.ACTION_ROUTE,
-        outcome = DiagnosticOutcome.STARTED,
-        attributes = mapOf(
-            DiagnosticAttribute.SOURCE to gameSource.name,
-            DiagnosticAttribute.OPERATION to "play",
-            DiagnosticAttribute.CORRELATION_ID to DiagnosticRedactor.correlationId(appId),
-        ),
+    recordActionRoute(
+        appId = appId,
+        outcome = DiagnosticOutcome.SUCCEEDED,
+        reason = "prelaunch_dispatched",
     )
     val gameName = ContainerUtils.resolveGameName(appId)
     PostHog.capture(
@@ -385,6 +404,11 @@ fun PluviaMain(
     val launchIntentApp: (resolvedAppId: String, hasTemporaryOverride: Boolean) -> Unit = { resolvedAppId, hasTemporaryOverride ->
         val requestedGameId = runCatching { ContainerUtils.extractGameIdFromContainerId(resolvedAppId) }.getOrNull()
         if (SteamService.keepAlive && requestedGameId != null && ActiveGameRegistry.get()?.appId == requestedGameId) {
+            recordActionRoute(
+                appId = resolvedAppId,
+                outcome = DiagnosticOutcome.SUCCEEDED,
+                reason = "existing_session_foregrounded",
+            )
             Timber.i("[PluviaMain]: Game $resolvedAppId already running; bringing XServer screen forward")
             if (navController.currentDestination?.route != PluviaScreen.XServer.route) {
                 navController.navigate(PluviaScreen.XServer.route)
@@ -427,11 +451,21 @@ fun PluviaMain(
     // process pending launch request from cold start (event bus has no replay)
     LaunchedEffect(Unit) {
         MainActivity.consumePendingLaunchRequest()?.let { launchRequest ->
+            recordActionRoute(
+                appId = launchRequest.appId,
+                outcome = DiagnosticOutcome.STARTED,
+                reason = "external_launch_requested",
+            )
             Timber.i("[PluviaMain]: Processing pending launch request for app ${launchRequest.appId}")
             // defer if service isn't ready yet — will be processed on ServiceReady/OnLogonEnded
             // consume+requeue is safe: both calls are non-suspending, so no other coroutine
             // can interleave between them on the main dispatcher (cooperative scheduling).
             if (needsDeferLaunch(context, launchRequest.appId)) {
+                recordActionRoute(
+                    appId = launchRequest.appId,
+                    outcome = DiagnosticOutcome.DEFERRED,
+                    reason = "service_not_ready",
+                )
                 MainActivity.setPendingLaunchRequest(launchRequest)
                 pendingLaunchGeneration++
                 shownPendingLaunchSnackbar = showDeferredLaunchSnackbar(context, launchRequest.appId)
@@ -448,6 +482,11 @@ fun PluviaMain(
                 }
 
                 is GameResolutionResult.NotFound -> {
+                    recordActionRoute(
+                        appId = launchRequest.appId,
+                        outcome = DiagnosticOutcome.FAILED,
+                        reason = "copy_not_installed",
+                    )
                     val appName = ContainerUtils.resolveGameName(resolution.originalAppId)
                     Timber.w("[PluviaMain]: Game not installed: $appName (${launchRequest.appId})")
                     msgDialogState = MessageDialogState(
@@ -469,6 +508,11 @@ fun PluviaMain(
         delay(PENDING_LAUNCH_TIMEOUT_MS)
         MainActivity.peekPendingLaunchRequest()?.let { request ->
             if (needsDeferLaunch(context, request.appId)) {
+                recordActionRoute(
+                    appId = request.appId,
+                    outcome = DiagnosticOutcome.FAILED,
+                    reason = "service_timeout",
+                )
                 Timber.tag("IntentLaunch").w("Pending launch timed out for ${request.appId}")
                 MainActivity.consumePendingLaunchRequest()
                 SnackbarManager.show(context.getString(R.string.intent_launch_service_timeout))
@@ -483,6 +527,11 @@ fun PluviaMain(
                 .i("Processing pending launch for ${launchRequest.appId} ($reason)")
             when (val resolution = resolveGameAppId(context, launchRequest.appId)) {
                 is GameResolutionResult.NotFound -> {
+                    recordActionRoute(
+                        appId = launchRequest.appId,
+                        outcome = DiagnosticOutcome.FAILED,
+                        reason = "copy_not_installed",
+                    )
                     val appName = ContainerUtils.resolveGameName(resolution.originalAppId)
                     Timber.tag("IntentLaunch").w("Game not installed: $appName (${launchRequest.appId})")
                     msgDialogState = MessageDialogState(
@@ -521,10 +570,20 @@ fun PluviaMain(
                 }
 
                 is MainViewModel.MainUiEvent.ExternalGameLaunch -> {
+                    recordActionRoute(
+                        appId = event.appId,
+                        outcome = DiagnosticOutcome.STARTED,
+                        reason = "external_launch_requested",
+                    )
                     Timber.i("[PluviaMain]: Received ExternalGameLaunch UI event for app ${event.appId}")
 
                     // defer if service isn't ready yet
                     if (needsDeferLaunch(context, event.appId)) {
+                        recordActionRoute(
+                            appId = event.appId,
+                            outcome = DiagnosticOutcome.DEFERRED,
+                            reason = "service_not_ready",
+                        )
                         // preserve any container config override already applied by handleLaunchIntent
                         MainActivity.setPendingLaunchRequest(
                             IntentLaunchManager.LaunchRequest(
@@ -547,6 +606,11 @@ fun PluviaMain(
                         }
 
                         is GameResolutionResult.NotFound -> {
+                            recordActionRoute(
+                                appId = event.appId,
+                                outcome = DiagnosticOutcome.FAILED,
+                                reason = "copy_not_installed",
+                            )
                             val appName = ContainerUtils.resolveGameName(resolution.originalAppId)
                             Timber.w("[PluviaMain]: Game not installed: $appName (${event.appId})")
                             msgDialogState = MessageDialogState(
