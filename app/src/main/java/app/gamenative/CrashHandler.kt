@@ -1,6 +1,7 @@
 package app.gamenative
 
 import android.content.Context
+import androidx.core.content.pm.PackageInfoCompat
 import app.gamenative.diagnostics.DiagnosticArea
 import app.gamenative.diagnostics.DiagnosticAttribute
 import app.gamenative.diagnostics.DiagnosticEventName
@@ -122,7 +123,7 @@ class CrashHandler(
 
             val crashReport = buildString {
                 appendLine("Timestamp: $timestamp")
-                appendLine("App Version: ${packageInfo.versionName} (${packageInfo.longVersionCode})")
+                appendLine("App Version: ${packageInfo.versionName} (${PackageInfoCompat.getLongVersionCode(packageInfo)})")
                 appendLine()
                 appendLine("---------- Device Information ----------")
                 appendLine("${android.os.Build.MANUFACTURER} - ${android.os.Build.BRAND} - ${android.os.Build.MODEL}")

@@ -2,6 +2,7 @@ package app.gamenative.diagnostics
 
 import android.content.Context
 import android.os.Build
+import androidx.core.content.pm.PackageInfoCompat
 import app.gamenative.BuildConfig
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -20,7 +21,7 @@ object DiagnosticReportBuilder {
         val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         return build(
             header = DiagnosticReportHeader(
-                appVersion = "${packageInfo.versionName} (${packageInfo.longVersionCode})",
+                appVersion = "${packageInfo.versionName} (${PackageInfoCompat.getLongVersionCode(packageInfo)})",
                 buildFlavor = BuildConfig.FLAVOR,
                 device = "${Build.MANUFACTURER} ${Build.MODEL}",
                 androidVersion = Build.VERSION.RELEASE,
