@@ -1309,6 +1309,7 @@ git push fork HEAD
 
 **Files:**
 - Create: `app/src/main/java/app/gamenative/library/canonical/CanonicalProjectionEngine.kt`
+- Modify: `app/src/main/java/app/gamenative/di/CanonicalLibraryModule.kt`
 - Test: `app/src/test/java/app/gamenative/library/canonical/CanonicalProjectionEngineTest.kt`
 
 - [ ] **Step 1: Write projection transaction tests**
@@ -1343,10 +1344,11 @@ data class CanonicalProjectionResult(
 class CanonicalProjectionEngine @Inject constructor(
     private val db: PluviaDatabase,
     private val resolver: CanonicalResolver,
-    private val canonicalGameDao: CanonicalGameDao,
-    private val storeMatchDao: StoreMatchDao,
-    private val facetDao: CanonicalFacetDao,
 ) {
+    private val canonicalGameDao = db.canonicalGameDao()
+    private val storeMatchDao = db.storeMatchDao()
+    private val facetDao = db.canonicalFacetDao()
+
     suspend fun rebuild(
         batches: List<SourceProjectionBatch>,
         nowEpochMs: Long,
@@ -1354,7 +1356,7 @@ class CanonicalProjectionEngine @Inject constructor(
 }
 ```
 
-Validate batch invariants before opening the transaction: one batch per source, batch source equals every copy source, complete/partial batches have non-null account scope, keys use that exact scope, and keys are unique across input.
+Defensively snapshot the batches, copy lists, and nested facet sets before validation so suspension cannot observe caller-owned mutable aliases. Validate batch invariants before opening the transaction: one batch per source, batch source equals every copy source, complete/partial batches have non-null account scope, keys use that exact scope, and keys are unique across input. Derive every writing DAO from the exact `PluviaDatabase` instance whose transaction is opened. Bind `CanonicalResolver`, the production UUID generator, and the intentionally empty trusted-mapping provider set in `CanonicalLibraryModule`.
 
 - [ ] **Step 3: Implement one idempotent transaction**
 
@@ -1366,9 +1368,10 @@ Inside `db.withTransaction`:
 4. Resolve each copy.
 5. Insert a newly created canonical with `ABORT`; otherwise update only when canonical presentation metadata actually changed.
 6. Upsert the relationship as present while preserving user decision fields from a stored user row.
-7. Replace automatically derived facets only for that canonical's current winning metadata source; union Steam facets when a canonical has a verified/high Steam identity.
-8. Recompute `classificationState` from persisted facet presence: `CLASSIFIED` when genres and tags/features are available, `PARTIALLY_CLASSIFIED` when at least one class exists, otherwise `UNCLASSIFIED`.
-9. Derive aggregate counts in memory; do not query or log titles/IDs.
+7. Replace automatically derived facets only from copies belonging to the canonical's final winning metadata source. Union all observed winning-source copies; a `PARTIAL` snapshot may add observed facets but must retain facets contributed by omitted copies. Non-winning and unavailable sources never erase winning facets.
+8. Recompute `classificationState` from the final facet sets: `CLASSIFIED` when genres and tags/features are available, `PARTIALLY_CLASSIFIED` when at least one class exists, otherwise `UNCLASSIFIED`.
+9. Coalesce same-canonical effects and restore the transaction-start `updatedAt` when deterministic intermediate metadata changes converge to the exact original row and facets.
+10. Derive aggregate counts in memory; do not query or log titles/IDs.
 
 Do not add a checkpoint table. One Room transaction is the resumability boundary: cancellation or process death leaves the previous complete projection, and the next invalidation safely reruns the whole bounded snapshot.
 
@@ -1377,8 +1380,8 @@ Do not update `matchedAt`, `createdAt`, or `updatedAt` on a no-op rebuild. This 
 - [ ] **Step 4: Run projection tests**
 
 ```bash
-./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionEngineTest" \
-  :app:testModernDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionEngineTest"
+./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionEngineTest"
+./gradlew :app:testModernDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionEngineTest"
 ```
 
 Expected: idempotence, completeness, facet, account-scope, and rollback tests pass.
@@ -1387,7 +1390,9 @@ Expected: idempotence, completeness, facet, account-scope, and rollback tests pa
 
 ```bash
 git add app/src/main/java/app/gamenative/library/canonical/CanonicalProjectionEngine.kt \
-  app/src/test/java/app/gamenative/library/canonical/CanonicalProjectionEngineTest.kt
+  app/src/main/java/app/gamenative/di/CanonicalLibraryModule.kt \
+  app/src/test/java/app/gamenative/library/canonical/CanonicalProjectionEngineTest.kt \
+  docs/superpowers/plans/2026-07-28-steam-library-stage-1-canonical-foundation.md
 git commit -m "feat: build canonical library projection"
 git push fork HEAD
 ```
