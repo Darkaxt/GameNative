@@ -331,6 +331,168 @@ class CanonicalGameResolverTest {
     }
 
     @Test
+    fun oldStandaloneRelationDoesNotCorroborateItselfOrChangeCanonicalId() = runTest {
+        val standalone = canonical(
+            index = 1,
+            title = "Control",
+            steamAppId = null,
+            developer = "Remedy Entertainment",
+        )
+        val ownedCopy = copy(
+            displayName = "Control",
+            developer = "Remedy Entertainment",
+        )
+        val idGenerator = SequentialIdGenerator(start = 100)
+        val resolver = resolver(
+            canonicals = listOf(standalone),
+            matches = listOf(
+                match(
+                    copy = ownedCopy,
+                    canonicalId = standalone.canonicalId,
+                    method = MatchMethod.UNMATCHED,
+                    confidence = MatchConfidence.UNMATCHED,
+                    resolverVersion = CURRENT_RESOLVER_VERSION - 1,
+                ),
+            ),
+            idGenerator = idGenerator,
+        )
+
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
+
+        assertEquals(standalone.canonicalId, result.canonical.canonicalId)
+        assertEquals(MatchMethod.UNMATCHED, result.match.matchMethod)
+        assertEquals(MatchConfidence.UNMATCHED, result.match.confidence)
+        assertNull(result.match.candidateSteamAppId)
+        assertFalse(result.createdCanonical)
+        assertEquals(0, idGenerator.generatedCount)
+    }
+
+    @Test
+    fun anotherCopyCanCorroborateTheExistingCanonicalDuringReevaluation() = runTest {
+        val canonical = canonical(
+            index = 1,
+            title = "Control",
+            steamAppId = null,
+            developer = "Remedy Entertainment",
+        )
+        val ownedCopy = copy(
+            displayName = "Control",
+            developer = "Remedy Entertainment",
+        )
+        val siblingCopy = copy(
+            source = GameSource.EPIC,
+            stableSourceId = "sibling-copy",
+            displayName = "Control",
+            developer = "Remedy Entertainment",
+        )
+        val resolver = resolver(
+            canonicals = listOf(canonical),
+            matches = listOf(
+                match(
+                    copy = ownedCopy,
+                    canonicalId = canonical.canonicalId,
+                    method = MatchMethod.UNMATCHED,
+                    confidence = MatchConfidence.UNMATCHED,
+                    resolverVersion = CURRENT_RESOLVER_VERSION - 1,
+                ),
+                match(
+                    copy = siblingCopy,
+                    canonicalId = canonical.canonicalId,
+                    method = MatchMethod.EXACT_METADATA,
+                    confidence = MatchConfidence.HIGH,
+                ),
+            ),
+        )
+
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
+
+        assertEquals(canonical.canonicalId, result.canonical.canonicalId)
+        assertEquals(MatchMethod.EXACT_METADATA, result.match.matchMethod)
+        assertEquals(MatchConfidence.HIGH, result.match.confidence)
+        assertFalse(result.createdCanonical)
+    }
+
+    @Test
+    fun oldStandaloneRelationCannotManufactureAmbiguityWithIndependentCandidate() = runTest {
+        val standalone = canonical(
+            index = 1,
+            title = "Control",
+            steamAppId = null,
+            developer = "Remedy Entertainment",
+        )
+        val independent = canonical(
+            index = 2,
+            title = "Control",
+            steamAppId = 870780,
+            developer = "Remedy Entertainment",
+        )
+        val ownedCopy = copy(
+            displayName = "Control",
+            developer = "Remedy Entertainment",
+        )
+        val idGenerator = SequentialIdGenerator(start = 100)
+        val resolver = resolver(
+            canonicals = listOf(standalone, independent),
+            matches = listOf(
+                match(
+                    copy = ownedCopy,
+                    canonicalId = standalone.canonicalId,
+                    method = MatchMethod.UNMATCHED,
+                    confidence = MatchConfidence.UNMATCHED,
+                    resolverVersion = CURRENT_RESOLVER_VERSION - 1,
+                ),
+            ),
+            idGenerator = idGenerator,
+        )
+
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
+
+        assertEquals(independent.canonicalId, result.canonical.canonicalId)
+        assertEquals(MatchMethod.EXACT_METADATA, result.match.matchMethod)
+        assertEquals(MatchConfidence.HIGH, result.match.confidence)
+        assertEquals(870780, result.match.candidateSteamAppId)
+        assertFalse(result.createdCanonical)
+        assertEquals(0, idGenerator.generatedCount)
+    }
+
+    @Test
+    fun resetStandaloneSteamAssociationReusesIdentityWithoutKeepingSteamId() = runTest {
+        val standalone = canonical(
+            index = 1,
+            title = "Control",
+            steamAppId = 870780,
+            developer = "Remedy Entertainment",
+        )
+        val ownedCopy = copy(
+            displayName = "Control",
+            developer = "Remedy Entertainment",
+        )
+        val idGenerator = SequentialIdGenerator(start = 100)
+        val resolver = resolver(
+            canonicals = listOf(standalone),
+            matches = listOf(
+                match(
+                    copy = ownedCopy,
+                    canonicalId = standalone.canonicalId,
+                    method = MatchMethod.UNMATCHED,
+                    confidence = MatchConfidence.UNMATCHED,
+                    resolverVersion = 0,
+                ),
+            ),
+            idGenerator = idGenerator,
+        )
+
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
+
+        assertEquals(standalone.canonicalId, result.canonical.canonicalId)
+        assertNull(result.canonical.steamAppId)
+        assertEquals(MatchMethod.UNMATCHED, result.match.matchMethod)
+        assertEquals(MatchConfidence.UNMATCHED, result.match.confidence)
+        assertFalse(result.createdCanonical)
+        assertEquals(0, idGenerator.generatedCount)
+    }
+
+    @Test
     fun validatedSupportedOneToOneMapReusesCompatibleSteamCanonical() = runTest {
         val target = canonical(
             index = 1,
@@ -942,7 +1104,7 @@ class CanonicalGameResolverTest {
             error("Resolver must not count references")
 
         override suspend fun countAllReferences(canonicalId: String): Int =
-            error("Resolver must not count references")
+            rows.values.count { it.canonicalId == canonicalId }
 
         private companion object {
             fun keyOf(entity: StoreMatchEntity): Key = Key(

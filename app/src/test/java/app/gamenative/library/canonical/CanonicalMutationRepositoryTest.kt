@@ -387,8 +387,12 @@ class CanonicalMutationRepositoryTest {
         assertNotNull(db.canonicalGameDao().get(canonical.canonicalId))
 
         val reevaluated = resolver.resolve(current, nowEpochMs = 400)
+        assertEquals(canonical.canonicalId, reevaluated.canonical.canonicalId)
+        assertEquals(MatchMethod.UNMATCHED, reevaluated.match.matchMethod)
+        assertEquals(MatchConfidence.UNMATCHED, reevaluated.match.confidence)
         assertEquals(MatchDecisionSource.AUTOMATIC, reevaluated.match.decisionSource)
         assertEquals(CURRENT_RESOLVER_VERSION, reevaluated.match.resolverVersion)
+        assertFalse(reevaluated.createdCanonical)
         assertNotNull(db.canonicalGameDao().get(canonical.canonicalId))
     }
 

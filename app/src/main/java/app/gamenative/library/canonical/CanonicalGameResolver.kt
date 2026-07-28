@@ -101,11 +101,18 @@ class CanonicalGameResolver @Inject constructor(
             )
         }
 
+        val existingStandaloneCanonical = existingMatch?.let { match ->
+            canonicalGameDao.get(match.canonicalId)?.takeIf {
+                storeMatchDao.countAllReferences(match.canonicalId) == 1
+            }
+        }
+
         val untrustedMappingCandidate = when (val evaluation = evaluateTrustedMappings(copy)) {
             MappingEvaluation.Conflict -> {
                 return independentResolution(
                     copy = copy,
                     evidence = evidence,
+                    existingStandaloneCanonical = existingStandaloneCanonical,
                     method = MatchMethod.OPTIONAL_RESOLVER,
                     confidence = MatchConfidence.REVIEW_REQUIRED,
                     candidateSteamAppId = null,
@@ -144,6 +151,7 @@ class CanonicalGameResolver @Inject constructor(
                     return independentResolution(
                         copy = copy,
                         evidence = evidence,
+                        existingStandaloneCanonical = existingStandaloneCanonical,
                         method = MatchMethod.OPTIONAL_RESOLVER,
                         confidence = MatchConfidence.REVIEW_REQUIRED,
                         candidateSteamAppId = mapping.steamAppId,
@@ -160,6 +168,9 @@ class CanonicalGameResolver @Inject constructor(
             emptyList()
         } else {
             canonicalGameDao.findByTitleKey(evidence.titleKey)
+                .filterNot { candidate ->
+                    candidate.canonicalId == existingStandaloneCanonical?.canonicalId
+                }
                 .sortedWith(compareBy(CanonicalGameEntity::createdAt, CanonicalGameEntity::canonicalId))
         }
 
@@ -182,6 +193,7 @@ class CanonicalGameResolver @Inject constructor(
             return independentResolution(
                 copy = copy,
                 evidence = evidence,
+                existingStandaloneCanonical = existingStandaloneCanonical,
                 method = MatchMethod.EXACT_METADATA,
                 confidence = MatchConfidence.REVIEW_REQUIRED,
                 candidateSteamAppId = null,
@@ -196,6 +208,7 @@ class CanonicalGameResolver @Inject constructor(
             return independentResolution(
                 copy = copy,
                 evidence = evidence,
+                existingStandaloneCanonical = existingStandaloneCanonical,
                 method = MatchMethod.EXACT_METADATA,
                 confidence = MatchConfidence.REVIEW_REQUIRED,
                 candidateSteamAppId = reviewableCandidates
@@ -209,6 +222,7 @@ class CanonicalGameResolver @Inject constructor(
             return independentResolution(
                 copy = copy,
                 evidence = evidence,
+                existingStandaloneCanonical = existingStandaloneCanonical,
                 method = MatchMethod.OPTIONAL_RESOLVER,
                 confidence = MatchConfidence.REVIEW_REQUIRED,
                 candidateSteamAppId = untrustedMappingCandidate,
@@ -219,6 +233,7 @@ class CanonicalGameResolver @Inject constructor(
         return independentResolution(
             copy = copy,
             evidence = evidence,
+            existingStandaloneCanonical = existingStandaloneCanonical,
             method = MatchMethod.UNMATCHED,
             confidence = MatchConfidence.UNMATCHED,
             candidateSteamAppId = null,
@@ -415,12 +430,18 @@ class CanonicalGameResolver @Inject constructor(
     private fun independentResolution(
         copy: OwnedCopyProjection,
         evidence: Evidence,
+        existingStandaloneCanonical: CanonicalGameEntity?,
         method: MatchMethod,
         confidence: MatchConfidence,
         candidateSteamAppId: Int?,
         nowEpochMs: Long,
     ): CanonicalResolution {
-        val canonical = newCanonical(
+        val canonical = existingStandaloneCanonical?.withPrimaryMetadata(
+            ownedCopy = copy,
+            evidence = evidence,
+            steamAppId = null,
+            nowEpochMs = nowEpochMs,
+        ) ?: newCanonical(
             copy = copy,
             evidence = evidence,
             steamAppId = null,
@@ -437,7 +458,7 @@ class CanonicalGameResolver @Inject constructor(
                 candidateSteamAppId = candidateSteamAppId,
                 nowEpochMs = nowEpochMs,
             ),
-            createdCanonical = true,
+            createdCanonical = existingStandaloneCanonical == null,
         )
     }
 
