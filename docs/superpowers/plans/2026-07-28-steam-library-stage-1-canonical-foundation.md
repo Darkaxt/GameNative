@@ -188,7 +188,7 @@ Use table-driven assertions for these exact contracts:
 
 @Test fun releaseYearParsersAreDeterministic() {
     assertEquals(2024, CanonicalNormalization.releaseYear("2024-03-21T00:00:00Z"))
-    assertEquals(2023, CanonicalNormalization.releaseYear(1_704_067_200L))
+    assertEquals(2024, CanonicalNormalization.releaseYear(1_704_067_200L))
     assertNull(CanonicalNormalization.releaseYear("unknown"))
 }
 
