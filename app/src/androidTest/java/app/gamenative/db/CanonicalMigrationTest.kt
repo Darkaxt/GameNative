@@ -201,10 +201,34 @@ class CanonicalMigrationTest {
     }
 
     @Test
-    fun v26LedgerRowsMigrateFailClosedWithPresenceRetained() {
+    fun originalPublishedV26WithoutLedgerMigratesToV27() {
+        val name = "canonical-original-v26"
+        migrationHelper.createDatabase(name, 26).use { database ->
+            assertFalse(database.hasTable("owned_copy_sync"))
+            assertFalse(database.hasTable("owned_copy_presence"))
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            name,
+            27,
+            true,
+            ROOM_MIGRATION_V26_to_V27,
+        ).use { database ->
+            assertTrue(database.hasTable("owned_copy_sync"))
+            assertTrue(database.hasTable("owned_copy_presence"))
+            assertEquals(
+                "-1",
+                database.tableColumns("owned_copy_sync").getValue("lifecycle_generation"),
+            )
+        }
+    }
+
+    @Test
+    fun laterV26LedgerRowsMigrateFailClosedWithPresenceRetained() {
         val name = "canonical-v26-lifecycle-generation"
         val accountScope = "a".repeat(64)
         migrationHelper.createDatabase(name, 26).use { database ->
+            database.createV26OwnedCopyLedger()
             database.execSQL(
                 "INSERT INTO `owned_copy_sync` (`account_scope`, `source`, `completed_at`) " +
                     "VALUES (?, 'GOG', 1)",
@@ -740,6 +764,36 @@ private fun SupportSQLiteDatabase.hasTable(table: String): Boolean =
     query("SELECT 1 FROM `sqlite_master` WHERE `type` = 'table' AND `name` = ?", arrayOf(table)).use { cursor ->
         cursor.moveToFirst()
     }
+
+private fun SupportSQLiteDatabase.createV26OwnedCopyLedger() {
+    execSQL(
+        """
+        CREATE TABLE `owned_copy_sync` (
+            `account_scope` TEXT NOT NULL,
+            `source` TEXT NOT NULL,
+            `completed_at` INTEGER NOT NULL,
+            PRIMARY KEY(`account_scope`, `source`)
+        )
+        """.trimIndent(),
+    )
+    execSQL(
+        """
+        CREATE TABLE `owned_copy_presence` (
+            `account_scope` TEXT NOT NULL,
+            `source` TEXT NOT NULL,
+            `stable_source_id` TEXT NOT NULL,
+            `resolved_source_id` TEXT,
+            PRIMARY KEY(`account_scope`, `source`, `stable_source_id`),
+            FOREIGN KEY(`account_scope`, `source`) REFERENCES `owned_copy_sync`(`account_scope`, `source`)
+                ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+    execSQL(
+        "CREATE INDEX `index_owned_copy_presence_account_scope_source` " +
+            "ON `owned_copy_presence` (`account_scope`, `source`)",
+    )
+}
 
 private fun SupportSQLiteDatabase.hasV25ToV26PendingSuccess(): Boolean =
     query(

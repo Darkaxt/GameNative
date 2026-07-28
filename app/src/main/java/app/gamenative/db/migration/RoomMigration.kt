@@ -47,6 +47,7 @@ internal val ROOM_MIGRATION_V26_to_V27 = object : Migration(26, 27) {
     override fun migrate(connection: SQLiteConnection) {
         v26ToV27MigrationDiagnostics.recordStarted()
         try {
+            createOwnedCopyLedgerStorageV26(connection)
             connection.execSQL(
                 "ALTER TABLE `owned_copy_sync` ADD COLUMN `lifecycle_generation` " +
                     "INTEGER NOT NULL DEFAULT -1",

@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 26,
-    "identityHash": "4380de91a2cb68ddf4df0300c6be438d",
+    "identityHash": "f7396bcb02b0a51512dfbafd1a32f251",
     "entities": [
       {
         "tableName": "app_info",
@@ -2480,106 +2480,11 @@
             ]
           }
         ]
-      },
-      {
-        "tableName": "owned_copy_sync",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`account_scope` TEXT NOT NULL, `source` TEXT NOT NULL, `completed_at` INTEGER NOT NULL, PRIMARY KEY(`account_scope`, `source`))",
-        "fields": [
-          {
-            "fieldPath": "accountScope",
-            "columnName": "account_scope",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "source",
-            "columnName": "source",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "completedAt",
-            "columnName": "completed_at",
-            "affinity": "INTEGER",
-            "notNull": true
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "account_scope",
-            "source"
-          ]
-        }
-      },
-      {
-        "tableName": "owned_copy_presence",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`account_scope` TEXT NOT NULL, `source` TEXT NOT NULL, `stable_source_id` TEXT NOT NULL, `resolved_source_id` TEXT, PRIMARY KEY(`account_scope`, `source`, `stable_source_id`), FOREIGN KEY(`account_scope`, `source`) REFERENCES `owned_copy_sync`(`account_scope`, `source`) ON UPDATE NO ACTION ON DELETE CASCADE )",
-        "fields": [
-          {
-            "fieldPath": "accountScope",
-            "columnName": "account_scope",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "source",
-            "columnName": "source",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "stableSourceId",
-            "columnName": "stable_source_id",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "resolvedSourceId",
-            "columnName": "resolved_source_id",
-            "affinity": "TEXT"
-          }
-        ],
-        "primaryKey": {
-          "autoGenerate": false,
-          "columnNames": [
-            "account_scope",
-            "source",
-            "stable_source_id"
-          ]
-        },
-        "indices": [
-          {
-            "name": "index_owned_copy_presence_account_scope_source",
-            "unique": false,
-            "columnNames": [
-              "account_scope",
-              "source"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_owned_copy_presence_account_scope_source` ON `${TABLE_NAME}` (`account_scope`, `source`)"
-          }
-        ],
-        "foreignKeys": [
-          {
-            "table": "owned_copy_sync",
-            "onDelete": "CASCADE",
-            "onUpdate": "NO ACTION",
-            "columns": [
-              "account_scope",
-              "source"
-            ],
-            "referencedColumns": [
-              "account_scope",
-              "source"
-            ]
-          }
-        ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4380de91a2cb68ddf4df0300c6be438d')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f7396bcb02b0a51512dfbafd1a32f251')"
     ]
   }
 }
