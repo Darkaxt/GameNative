@@ -58,8 +58,10 @@ import app.gamenative.utils.LicenseSerializer
 import app.gamenative.utils.MarkerUtils
 import app.gamenative.utils.Net
 import app.gamenative.utils.SteamUtils
+import app.gamenative.utils.CURRENT_PICS_PARSE_VERSION
 import app.gamenative.utils.CURRENT_UFS_PARSE_VERSION
 import app.gamenative.utils.generateSteamApp
+import app.gamenative.utils.shouldReparseSteamApp
 import app.gamenative.workshop.WorkshopManager
 import com.winlator.container.Container
 import com.winlator.xenvironment.ImageFs
@@ -4370,15 +4372,24 @@ class SteamService : Service(), IChallengeUrlChanged {
                                 // TODO maybe apps with -1 for the ownerAccountId can be stripped with necessities and name.
 
                                 val ufsParseVersionOutdated = appFromDb != null && appFromDb.ufsParseVersion < CURRENT_UFS_PARSE_VERSION
+                                val picsParseVersionOutdated = appFromDb != null && appFromDb.picsParseVersion < CURRENT_PICS_PARSE_VERSION
 
-                                if (app.changeNumber != appFromDb?.lastChangeNumber || ufsParseVersionOutdated) {
-                                    val newApp = app.keyValues.generateSteamApp().copy(
-                                        packageId = packageId,
-                                        ownerAccountId = ownerAccountId,
-                                        receivedPICS = true,
-                                        lastChangeNumber = app.changeNumber,
-                                        licenseFlags = packageFromDb?.licenseFlags ?: EnumSet.noneOf(ELicenseFlags::class.java),
+                                if (
+                                    shouldReparseSteamApp(
+                                        changeNumberChanged = app.changeNumber != appFromDb?.lastChangeNumber,
+                                        ufsParseVersionOutdated = ufsParseVersionOutdated,
+                                        picsParseVersionOutdated = picsParseVersionOutdated,
                                     )
+                                ) {
+                                    val newApp = app.keyValues
+                                        .generateSteamApp()
+                                        .copy(
+                                            packageId = packageId,
+                                            ownerAccountId = ownerAccountId,
+                                            receivedPICS = true,
+                                            lastChangeNumber = app.changeNumber,
+                                            licenseFlags = packageFromDb?.licenseFlags ?: EnumSet.noneOf(ELicenseFlags::class.java),
+                                        )
                                     if (ufsParseVersionOutdated && newApp.ufs.saveFilePatterns.any { it.uploadRoot != it.root || it.uploadPath != it.path }) {
                                         // UFS path logic changed and this app has rootoverrides: store 0 to force one
                                         // full cloud query while preserving the local sync snapshot.
@@ -4392,9 +4403,7 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                             if (steamAppsMap.isNotEmpty()) {
                                 Timber.i("Inserting ${steamAppsMap.size} PICS apps to database")
-                                db.withTransaction {
-                                    appDao.insertAll(steamAppsMap)
-                                }
+                                appDao.replacePicsAppsPreservingLocalState(steamAppsMap)
                             }
                         }
                     } catch (e: AsyncJobFailedException) {

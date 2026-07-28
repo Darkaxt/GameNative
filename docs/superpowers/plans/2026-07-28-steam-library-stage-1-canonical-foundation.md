@@ -1116,20 +1116,22 @@ git push fork HEAD
 **Files:**
 - Modify: `app/src/main/java/app/gamenative/utils/KeyValueUtils.kt`
 - Modify: `app/src/main/java/app/gamenative/service/SteamService.kt`
+- Modify: `app/src/main/java/app/gamenative/db/dao/SteamAppDao.kt`
 - Test: `app/src/test/java/app/gamenative/utils/KeyValueUtilsTest.kt`
+- Test: `app/src/test/java/app/gamenative/db/dao/SteamAppDaoTest.kt`
 
 - [ ] **Step 1: Write PICS facet parsing tests**
 
 Construct `KeyValue` fixtures that include:
 
 ```text
-common.genres: child names 1, 23, invalid
-common.category: child names 2, 22
-common.store_tags: child names 19, 492
+common.genres: numeric index names with genre IDs in child values (23, 1, invalid, duplicate 23)
+common.category: category_2, category_22, category_invalid child names
+common.store_tags: numeric index names with tag IDs in child values (19, 492, invalid, duplicate 19)
 common.primary_genre: value 23
 ```
 
-Assert sorted, distinct integer outputs; malformed names are skipped; absent blocks become empty lists; `primaryGenreId == 23`; and `picsParseVersion == CURRENT_PICS_PARSE_VERSION`. Add a test proving `CURRENT_PICS_PARSE_VERSION` is independent of `CURRENT_UFS_PARSE_VERSION`.
+Assert sorted, distinct positive integer outputs; malformed values/names are skipped; absent blocks become empty lists; `primaryGenreId == 23`; and `picsParseVersion == CURRENT_PICS_PARSE_VERSION`. Retain an assertion for legacy `primaryGenre`. Test the reparse decision directly to prove stale PICS and stale UFS revisions each invalidate independently without requiring their numeric revision constants to differ. In `SteamAppDaoTest`, construct a stale PICS payload, update workshop state after payload construction, replace through the PICS-specific DAO transaction, and assert the latest workshop fields survive while PICS metadata changes.
 
 - [ ] **Step 2: Confirm the parser tests fail**
 
@@ -1139,51 +1141,49 @@ Assert sorted, distinct integer outputs; malformed names are skipped; absent blo
 
 Expected: new assertions fail because the revisioned fields are not populated.
 
-- [ ] **Step 3: Parse numeric PICS child names**
+- [ ] **Step 3: Parse the actual PICS facet shapes**
 
-Add:
+Add `CURRENT_PICS_PARSE_VERSION = 1`. Parse positive, sorted, distinct IDs according to Steam's synchronized app-info shape:
 
-```kotlin
-const val CURRENT_PICS_PARSE_VERSION = 1
-
-private fun KeyValue.numericChildNames(): List<Int> = children
-    .mapNotNull { it.name?.toIntOrNull() }
-    .distinct()
-    .sorted()
-```
+- `common.genres`: IDs are child values; child names are positional indexes.
+- `common.category`: IDs are the numeric suffixes of `category_<id>` child names.
+- `common.store_tags`: IDs are child values; child names are positional indexes.
 
 Populate:
 
 ```kotlin
-genreIds = this["common"]["genres"].numericChildNames(),
-categoryIds = this["common"]["category"].numericChildNames(),
-storeTagIds = this["common"]["store_tags"].numericChildNames(),
+genreIds = this["common"]["genres"].numericChildValues(),
+categoryIds = this["common"]["category"].prefixedNumericChildNames("category_"),
+storeTagIds = this["common"]["store_tags"].numericChildValues(),
 primaryGenreId = this["common"]["primary_genre"].asInteger(0),
 picsParseVersion = CURRENT_PICS_PARSE_VERSION,
 ```
 
-Retain the legacy `primaryGenre` assignment so Stage 1 does not silently alter an unrelated current consumer.
+Retain the legacy `primaryGenre` assignment so Stage 1 does not silently alter an unrelated current consumer. Add a `@Transaction` PICS-specific DAO replacement that rereads each existing row and preserves `workshopMods`, `enabledWorkshopItemIds`, and `workshopDownloadPending` immediately before `REPLACE`; these values are local user state rather than PICS metadata. `SteamService` must use that transaction instead of carrying workshop values in a detached pre-transaction snapshot.
 
 - [ ] **Step 4: Make existing owned rows reparse on the next normal PICS response**
 
 In `continuousPICSGetProductInfo`, compute both revision checks:
 
-```kotlin
-val ufsParseVersionOutdated = appFromDb != null && appFromDb.ufsParseVersion < CURRENT_UFS_PARSE_VERSION
-val picsParseVersionOutdated = appFromDb != null && appFromDb.picsParseVersion < CURRENT_PICS_PARSE_VERSION
+Use a pure decision helper in `continuousPICSGetProductInfo` so the three triggers are tested directly:
 
-if (app.changeNumber != appFromDb?.lastChangeNumber || ufsParseVersionOutdated || picsParseVersionOutdated) {
-    // existing generateSteamApp/copy logic
-}
+```kotlin
+internal fun shouldReparseSteamApp(
+    changeNumberChanged: Boolean,
+    ufsParseVersionOutdated: Boolean,
+    picsParseVersionOutdated: Boolean,
+): Boolean = changeNumberChanged || ufsParseVersionOutdated || picsParseVersionOutdated
 ```
 
-Do not reuse or increment `CURRENT_UFS_PARSE_VERSION`. The existing license/package PICS flow already queues owned app IDs on login; this condition makes same-change-number responses persist the new parser output.
+Do not reuse or increment `CURRENT_UFS_PARSE_VERSION`. The existing license/package PICS flow already queues owned app IDs on login; the dedicated PICS check makes same-change-number responses persist the new parser output.
 
 - [ ] **Step 5: Run tests and compile both flavors**
 
 ```bash
 ./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.utils.KeyValueUtilsTest" \
+  --tests "app.gamenative.db.dao.SteamAppDaoTest" \
   :app:testModernDebugUnitTest --tests "app.gamenative.utils.KeyValueUtilsTest" \
+  --tests "app.gamenative.db.dao.SteamAppDaoTest" \
   :app:compileLegacyDebugKotlin :app:compileModernDebugKotlin
 ```
 
@@ -1194,7 +1194,10 @@ Expected: parser tests pass, both variants compile, and no PICS network fixture 
 ```bash
 git add app/src/main/java/app/gamenative/utils/KeyValueUtils.kt \
   app/src/main/java/app/gamenative/service/SteamService.kt \
-  app/src/test/java/app/gamenative/utils/KeyValueUtilsTest.kt
+  app/src/main/java/app/gamenative/db/dao/SteamAppDao.kt \
+  app/src/test/java/app/gamenative/utils/KeyValueUtilsTest.kt \
+  app/src/test/java/app/gamenative/db/dao/SteamAppDaoTest.kt \
+  docs/superpowers/plans/2026-07-28-steam-library-stage-1-canonical-foundation.md
 git commit -m "feat: retain Steam PICS discovery facets"
 git push fork HEAD
 ```

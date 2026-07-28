@@ -3,6 +3,8 @@ package app.gamenative.utils
 import app.gamenative.enums.PathType
 import `in`.dragonbra.javasteam.types.KeyValue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class KeyValueUtilsTest {
@@ -872,6 +874,103 @@ class KeyValueUtilsTest {
         assertEquals("savedata.vfs", patterns[0].pattern)
         assertEquals("savedata_jp.vfs", patterns[1].pattern)
         assertEquals("savedata_ch.vfs", patterns[2].pattern)
+    }
+
+    @Test
+    fun generateSteamAppParsesRevisionedPicsDiscoveryFacets() {
+        val kvString = """
+            "appinfo"
+            {
+                "appid" "439490"
+                "common"
+                {
+                    "genres"
+                    {
+                        "0" "23"
+                        "1" "1"
+                        "2" "invalid"
+                        "3" "23"
+                        "4" "0"
+                    }
+                    "category"
+                    {
+                        "category_22" "1"
+                        "category_2" "1"
+                        "category_invalid" "1"
+                        "7" "1"
+                    }
+                    "store_tags"
+                    {
+                        "0" "492"
+                        "1" "19"
+                        "2" "19"
+                        "3" "invalid"
+                    }
+                    "primary_genre" "23"
+                }
+            }
+        """.trimIndent()
+
+        val steamApp = requireNotNull(KeyValue.loadFromString(kvString)).generateSteamApp()
+
+        assertEquals(listOf(1, 23), steamApp.genreIds)
+        assertEquals(listOf(2, 22), steamApp.categoryIds)
+        assertEquals(listOf(19, 492), steamApp.storeTagIds)
+        assertTrue(steamApp.primaryGenre)
+        assertEquals(23, steamApp.primaryGenreId)
+        assertEquals(CURRENT_PICS_PARSE_VERSION, steamApp.picsParseVersion)
+    }
+
+    @Test
+    fun absentPicsDiscoveryFacetsAreEmptyAndPicsRevisionIsIndependentFromUfs() {
+        val steamApp = requireNotNull(
+            KeyValue.loadFromString(
+                """
+                "appinfo"
+                {
+                    "appid" "439490"
+                }
+                """.trimIndent(),
+            ),
+        ).generateSteamApp()
+
+        assertEquals(emptyList<Int>(), steamApp.genreIds)
+        assertEquals(emptyList<Int>(), steamApp.categoryIds)
+        assertEquals(emptyList<Int>(), steamApp.storeTagIds)
+        assertEquals(0, steamApp.primaryGenreId)
+        assertEquals(1, CURRENT_PICS_PARSE_VERSION)
+    }
+
+    @Test
+    fun picsAndUfsParserRevisionsInvalidateIndependently() {
+        assertTrue(
+            shouldReparseSteamApp(
+                changeNumberChanged = false,
+                ufsParseVersionOutdated = false,
+                picsParseVersionOutdated = true,
+            ),
+        )
+        assertTrue(
+            shouldReparseSteamApp(
+                changeNumberChanged = false,
+                ufsParseVersionOutdated = true,
+                picsParseVersionOutdated = false,
+            ),
+        )
+        assertTrue(
+            shouldReparseSteamApp(
+                changeNumberChanged = true,
+                ufsParseVersionOutdated = false,
+                picsParseVersionOutdated = false,
+            ),
+        )
+        assertFalse(
+            shouldReparseSteamApp(
+                changeNumberChanged = false,
+                ufsParseVersionOutdated = false,
+                picsParseVersionOutdated = false,
+            ),
+        )
     }
 
     @Test

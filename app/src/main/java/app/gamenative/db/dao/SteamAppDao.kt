@@ -58,6 +58,23 @@ interface SteamAppDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(apps: List<SteamApp>)
 
+    @Transaction
+    suspend fun replacePicsAppsPreservingLocalState(apps: List<SteamApp>) {
+        val mergedApps = apps.map { incoming ->
+            val existing = findApp(incoming.id)
+            if (existing == null) {
+                incoming
+            } else {
+                incoming.copy(
+                    workshopMods = existing.workshopMods,
+                    enabledWorkshopItemIds = existing.enabledWorkshopItemIds,
+                    workshopDownloadPending = existing.workshopDownloadPending,
+                )
+            }
+        }
+        insertAll(mergedApps)
+    }
+
     @Update
     suspend fun update(app: SteamApp)
 

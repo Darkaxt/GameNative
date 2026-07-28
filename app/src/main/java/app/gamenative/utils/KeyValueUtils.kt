@@ -27,6 +27,7 @@ import java.util.Date
 import timber.log.Timber
 
 const val CURRENT_UFS_PARSE_VERSION = 4
+const val CURRENT_PICS_PARSE_VERSION = 1
 
 /**
  * Extension functions relating to [KeyValue] as the receiver type.
@@ -101,6 +102,11 @@ fun KeyValue.generateSteamApp(): SteamApp {
             ),
         ),
         primaryGenre = this["common"]["primary_genre"].asBoolean(),
+        genreIds = this["common"]["genres"].numericChildValues(),
+        categoryIds = this["common"]["category"].prefixedNumericChildNames("category_"),
+        storeTagIds = this["common"]["store_tags"].numericChildValues(),
+        primaryGenreId = this["common"]["primary_genre"].asInteger(0),
+        picsParseVersion = CURRENT_PICS_PARSE_VERSION,
         reviewScore = this["common"]["review_score"].asByte(),
         reviewPercentage = this["common"]["review_percentage"].asByte(),
         controllerSupport = ControllerSupport.from(this["common"]["controller_support"].value),
@@ -225,6 +231,28 @@ fun KeyValue.generateSteamApp(): SteamApp {
         },
     )
 }
+
+private fun KeyValue.numericChildValues(): List<Int> = children
+    .mapNotNull { child -> child.value?.toIntOrNull()?.takeIf { it > 0 } }
+    .distinct()
+    .sorted()
+
+private fun KeyValue.prefixedNumericChildNames(prefix: String): List<Int> = children
+    .mapNotNull { child ->
+        child.name
+            ?.takeIf { it.startsWith(prefix) }
+            ?.removePrefix(prefix)
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
+    }
+    .distinct()
+    .sorted()
+
+internal fun shouldReparseSteamApp(
+    changeNumberChanged: Boolean,
+    ufsParseVersionOutdated: Boolean,
+    picsParseVersionOutdated: Boolean,
+): Boolean = changeNumberChanged || ufsParseVersionOutdated || picsParseVersionOutdated
 
 private fun KeyValue.parseSteamControllerConfigDetails(): List<SteamControllerConfigDetail> {
     val details = this["config"]["steamcontrollerconfigdetails"]

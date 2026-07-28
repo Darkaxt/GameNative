@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -179,6 +180,38 @@ class SteamAppDaoTest {
 
         val apps = appDao.getAllOwnedApps().first()
         assertEquals(1, apps.size)
+    }
+
+    @Test
+    fun `PICS replacement preserves workshop state updated after payload creation`() = runBlocking {
+        appDao.insert(
+            SteamApp(
+                id = 1,
+                name = "Before refresh",
+                workshopMods = true,
+                enabledWorkshopItemIds = "123,456",
+                workshopDownloadPending = true,
+            ),
+        )
+        val stalePicsPayload = SteamApp(
+            id = 1,
+            name = "After refresh",
+            workshopMods = true,
+            enabledWorkshopItemIds = "123,456",
+            workshopDownloadPending = true,
+            picsParseVersion = 1,
+        )
+
+        appDao.updateWorkshopState(appId = 1, workshopMods = false, enabledIds = "")
+        appDao.setWorkshopDownloadPending(appId = 1, pending = false)
+        appDao.replacePicsAppsPreservingLocalState(listOf(stalePicsPayload))
+
+        val stored = requireNotNull(appDao.findApp(1))
+        assertEquals("After refresh", stored.name)
+        assertEquals(1, stored.picsParseVersion)
+        assertFalse(stored.workshopMods)
+        assertEquals("", stored.enabledWorkshopItemIds)
+        assertFalse(stored.workshopDownloadPending)
     }
 
     @Test
