@@ -96,9 +96,12 @@ Out of scope until later stages:
 ### Existing files modified
 
 - `app/src/main/java/app/gamenative/data/SteamApp.kt` — revisioned PICS facet ID fields.
+- `app/src/main/java/app/gamenative/diagnostics/FeatureDiagnostics.kt` — internal acknowledged append API for durable migration-terminal cleanup while retaining the existing Unit facade.
+- `app/src/main/java/app/gamenative/diagnostics/DiagnosticLogStore.kt` — recover appends after an unterminated final JSONL record without exceeding rotation sizing.
 - `app/src/main/java/app/gamenative/data/AmazonGame.kt` — local Amazon profile scope on credentials.
 - `app/src/main/java/app/gamenative/db/PluviaDatabase.kt` — version 26, entities, converters, and DAOs.
-- `app/src/main/java/app/gamenative/db/migration/RoomMigration.kt` — explicit v25→v26 migration.
+- `app/src/main/java/app/gamenative/db/migration/RoomMigration.kt` — explicit schema migration SQL.
+- `app/src/main/java/app/gamenative/db/migration/PluviaDatabaseMigrations.kt` — shared production/test migration registration and post-open diagnostics.
 - `app/src/main/java/app/gamenative/di/DatabaseModule.kt` — migration registration, explicit old-version fallback, new DAO providers.
 - `app/src/main/java/app/gamenative/db/dao/SteamAppDao.kt` — property-sensitive projection invalidation.
 - `app/src/main/java/app/gamenative/db/dao/EpicGameDao.kt` — namespace/catalog source lookup.
@@ -131,6 +134,9 @@ Out of scope until later stages:
 - `app/src/test/java/app/gamenative/service/epic/EpicAuthManagerTest.kt`
 - `app/src/test/java/app/gamenative/service/gog/GOGManagerTest.kt`
 - `app/src/test/java/app/gamenative/utils/KeyValueUtilsTest.kt`
+- `app/src/test/java/app/gamenative/diagnostics/FeatureDiagnosticsTest.kt`
+- `app/src/test/java/app/gamenative/diagnostics/DiagnosticLogStoreTest.kt`
+- `app/src/test/java/app/gamenative/db/migration/MigrationDiagnosticCleanupTest.kt`
 - `app/src/androidTest/java/app/gamenative/db/CanonicalMigrationTest.kt`
 
 ---
@@ -482,11 +488,17 @@ git push fork HEAD
 
 **Files:**
 - Modify: `app/src/main/java/app/gamenative/data/SteamApp.kt`
+- Modify: `app/src/main/java/app/gamenative/diagnostics/FeatureDiagnostics.kt`
+- Modify: `app/src/main/java/app/gamenative/diagnostics/DiagnosticLogStore.kt`
 - Modify: `app/src/main/java/app/gamenative/db/PluviaDatabase.kt`
 - Modify: `app/src/main/java/app/gamenative/db/migration/RoomMigration.kt`
+- Create: `app/src/main/java/app/gamenative/db/migration/PluviaDatabaseMigrations.kt`
 - Modify: `app/src/main/java/app/gamenative/di/DatabaseModule.kt`
 - Modify: `gradle/libs.versions.toml`
 - Modify: `app/build.gradle.kts`
+- Create: `app/src/test/java/app/gamenative/diagnostics/FeatureDiagnosticsTest.kt`
+- Modify: `app/src/test/java/app/gamenative/diagnostics/DiagnosticLogStoreTest.kt`
+- Create: `app/src/test/java/app/gamenative/db/migration/MigrationDiagnosticCleanupTest.kt`
 - Create: `app/src/androidTest/java/app/gamenative/db/CanonicalMigrationTest.kt`
 - Create: `app/schemas/app.gamenative.db.PluviaDatabase/26.json` (generated)
 
@@ -495,7 +507,7 @@ git push fork HEAD
 Add this alias and dependency:
 
 ```toml
-androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room-runtime" }
 ```
 
 ```kotlin
@@ -512,23 +524,24 @@ androidTestImplementation(libs.androidx.room.testing)
 4. duplicate non-null `steam_app_id` fails;
 5. duplicate owned-copy composite keys fail;
 6. deleting a canonical row cascades to match/facet/preference/snapshot rows;
-7. opening v16 through the explicit recovery list reaches v26 destructively, documenting the known 16→17 historical limitation rather than pretending preservation.
+7. opening v16 through the explicit recovery list reaches v26 destructively, documenting the known 16→17 historical limitation rather than pretending preservation;
+8. destructive recovery emits STARTED in `onDestructiveMigration` but emits no SUCCEEDED until recreation commits and `onOpen` runs;
+9. failed destructive recreation rolls back its private pending marker and never emits SUCCEEDED;
+10. both destructive recovery and v25→v26 retain their pending success marker when diagnostics are uninitialized, append fails, or acknowledged-marker cleanup fails; cleanup failures are logged with exception class only, never abort the valid database open, and retry with at-least-once delivery on a later open;
+11. `FeatureDiagnostics.recordAcknowledged` returns false while uninitialized or when append throws, while the existing `record` facade remains Unit-returning for every current caller;
+12. appending after a pre-existing unterminated final JSONL record inserts a separator so the new event is readable, and includes that separator in rotation sizing.
 
-Use this upgrade helper so Room's generated auto-migrations participate for 17–23:
+Use the same shared migration/fallback configurator as production so a production migration cannot be omitted from this test builder:
 
 ```kotlin
 private fun openAtCurrentVersion(name: String): PluviaDatabase =
     Room.databaseBuilder(context, PluviaDatabase::class.java, name)
-        .addMigrations(
-            ROOM_MIGRATION_V7_to_V8,
-            ROOM_MIGRATION_V23_to_V24,
-            ROOM_MIGRATION_V24_to_V25,
-            ROOM_MIGRATION_V25_to_V26,
-        )
-        .fallbackToDestructiveMigrationFrom(true, *UNSUPPORTED_PRESERVATION_VERSIONS)
+        .configurePluviaDatabaseMigrations()
         .build()
         .also { it.openHelper.writableDatabase }
 ```
+
+Do not register `ROOM_MIGRATION_V7_to_V8` in either builder. Room 2.8.4 checks builder-supplied explicit migration start/end versions against `fallbackToDestructiveMigrationFrom`, so that explicit 7→8 migration conflicts because versions 7 and 8 are both in the destructive-recovery scope. Generated `@Database` auto-migrations are added later and are not part of that builder conflict check; retain the historical 8→16 auto-migrations for other migration paths. All rows from versions 7–16 are intentionally reset due to the unsupported historical 16→17 preservation gap.
 
 Seed the v25 preservation test with a fully specified `gog_games` row using JSON strings `[]` for `genres`/`languages`, `AppType.game.code` for `type`, and empty strings/zeroes for the remaining non-null columns. Do not seed credential or path values.
 
@@ -541,7 +554,7 @@ With an emulator connected, run:
   -Pandroid.testInstrumentationRunnerArguments.class=app.gamenative.db.CanonicalMigrationTest
 ```
 
-Expected: compilation or runtime failure because schema 26 and `ROOM_MIGRATION_V25_to_V26` do not exist.
+Expected: compilation or runtime failures because schema 26, `ROOM_MIGRATION_V25_to_V26`, the acknowledged append API, and deferred destructive-success markers do not exist.
 
 - [ ] **Step 4: Add the Steam entity fields and explicit v25→v26 migration**
 
@@ -671,30 +684,36 @@ CREATE TABLE IF NOT EXISTS `game_detail_snapshot` (
 CREATE INDEX IF NOT EXISTS `index_game_detail_snapshot_canonical_id` ON `game_detail_snapshot` (`canonical_id`);
 ```
 
-Keep the SQL in focused private migration helpers. Wrap migration start/success/failure with `DATABASE_MIGRATION` diagnostics using only `MIGRATION=25_to_26`, `DB_VERSION=26`, and exception class on failure. Rethrow the original exception.
+Keep the SQL in focused private migration helpers. Record `DATABASE_MIGRATION` STARTED and body-level FAILED from `Migration.migrate` using only `MIGRATION=25_to_26`, `DB_VERSION=26`, and exception class on failure, then rethrow the original exception. After the SQL body succeeds, persist the existing pending sentinel in Room's master table. Add an internal `FeatureDiagnostics.recordAcknowledged(...)` API that returns false when diagnostics are uninitialized or append throws; keep `FeatureDiagnostics.record(...)` Unit-returning and unchanged for all current callers. Emit v25→v26 SUCCEEDED only from the registered `RoomDatabase.Callback.onOpen`, after Room schema validation and migration commit. Attempt to delete the sentinel only after `recordAcknowledged` returns true. Cleanup is best-effort: catch a DELETE failure, log only its exception class with a fixed message, retain the sentinel, and let the otherwise valid database open continue. An unacknowledged append also retains the sentinel. Either case retries on a later open; duplicate success after a crash or cleanup failure is acceptable and preserves at-least-once delivery. Building the database must remain lazy and must not force an open before `FeatureDiagnostics.initialize`.
+
+Harden `DiagnosticLogStore.append` for a pre-existing truncated final JSONL record: when the active non-empty file does not end in a newline, insert one before the next encoded event so that event remains independently readable. Include that separator byte in the pre-append rotation calculation; after rotation, write the new event directly to the empty active file.
 
 - [ ] **Step 5: Register schema version 26**
 
 Add all canonical entities and `CanonicalConverter`, expose all five canonical DAOs, and set `version = 26` in `PluviaDatabase`.
 
-In `DatabaseModule`, add `ROOM_MIGRATION_V25_to_V26`. Replace the blanket call:
+In `DatabaseModule`, use a shared `configurePluviaDatabaseMigrations` builder helper that production and instrumentation tests both call. The helper owns the explicit migration list, the 7–16 fallback scope, and the migration diagnostics callback:
 
 ```kotlin
-.fallbackToDestructiveMigration(true)
-```
-
-with:
-
-```kotlin
-internal val UNSUPPORTED_PRESERVATION_VERSIONS = intArrayOf(7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
-
-.fallbackToDestructiveMigrationFrom(
-    true,
-    *UNSUPPORTED_PRESERVATION_VERSIONS,
+internal val PLUVIA_EXPLICIT_MIGRATIONS: List<Migration> = listOf(
+    ROOM_MIGRATION_V23_to_V24,
+    ROOM_MIGRATION_V24_to_V25,
+    ROOM_MIGRATION_V25_to_V26,
 )
+
+internal val UNSUPPORTED_PRESERVATION_VERSIONS =
+    intArrayOf(7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+
+internal fun RoomDatabase.Builder<PluviaDatabase>.configurePluviaDatabaseMigrations() =
+    addMigrations(*PLUVIA_EXPLICIT_MIGRATIONS.toTypedArray())
+        .fallbackToDestructiveMigrationFrom(
+            true,
+            *UNSUPPORTED_PRESERVATION_VERSIONS,
+        )
+        .addCallback(PLUVIA_MIGRATION_DIAGNOSTICS_CALLBACK)
 ```
 
-Versions 17–25 must have a complete non-destructive path. Provide the new DAOs from the module.
+Register `onDestructiveMigration` in that callback, but do not emit SUCCEEDED there: Room invokes it after dropping old tables and before recreating/validating current tables. Emit one fixed, privacy-safe STARTED diagnostic and create a small private marker table/row in the same Room migration transaction. The marker therefore survives only when destructive recreation commits. On `onOpen`, append the fixed SUCCEEDED event through `FeatureDiagnostics.recordAcknowledged`; only after a true acknowledgment may the callback attempt to drop the private marker table. Treat DROP failure as best-effort cleanup: log only the exception class with a fixed message, retain the marker, and continue opening the valid database. Retain it after an uninitialized/failed append as well. Both paths retry on a later open with at-least-once success delivery. If recreation or open fails before this cleanup step, no destructive SUCCEEDED may emit. Versions 7–16 remain a documented old-version recovery limitation that resets every database row, not only cached Steam data; Stage 1 must not add a user-facing recovery notice. Versions 17–25 must have a complete non-destructive path. Provide the new DAOs from the module.
 
 - [ ] **Step 6: Generate and inspect schema 26**
 
@@ -709,20 +728,29 @@ Expected: `app/schemas/app.gamenative.db.PluviaDatabase/26.json` is generated. C
 - [ ] **Step 7: Run migration tests and both compilers**
 
 ```bash
+./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.diagnostics.*" \
+  --tests "app.gamenative.db.migration.MigrationDiagnosticCleanupTest" \
+  :app:testModernDebugUnitTest --tests "app.gamenative.diagnostics.*" \
+  --tests "app.gamenative.db.migration.MigrationDiagnosticCleanupTest"
 ./gradlew :app:connectedLegacyDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.class=app.gamenative.db.CanonicalMigrationTest \
-  :app:compileLegacyDebugKotlin :app:compileModernDebugKotlin
+  -Pandroid.testInstrumentationRunnerArguments.class=app.gamenative.db.CanonicalMigrationTest
+./gradlew :app:compileLegacyDebugKotlin :app:compileModernDebugKotlin
 ```
 
-Expected: every 17–25 migration path passes non-destructively, the explicit v16 recovery test passes destructively, constraints/cascades pass, and both variants compile.
+Expected: every 17–25 migration path passes non-destructively; the explicit v16 recovery passes destructively without premature success; pending-marker append and cleanup failures preserve at-least-once retry without aborting valid opens; truncated JSONL recovery keeps the appended event readable within rotation sizing; acknowledged append tests pass; constraints/cascades pass; and both variants compile.
 
 - [ ] **Step 8: Commit and push**
 
 ```bash
 git add gradle/libs.versions.toml app/build.gradle.kts \
   app/src/main/java/app/gamenative/data/SteamApp.kt \
+  app/src/main/java/app/gamenative/diagnostics/FeatureDiagnostics.kt \
+  app/src/main/java/app/gamenative/diagnostics/DiagnosticLogStore.kt \
   app/src/main/java/app/gamenative/db \
   app/src/main/java/app/gamenative/di/DatabaseModule.kt \
+  app/src/test/java/app/gamenative/diagnostics/FeatureDiagnosticsTest.kt \
+  app/src/test/java/app/gamenative/diagnostics/DiagnosticLogStoreTest.kt \
+  app/src/test/java/app/gamenative/db/migration/MigrationDiagnosticCleanupTest.kt \
   app/src/androidTest/java/app/gamenative/db/CanonicalMigrationTest.kt \
   app/schemas/app.gamenative.db.PluviaDatabase/26.json
 git commit -m "feat: migrate canonical library storage"

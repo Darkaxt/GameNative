@@ -27,6 +27,185 @@ internal val ROOM_MIGRATION_V24_to_V25 = object : Migration(24, 25) {
     }
 }
 
+internal val ROOM_MIGRATION_V25_to_V26 = object : Migration(25, 26) {
+    override fun migrate(connection: SQLiteConnection) {
+        V25ToV26MigrationDiagnostics.recordStarted()
+        try {
+            addSteamPicsRevisionColumnsV26(connection)
+            createCanonicalCoreStorageV26(connection)
+            createCanonicalFacetStorageV26(connection)
+            V25ToV26MigrationDiagnostics.markPendingSuccess(connection)
+        } catch (error: Exception) {
+            V25ToV26MigrationDiagnostics.recordBodyFailed(error.javaClass.simpleName)
+            throw error
+        }
+    }
+}
+
+private fun addSteamPicsRevisionColumnsV26(connection: SQLiteConnection) {
+    connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `genre_ids` TEXT NOT NULL DEFAULT '[]'")
+    connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `category_ids` TEXT NOT NULL DEFAULT '[]'")
+    connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `store_tag_ids` TEXT NOT NULL DEFAULT '[]'")
+    connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `primary_genre_id` INTEGER NOT NULL DEFAULT 0")
+    connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `pics_parse_version` INTEGER NOT NULL DEFAULT 0")
+}
+
+private fun createCanonicalCoreStorageV26(connection: SQLiteConnection) {
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `canonical_game` (
+            `canonical_id` TEXT NOT NULL,
+            `steam_app_id` INTEGER,
+            `display_name` TEXT NOT NULL,
+            `match_title_key` TEXT NOT NULL,
+            `primary_metadata_source` TEXT NOT NULL,
+            `app_type` TEXT NOT NULL,
+            `release_year` INTEGER,
+            `developer_key` TEXT NOT NULL,
+            `classification_state` TEXT NOT NULL,
+            `steam_review_count` INTEGER,
+            `created_at` INTEGER NOT NULL,
+            `updated_at` INTEGER NOT NULL,
+            PRIMARY KEY(`canonical_id`)
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        "CREATE UNIQUE INDEX IF NOT EXISTS `index_canonical_game_steam_app_id` ON `canonical_game` (`steam_app_id`)",
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_canonical_game_match_title_key` ON `canonical_game` (`match_title_key`)",
+    )
+
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `store_match` (
+            `account_scope` TEXT NOT NULL,
+            `source` TEXT NOT NULL,
+            `stable_source_id` TEXT NOT NULL,
+            `canonical_id` TEXT NOT NULL,
+            `candidate_steam_app_id` INTEGER,
+            `match_method` TEXT NOT NULL,
+            `confidence` TEXT NOT NULL,
+            `decision_source` TEXT NOT NULL,
+            `resolver_version` INTEGER NOT NULL,
+            `matched_at` INTEGER NOT NULL,
+            `is_present` INTEGER NOT NULL,
+            `evidence_display_name` TEXT NOT NULL,
+            `evidence_title_key` TEXT NOT NULL,
+            `evidence_developer_key` TEXT NOT NULL,
+            `evidence_release_year` INTEGER,
+            `evidence_app_type` TEXT NOT NULL,
+            PRIMARY KEY(`account_scope`, `source`, `stable_source_id`),
+            FOREIGN KEY(`canonical_id`) REFERENCES `canonical_game`(`canonical_id`) ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_store_match_canonical_id` ON `store_match` (`canonical_id`)",
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_store_match_candidate_steam_app_id` ON `store_match` (`candidate_steam_app_id`)",
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_store_match_source_stable_source_id` ON `store_match` (`source`, `stable_source_id`)",
+    )
+
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `canonical_game_preference` (
+            `canonical_id` TEXT NOT NULL,
+            `preferred_account_scope` TEXT,
+            `preferred_source` TEXT,
+            `preferred_stable_source_id` TEXT,
+            `title_override` TEXT,
+            `artwork_override_json` TEXT,
+            `updated_at` INTEGER NOT NULL,
+            PRIMARY KEY(`canonical_id`),
+            FOREIGN KEY(`canonical_id`) REFERENCES `canonical_game`(`canonical_id`) ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+}
+
+private fun createCanonicalFacetStorageV26(connection: SQLiteConnection) {
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `canonical_game_genre` (
+            `canonical_id` TEXT NOT NULL,
+            `genre_key` TEXT NOT NULL,
+            PRIMARY KEY(`canonical_id`, `genre_key`),
+            FOREIGN KEY(`canonical_id`) REFERENCES `canonical_game`(`canonical_id`) ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_canonical_game_genre_genre_key_canonical_id` " +
+            "ON `canonical_game_genre` (`genre_key`, `canonical_id`)",
+    )
+
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `canonical_game_tag` (
+            `canonical_id` TEXT NOT NULL,
+            `tag_id` INTEGER NOT NULL,
+            PRIMARY KEY(`canonical_id`, `tag_id`),
+            FOREIGN KEY(`canonical_id`) REFERENCES `canonical_game`(`canonical_id`) ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_canonical_game_tag_tag_id_canonical_id` " +
+            "ON `canonical_game_tag` (`tag_id`, `canonical_id`)",
+    )
+
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `canonical_game_feature` (
+            `canonical_id` TEXT NOT NULL,
+            `feature_key` TEXT NOT NULL,
+            PRIMARY KEY(`canonical_id`, `feature_key`),
+            FOREIGN KEY(`canonical_id`) REFERENCES `canonical_game`(`canonical_id`) ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_canonical_game_feature_feature_key_canonical_id` " +
+            "ON `canonical_game_feature` (`feature_key`, `canonical_id`)",
+    )
+
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `steam_tag_dictionary` (
+            `tag_id` INTEGER NOT NULL,
+            `locale` TEXT NOT NULL,
+            `label` TEXT NOT NULL,
+            `fetched_at` INTEGER NOT NULL,
+            PRIMARY KEY(`tag_id`, `locale`)
+        )
+        """.trimIndent(),
+    )
+
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `game_detail_snapshot` (
+            `canonical_id` TEXT NOT NULL,
+            `locale` TEXT NOT NULL,
+            `country` TEXT NOT NULL,
+            `payload_json` TEXT NOT NULL,
+            `provenance_json` TEXT NOT NULL,
+            `fetched_at` INTEGER NOT NULL,
+            `source_revision` TEXT NOT NULL,
+            PRIMARY KEY(`canonical_id`, `locale`, `country`),
+            FOREIGN KEY(`canonical_id`) REFERENCES `canonical_game`(`canonical_id`) ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_game_detail_snapshot_canonical_id` ON `game_detail_snapshot` (`canonical_id`)",
+    )
+}
+
 private fun migrateManagedModSourcesToV25(connection: SQLiteConnection) {
     connection.execSQL(
         """

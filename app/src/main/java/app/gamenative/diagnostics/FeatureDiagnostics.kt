@@ -44,7 +44,23 @@ object FeatureDiagnostics {
         durationMs: Long? = null,
         attributes: Map<DiagnosticAttribute, String> = emptyMap(),
     ) {
-        val activeStore = store ?: return
+        recordAcknowledged(
+            area = area,
+            name = name,
+            outcome = outcome,
+            durationMs = durationMs,
+            attributes = attributes,
+        )
+    }
+
+    internal fun recordAcknowledged(
+        area: DiagnosticArea,
+        name: DiagnosticEventName,
+        outcome: DiagnosticOutcome,
+        durationMs: Long? = null,
+        attributes: Map<DiagnosticAttribute, String> = emptyMap(),
+    ): Boolean {
+        val activeStore = store ?: return false
         val event = DiagnosticEvent(
             timestampEpochMs = System.currentTimeMillis(),
             sessionId = sessionId,
@@ -54,10 +70,12 @@ object FeatureDiagnostics {
             durationMs = durationMs,
             attributes = DiagnosticRedactor.sanitize(attributes),
         )
-        try {
+        return try {
             activeStore.append(event)
+            true
         } catch (error: Exception) {
             Timber.tag("FeatureDiagnostics").w(error, "Unable to persist diagnostic event")
+            false
         }
     }
 

@@ -1,5 +1,7 @@
 package app.gamenative.diagnostics
 
+import java.io.File
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,6 +25,41 @@ class DiagnosticLogStoreTest {
 
         assertEquals(listOf(2L, 3L), store.recent(10).map { it.timestampEpochMs })
         assertTrue(directory.listFiles().orEmpty().size <= 2)
+    }
+
+    @Test
+    fun `append after truncated final record remains readable`() {
+        val directory = temporaryFolder.newFolder("truncated")
+        File(directory, "feature-events.0.jsonl").writeText(
+            "{\"timestampEpochMs\":",
+            Charsets.UTF_8,
+        )
+        val store = DiagnosticLogStore(directory, json)
+
+        store.append(event(42))
+
+        assertEquals(listOf(42L), store.recent(10).map { it.timestampEpochMs })
+    }
+
+    @Test
+    fun `separator required after truncated record counts toward rotation limit`() {
+        val directory = temporaryFolder.newFolder("truncated-rotation")
+        val partialRecord = "{\"timestampEpochMs\":"
+        File(directory, "feature-events.0.jsonl").writeText(partialRecord, Charsets.UTF_8)
+        val appendedEvent = event(43)
+        val appendedLineBytes = (json.encodeToString(appendedEvent) + "\n")
+            .toByteArray(Charsets.UTF_8)
+            .size
+        val store = DiagnosticLogStore(
+            directory,
+            json,
+            maxFileBytes = partialRecord.toByteArray(Charsets.UTF_8).size + appendedLineBytes.toLong(),
+        )
+
+        store.append(appendedEvent)
+
+        assertTrue(File(directory, "feature-events.1.jsonl").exists())
+        assertEquals(listOf(43L), store.recent(10).map { it.timestampEpochMs })
     }
 
     @Test

@@ -5,16 +5,13 @@ import androidx.room.Room
 import app.gamenative.db.DATABASE_NAME
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.db.dao.AppInfoDao
-import app.gamenative.db.dao.AmazonGameDao
 import app.gamenative.db.dao.CachedLicenseDao
 import app.gamenative.db.dao.DownloadingAppInfoDao
 import app.gamenative.db.dao.EncryptedAppTicketDao
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.ModDao
 import app.gamenative.db.dao.SteamUnlockedBranchDao
-import app.gamenative.db.migration.ROOM_MIGRATION_V23_to_V24
-import app.gamenative.db.migration.ROOM_MIGRATION_V24_to_V25
-import app.gamenative.db.migration.ROOM_MIGRATION_V7_to_V8
+import app.gamenative.db.migration.configurePluviaDatabaseMigrations
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -29,15 +26,11 @@ class DatabaseModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): PluviaDatabase {
-        // The db will be considered unstable during development.
-        // Once stable we should add a (room) db migration
+        // Versions 17–25 have preservation migrations. Versions 7–16 use an explicitly
+        // limited destructive recovery because the historical 16→17 schema gap cannot be
+        // validated safely; that recovery resets every row in the database.
         return Room.databaseBuilder(context, PluviaDatabase::class.java, DATABASE_NAME)
-            .addMigrations(
-                ROOM_MIGRATION_V7_to_V8,
-                ROOM_MIGRATION_V23_to_V24,
-                ROOM_MIGRATION_V24_to_V25,
-            )
-            .fallbackToDestructiveMigration(true)
+            .configurePluviaDatabaseMigrations()
             .build()
     }
 
@@ -100,4 +93,24 @@ class DatabaseModule {
     @Provides
     @Singleton
     fun provideModDao(db: PluviaDatabase): ModDao = db.modDao()
+
+    @Provides
+    @Singleton
+    fun provideCanonicalGameDao(db: PluviaDatabase) = db.canonicalGameDao()
+
+    @Provides
+    @Singleton
+    fun provideStoreMatchDao(db: PluviaDatabase) = db.storeMatchDao()
+
+    @Provides
+    @Singleton
+    fun provideCanonicalPreferenceDao(db: PluviaDatabase) = db.canonicalPreferenceDao()
+
+    @Provides
+    @Singleton
+    fun provideCanonicalFacetDao(db: PluviaDatabase) = db.canonicalFacetDao()
+
+    @Provides
+    @Singleton
+    fun provideGameDetailSnapshotDao(db: PluviaDatabase) = db.gameDetailSnapshotDao()
 }

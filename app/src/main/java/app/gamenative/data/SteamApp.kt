@@ -152,6 +152,21 @@ data class SteamApp(
 
     @ColumnInfo(name = "workshop_download_pending", defaultValue = "0")
     val workshopDownloadPending: Boolean = false,
+
+    @ColumnInfo(name = "genre_ids", defaultValue = "'[]'")
+    val genreIds: List<Int> = emptyList(),
+
+    @ColumnInfo(name = "category_ids", defaultValue = "'[]'")
+    val categoryIds: List<Int> = emptyList(),
+
+    @ColumnInfo(name = "store_tag_ids", defaultValue = "'[]'")
+    val storeTagIds: List<Int> = emptyList(),
+
+    @ColumnInfo(name = "primary_genre_id", defaultValue = "0")
+    val primaryGenreId: Int = 0,
+
+    @ColumnInfo(name = "pics_parse_version", defaultValue = "0")
+    val picsParseVersion: Int = 0,
 ) {
     val logoUrl: String
         get() = "https://steamcdn-a.akamaihd.net/steamcommunity/public/images/apps/$id/$logoHash.jpg"

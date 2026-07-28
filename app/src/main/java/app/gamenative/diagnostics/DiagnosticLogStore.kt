@@ -1,6 +1,7 @@
 package app.gamenative.diagnostics
 
 import java.io.File
+import java.io.RandomAccessFile
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -25,10 +26,16 @@ class DiagnosticLogStore(
             attributes = DiagnosticRedactor.sanitizePersisted(event.attributes),
         )
         val line = json.encodeToString(safeEvent) + "\n"
-        val bytes = line.toByteArray(Charsets.UTF_8).size
+        val lineBytes = line.toByteArray(Charsets.UTF_8).size
         val current = file(0)
-        if (current.exists() && current.length() + bytes > maxFileBytes) rotate()
-        file(0).appendText(line, Charsets.UTF_8)
+        val needsSeparator = current.hasUnterminatedFinalRecord()
+        val appendBytes = lineBytes + if (needsSeparator) NEWLINE_BYTES else 0
+        if (current.exists() && current.length() + appendBytes > maxFileBytes) {
+            rotate()
+            current.appendText(line, Charsets.UTF_8)
+        } else {
+            current.appendText(if (needsSeparator) "\n$line" else line, Charsets.UTF_8)
+        }
     }
 
     @Synchronized
@@ -56,6 +63,14 @@ class DiagnosticLogStore(
             }
     }
 
+    private fun File.hasUnterminatedFinalRecord(): Boolean {
+        if (!isFile || length() == 0L) return false
+        return RandomAccessFile(this, "r").use { file ->
+            file.seek(file.length() - 1)
+            file.read() != '\n'.code
+        }
+    }
+
     private fun rotate() {
         val oldest = file(maxFiles - 1)
         check(oldest.delete() || !oldest.exists()) { "Unable to delete oldest diagnostic rotation" }
@@ -75,5 +90,6 @@ class DiagnosticLogStore(
 
     private companion object {
         const val FILE_PREFIX = "feature-events"
+        const val NEWLINE_BYTES = 1
     }
 }

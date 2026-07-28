@@ -4,46 +4,60 @@ import androidx.room.AutoMigration
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
-import app.gamenative.data.ChangeNumbers
+import app.gamenative.data.AmazonGame
 import app.gamenative.data.AppInfo
-import app.gamenative.data.LibraryPlayHistory
-import app.gamenative.data.FileChangeLists
-import app.gamenative.data.SteamApp
-import app.gamenative.data.SteamFileHashCache
-import app.gamenative.data.SteamLicense
 import app.gamenative.data.CachedLicense
+import app.gamenative.data.ChangeNumbers
 import app.gamenative.data.DownloadingAppInfo
 import app.gamenative.data.EncryptedAppTicket
-import app.gamenative.data.SteamUnlockedBranch
-import app.gamenative.data.GOGGame
 import app.gamenative.data.EpicGame
-import app.gamenative.data.AmazonGame
+import app.gamenative.data.FileChangeLists
+import app.gamenative.data.GOGGame
+import app.gamenative.data.LibraryPlayHistory
 import app.gamenative.data.ModInstall
 import app.gamenative.data.ModOverwriteManifest
 import app.gamenative.data.ModPlacementRecipe
 import app.gamenative.data.ModProfile
 import app.gamenative.data.ModProfileInstallState
+import app.gamenative.data.SteamApp
+import app.gamenative.data.SteamFileHashCache
+import app.gamenative.data.SteamLicense
+import app.gamenative.data.SteamUnlockedBranch
+import app.gamenative.data.canonical.CanonicalGameEntity
+import app.gamenative.data.canonical.CanonicalGameFeatureCrossRef
+import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
+import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
+import app.gamenative.data.canonical.CanonicalGameTagCrossRef
+import app.gamenative.data.canonical.GameDetailSnapshotEntity
+import app.gamenative.data.canonical.SteamTagDictionaryEntity
+import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.converters.AppConverter
 import app.gamenative.db.converters.ByteArrayConverter
+import app.gamenative.db.converters.CanonicalConverter
 import app.gamenative.db.converters.FriendConverter
+import app.gamenative.db.converters.GOGConverter
 import app.gamenative.db.converters.LicenseConverter
 import app.gamenative.db.converters.UserFileInfoListConverter
-import app.gamenative.db.converters.GOGConverter
-import app.gamenative.db.dao.ModDao
+import app.gamenative.db.dao.AmazonGameDao
+import app.gamenative.db.dao.AppInfoDao
+import app.gamenative.db.dao.CachedLicenseDao
+import app.gamenative.db.dao.CanonicalFacetDao
+import app.gamenative.db.dao.CanonicalGameDao
+import app.gamenative.db.dao.CanonicalPreferenceDao
 import app.gamenative.db.dao.ChangeNumbersDao
+import app.gamenative.db.dao.DownloadingAppInfoDao
+import app.gamenative.db.dao.EncryptedAppTicketDao
+import app.gamenative.db.dao.EpicGameDao
 import app.gamenative.db.dao.FileChangeListsDao
+import app.gamenative.db.dao.GOGGameDao
+import app.gamenative.db.dao.GameDetailSnapshotDao
 import app.gamenative.db.dao.LibraryPlayHistoryDao
+import app.gamenative.db.dao.ModDao
 import app.gamenative.db.dao.SteamAppDao
 import app.gamenative.db.dao.SteamFileHashCacheDao
 import app.gamenative.db.dao.SteamLicenseDao
-import app.gamenative.db.dao.AppInfoDao
-import app.gamenative.db.dao.CachedLicenseDao
-import app.gamenative.db.dao.DownloadingAppInfoDao
-import app.gamenative.db.dao.EncryptedAppTicketDao
 import app.gamenative.db.dao.SteamUnlockedBranchDao
-import app.gamenative.db.dao.GOGGameDao
-import app.gamenative.db.dao.EpicGameDao
-import app.gamenative.db.dao.AmazonGameDao
+import app.gamenative.db.dao.StoreMatchDao
 
 const val DATABASE_NAME = "pluvia.db"
 
@@ -68,8 +82,16 @@ const val DATABASE_NAME = "pluvia.db"
         ModProfileInstallState::class,
         ModPlacementRecipe::class,
         ModOverwriteManifest::class,
+        CanonicalGameEntity::class,
+        StoreMatchEntity::class,
+        CanonicalGamePreferenceEntity::class,
+        CanonicalGameGenreCrossRef::class,
+        CanonicalGameTagCrossRef::class,
+        CanonicalGameFeatureCrossRef::class,
+        SteamTagDictionaryEntity::class,
+        GameDetailSnapshotEntity::class,
     ],
-    version = 25,
+    version = 26,
     // For db migration, visit https://developer.android.com/training/data-storage/room/migrating-db-versions for more information
     exportSchema = true, // It is better to handle db changes carefully, as GN is getting much more users.
     autoMigrations = [
@@ -85,14 +107,15 @@ const val DATABASE_NAME = "pluvia.db"
         // AutoMigration(from = 16, to = 17),
         // Disabled auto-migration due to duplicated column in previous version (upstream PR #1048)
         // duplicate column name: ufs_parse_version (code 1 SQLITE_ERROR)
-        // v16 users will fallback to destructive migration (only cached Steam data, re-fetched on login)
+        // v7–v16 are an explicit old-version limitation: destructive recovery resets all
+        // database rows because the historical 16→17 schema cannot be validated safely.
         AutoMigration(from = 17, to = 18), // Added workshop_mods, enabled_workshop_item_ids, workshop_download_pending to steam_app
         AutoMigration(from = 18, to = 19), // Added recovered_install_size_bytes to app_info
         AutoMigration(from = 19, to = 20), // Added custom_install_path to app_info
         AutoMigration(from = 20, to = 21), // Added steam_file_hash_cache table
         AutoMigration(from = 21, to = 22), // Added GOG vertical_cover_url column
         AutoMigration(from = 22, to = 23), // Added local library play history table
-    ]
+    ],
 )
 @TypeConverters(
     AppConverter::class,
@@ -101,6 +124,7 @@ const val DATABASE_NAME = "pluvia.db"
     LicenseConverter::class,
     UserFileInfoListConverter::class,
     GOGConverter::class,
+    CanonicalConverter::class,
 )
 abstract class PluviaDatabase : RoomDatabase() {
 
@@ -133,4 +157,14 @@ abstract class PluviaDatabase : RoomDatabase() {
     abstract fun steamUnlockedBranchDao(): SteamUnlockedBranchDao
 
     abstract fun modDao(): ModDao
+
+    abstract fun canonicalGameDao(): CanonicalGameDao
+
+    abstract fun storeMatchDao(): StoreMatchDao
+
+    abstract fun canonicalPreferenceDao(): CanonicalPreferenceDao
+
+    abstract fun canonicalFacetDao(): CanonicalFacetDao
+
+    abstract fun gameDetailSnapshotDao(): GameDetailSnapshotDao
 }
