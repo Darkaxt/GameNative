@@ -1220,10 +1220,11 @@ Use fake DAOs, a deterministic ID generator, and fake trusted-map providers. Cov
 4. An indirect GOG/Epic join and a SteamGridDB autocomplete ID are never represented as trusted maps.
 5. Exact title plus equal developer auto-resolves `HIGH`.
 6. Exact title plus compatible year (difference ≤1) auto-resolves only when known developers do not conflict.
-7. Unknown app type, incompatible app type, conflicting known developers, year difference >1, missing all corroboration, or multiple exact candidates returns a new independent canonical with `REVIEW_REQUIRED` or `UNMATCHED`, never an automatic merge.
+7. Unknown app type, incompatible app type, conflicting known developers, year difference >1, missing all corroboration, or multiple compatible exact candidates returns a new independent canonical with `REVIEW_REQUIRED` or `UNMATCHED`, never an automatic merge. Same-title candidates with incompatible known app types do not make one otherwise unique compatible candidate ambiguous.
 8. Edition mismatch (`Control` versus `Control Ultimate Edition`) never exact-matches.
-9. Re-running the same current resolver version reuses the existing relation and canonical ID.
+9. Re-running the same current resolver version reuses the existing relation and canonical ID; an unchanged direct Steam relation also preserves `matchedAt`.
 10. An automatic row with an old resolver version is reevaluated; a user row is not.
+11. Conflicting trusted providers fail closed without selecting by `Set` iteration order; identical-target providers prefer a validated mapping at the supported version.
 
 - [ ] **Step 2: Define trusted-map and resolver contracts**
 
@@ -1248,6 +1249,8 @@ interface CanonicalResolver {
     suspend fun resolve(copy: OwnedCopyProjection, nowEpochMs: Long): CanonicalResolution
 }
 ```
+
+Require positive mapping AppIDs/versions in `TrustedSteamMapping`, and require `CanonicalResolution.match.canonicalId == CanonicalResolution.canonical.canonicalId` at construction. These boundary checks prevent malformed provider output or an incoherent result from reaching Task 8's insert/update decision.
 
 Production injects an empty `Set<TrustedSteamMappingProvider>` in Stage 1. The seam is tested, but no current SteamGridDB/HLTB/indirect GOG result is bound to it.
 
@@ -1275,7 +1278,9 @@ same titleKey
 && (equal non-empty developerKey || compatible non-null years)
 ```
 
-A review-required candidate may store one candidate Steam AppID when exactly one defensible candidate exists, but it remains attached to its own independent canonical. Multiple candidates store no arbitrary first candidate.
+Filter same-title rows through exact compatibility before deciding ambiguity. One compatible row auto-resolves even when another same-title row has an incompatible known app type; multiple compatible rows are review-required with no arbitrary candidate. If no row is compatible, retain a candidate Steam AppID only when exactly one same-title row remains reviewable after excluding incompatible known types.
+
+A review-required candidate may store one candidate Steam AppID when exactly one defensible candidate exists, but it remains attached to its own independent canonical. Multiple defensible candidates store no arbitrary first candidate. Preserve an unchanged current direct-Steam match's original `matchedAt`; metadata-only refreshes must not make no-op projection non-idempotent. When a copy source equals the canonical's `primaryMetadataSource`, refresh changed presentation evidence during both initial acceptance and stored-current reuse while retaining canonical ID and `createdAt`; a non-primary source must not overwrite the winning presentation. This must converge on the first rebuild so a second identical rebuild preserves `updatedAt` and `matchedAt`.
 
 Creating a canonical uses `CanonicalIdGenerator`, source display metadata, nullable direct/mapped Steam AppID, and current time. Do not derive a UUID from title or source ID; reuse comes from `StoreMatchEntity` and unique Steam lookup.
 
@@ -1292,7 +1297,8 @@ Expected: the complete confidence/order matrix passes.
 
 ```bash
 git add app/src/main/java/app/gamenative/library/canonical/CanonicalGameResolver.kt \
-  app/src/test/java/app/gamenative/library/canonical/CanonicalGameResolverTest.kt
+  app/src/test/java/app/gamenative/library/canonical/CanonicalGameResolverTest.kt \
+  docs/superpowers/plans/2026-07-28-steam-library-stage-1-canonical-foundation.md
 git commit -m "feat: resolve canonical games conservatively"
 git push fork HEAD
 ```
