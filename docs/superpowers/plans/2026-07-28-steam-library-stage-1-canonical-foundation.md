@@ -1413,7 +1413,8 @@ Cover these exact behaviors:
 - confirming against an existing Steam canonical merges transactionally and the Steam-associated canonical survives;
 - correcting a non-Steam copy from one Steam-associated group to a different Steam AppID detaches only that selected copy before reassignment; the direct Steam copy and other relationships remain on the old canonical;
 - correcting a standalone non-Steam canonical to a new Steam AppID with no existing target updates its Steam association without changing its canonical ID;
-- direct Steam keys cannot be corrected, rejected, or unmerged because their AppID is source identity;
+- confirming one copy never drags a sibling user rejection for that Steam AppID into the confirmed group; the selected copy splits to a new or existing target instead;
+- direct Steam keys cannot be corrected, rejected, reset, or unmerged because their AppID is source identity;
 - without a Steam-associated record, oldest `createdAt` survives, with `canonicalId` as tie-breaker;
 - match rows, unique facets, non-conflicting snapshots, and field-level preference values repoint to the survivor before the loser is deleted;
 - an existing survivor override wins; a missing survivor override inherits the loser value;
@@ -1438,16 +1439,11 @@ interface CanonicalMutationRepository {
 @Singleton
 class RoomCanonicalMutationRepository @Inject constructor(
     private val db: PluviaDatabase,
-    private val canonicalGameDao: CanonicalGameDao,
-    private val storeMatchDao: StoreMatchDao,
-    private val preferenceDao: CanonicalPreferenceDao,
-    private val facetDao: CanonicalFacetDao,
-    private val snapshotDao: GameDetailSnapshotDao,
     private val idGenerator: CanonicalIdGenerator,
 ) : CanonicalMutationRepository
 ```
 
-Return canonical ID strings from mutations for future Stage 2 navigation; do not route an action with them.
+Return canonical ID strings from mutations for future Stage 2 navigation; do not route an action with them. Derive every mutation DAO from the same `PluviaDatabase` instance whose transaction is opened so no write can escape the transaction through a mismatched injected DAO.
 
 - [ ] **Step 3: Implement deterministic merge helpers**
 
@@ -1456,24 +1452,24 @@ All public methods use `db.withTransaction`. Merge order:
 1. select survivor using confirmed Steam association, then oldest `createdAt`, then lexical UUID;
 2. union facets with `INSERT IGNORE` semantics;
 3. copy only missing survivor locale/country snapshots;
-4. combine preference fields independently, survivor non-null first;
+4. combine title and artwork overrides independently, survivor non-null first; treat the three preferred-copy columns as one validated `OwnedCopyKey`, never as independently mergeable fields;
 5. repoint every match to survivor;
 6. update survivor Steam/presentation metadata;
 7. delete loser only after all repoints succeed.
 
-`confirmSteamMatch` first rejects direct Steam keys. When the selected non-Steam copy's current canonical already has a different Steam AppID, do not merge two conflicting Steam groups. If the selected copy is the only relationship on that canonical, change that record's Steam association in place when no target exists; otherwise detach only the selected relationship, create/reuse the requested Steam canonical, and leave the old group intact. Then apply the normal deterministic merge only to records whose Steam associations are null or equal.
+`confirmSteamMatch` first rejects direct Steam keys. When the selected non-Steam copy's current canonical already has a different Steam AppID, do not merge two conflicting Steam groups. If the selected copy is the only relationship on that canonical, change that record's Steam association in place when no target exists; otherwise detach only the selected relationship, create/reuse the requested Steam canonical, and leave the old group intact. Even when the current canonical has no Steam association, detach only the selected copy if any sibling relationship has a sticky user rejection for the requested AppID; confirming one copy must never place that sibling under the identity it rejected. Clear a detached copy from the old canonical's preferred-copy key while preserving title and artwork overrides and leaving any target preference untouched. Then apply the normal deterministic merge only to records whose Steam associations are null or equal.
 
 If a general merge helper encounters two different non-null Steam AppIDs after that correction split, fail closed with `IllegalStateException`; never choose one silently. `rejectSteamCandidate` and `unmergeCopy` reject `GameSource.STEAM` keys because a direct Steam AppID is source identity rather than a match candidate.
 
-Unmerge creates a fallback canonical from the supplied current snapshot/evidence, moves only the selected relationship, sets it to `USER/MANUAL/REJECTED` against the former Steam candidate, writes source facets from the supplied projection, and leaves canonical-wide preference/snapshot rows with the original group.
+Unmerge creates a fallback canonical from the supplied current snapshot/evidence, moves only the selected relationship, sets it to `USER/MANUAL/REJECTED` against the former Steam candidate, writes source facets from the supplied projection, and leaves canonical-wide title/artwork and snapshot rows with the original group. It clears a valid old preferred-copy key when that key names the detached copy and does not copy any override to the new canonical. Because v26 facet rows have no copy provenance, unmerge does not guess which old canonical facets belonged exclusively to the detached copy; later authoritative projection can replace winning-source facets safely.
 
-`resetDecision` preserves the relationship and canonical ID, sets `decisionSource=AUTOMATIC`, `confidence=UNMATCHED`, `matchMethod=UNMATCHED`, clears candidate, and sets `resolverVersion=0` so the next projection reevaluates it.
+`resetDecision` rejects direct Steam keys, preserves the relationship and canonical ID, sets `decisionSource=AUTOMATIC`, `confidence=UNMATCHED`, `matchMethod=UNMATCHED`, clears candidate, sets `resolverVersion=0`, and records the reset time in `matchedAt` so the next projection reevaluates it.
 
 - [ ] **Step 4: Run mutation tests**
 
 ```bash
-./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalMutationRepositoryTest" \
-  :app:testModernDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalMutationRepositoryTest"
+./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalMutationRepositoryTest"
+./gradlew :app:testModernDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalMutationRepositoryTest"
 ```
 
 Expected: merge winner, dependency movement, decision precedence, immutable-ID, and rollback tests pass.
@@ -1482,7 +1478,8 @@ Expected: merge winner, dependency movement, decision precedence, immutable-ID, 
 
 ```bash
 git add app/src/main/java/app/gamenative/library/canonical/CanonicalMutationRepository.kt \
-  app/src/test/java/app/gamenative/library/canonical/CanonicalMutationRepositoryTest.kt
+  app/src/test/java/app/gamenative/library/canonical/CanonicalMutationRepositoryTest.kt \
+  docs/superpowers/plans/2026-07-28-steam-library-stage-1-canonical-foundation.md
 git commit -m "feat: transact canonical match corrections"
 git push fork HEAD
 ```
