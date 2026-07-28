@@ -65,10 +65,7 @@ class GogOwnedCopySourceAdapter @Inject constructor(
                     genreKeys = sourceQualifiedKeys("gog", game.genres),
                 )
             }
-            if (
-                accountScopeProvider.current(source) != accountScope ||
-                AccountScopeInvalidations.generation(source) != accountGeneration
-            ) {
+            if (!accountScopeProvider.isAccountScopeUnchanged(source, accountScope, accountGeneration)) {
                 accountScopeChanged(source)
             } else {
                 sourceBatch(
@@ -92,10 +89,7 @@ class GogOwnedCopySourceAdapter @Inject constructor(
         if (key.accountScope != currentScope) return null
         if (!ownedCopyLedgerDao.isPresent(currentScope.value, source, key.stableSourceId)) return null
         val game = gogGameDao.getById(key.stableSourceId)?.takeUnless { it.exclude } ?: return null
-        if (
-            accountScopeProvider.current(source) != currentScope ||
-            AccountScopeInvalidations.generation(source) != accountGeneration
-        ) {
+        if (!accountScopeProvider.isAccountScopeUnchanged(source, currentScope, accountGeneration)) {
             return null
         }
         return SourceOwnedCopyReference.Gog(key, game.id)

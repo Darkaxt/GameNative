@@ -3,7 +3,11 @@ package app.gamenative.library.canonical.source
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
+import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.library.canonical.AccountScopeInvalidations
+import app.gamenative.library.canonical.AccountScopeProvider
+import kotlin.reflect.KClass
 import kotlinx.coroutines.flow.Flow
 
 enum class SnapshotCompleteness {
@@ -41,7 +45,7 @@ data class SourceProjectionBatch(
     val completeness: SnapshotCompleteness,
     val copies: List<OwnedCopyProjection>,
     val reason: SnapshotReason? = null,
-    val errorType: String? = null,
+    val errorClass: KClass<out Throwable>? = null,
 )
 
 sealed interface SourceOwnedCopyReference {
@@ -87,30 +91,29 @@ interface OwnedCopySourceAdapter {
     suspend fun resolve(key: OwnedCopyKey): SourceOwnedCopyReference?
 }
 
-internal fun missingAccountScope(source: GameSource): SourceProjectionBatch = SourceProjectionBatch(
+internal suspend fun AccountScopeProvider.isAccountScopeUnchanged(
+    source: GameSource,
+    accountScope: AccountScope,
+    generation: Long,
+): Boolean = current(source) == accountScope &&
+    AccountScopeInvalidations.generation(source) == generation
+
+internal fun missingAccountScope(source: GameSource): SourceProjectionBatch = unavailableBatch(
     source = source,
-    accountScope = null,
-    completeness = SnapshotCompleteness.UNAVAILABLE,
-    copies = emptyList(),
     reason = SnapshotReason.MISSING_ACCOUNT_SCOPE,
 )
 
 internal fun presenceLedgerNotReady(
     source: GameSource,
     accountScope: AccountScope,
-): SourceProjectionBatch = SourceProjectionBatch(
+): SourceProjectionBatch = unavailableBatch(
     source = source,
     accountScope = accountScope,
-    completeness = SnapshotCompleteness.UNAVAILABLE,
-    copies = emptyList(),
     reason = SnapshotReason.PRESENCE_LEDGER_NOT_READY,
 )
 
-internal fun accountScopeChanged(source: GameSource): SourceProjectionBatch = SourceProjectionBatch(
+internal fun accountScopeChanged(source: GameSource): SourceProjectionBatch = unavailableBatch(
     source = source,
-    accountScope = null,
-    completeness = SnapshotCompleteness.UNAVAILABLE,
-    copies = emptyList(),
     reason = SnapshotReason.ACCOUNT_SCOPE_CHANGED,
 )
 
@@ -118,13 +121,11 @@ internal fun sourceReadFailed(
     source: GameSource,
     accountScope: AccountScope?,
     error: Exception,
-): SourceProjectionBatch = SourceProjectionBatch(
+): SourceProjectionBatch = unavailableBatch(
     source = source,
     accountScope = accountScope,
-    completeness = SnapshotCompleteness.UNAVAILABLE,
-    copies = emptyList(),
     reason = SnapshotReason.SOURCE_READ_FAILED,
-    errorType = error.javaClass.simpleName.ifBlank { "Exception" },
+    errorClass = error::class,
 )
 
 internal fun sourceBatch(
@@ -146,7 +147,21 @@ internal fun sourceBatch(
 
 internal fun sourceQualifiedKeys(provider: String, values: List<String>): Set<String> = values
     .asSequence()
-    .map(app.gamenative.data.canonical.CanonicalNormalization::titleKey)
+    .map(CanonicalNormalization::titleKey)
     .filter(String::isNotEmpty)
     .map { "$provider:$it" }
     .toSortedSet()
+
+private fun unavailableBatch(
+    source: GameSource,
+    reason: SnapshotReason,
+    accountScope: AccountScope? = null,
+    errorClass: KClass<out Throwable>? = null,
+): SourceProjectionBatch = SourceProjectionBatch(
+    source = source,
+    accountScope = accountScope,
+    completeness = SnapshotCompleteness.UNAVAILABLE,
+    copies = emptyList(),
+    reason = reason,
+    errorClass = errorClass,
+)

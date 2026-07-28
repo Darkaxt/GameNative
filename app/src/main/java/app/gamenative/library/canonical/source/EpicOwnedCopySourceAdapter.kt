@@ -1,5 +1,6 @@
 package app.gamenative.library.canonical.source
 
+import app.gamenative.data.EpicGame
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.EpicStableSourceId
@@ -67,10 +68,7 @@ class EpicOwnedCopySourceAdapter @Inject constructor(
                     genreKeys = sourceQualifiedKeys("epic", game.genres),
                 )
             }
-            if (
-                accountScopeProvider.current(source) != accountScope ||
-                AccountScopeInvalidations.generation(source) != accountGeneration
-            ) {
+            if (!accountScopeProvider.isAccountScopeUnchanged(source, accountScope, accountGeneration)) {
                 accountScopeChanged(source)
             } else {
                 sourceBatch(
@@ -101,10 +99,7 @@ class EpicOwnedCopySourceAdapter @Inject constructor(
         val game = epicGameDao.getByProviderIdentity(namespace, catalogId)
             ?.takeIf(::isVisibleInAllLibrary)
             ?: return null
-        if (
-            accountScopeProvider.current(source) != currentScope ||
-            AccountScopeInvalidations.generation(source) != accountGeneration
-        ) {
+        if (!accountScopeProvider.isAccountScopeUnchanged(source, currentScope, accountGeneration)) {
             return null
         }
         return SourceOwnedCopyReference.Epic(
@@ -115,7 +110,7 @@ class EpicOwnedCopySourceAdapter @Inject constructor(
         )
     }
 
-    private fun isVisibleInAllLibrary(game: app.gamenative.data.EpicGame): Boolean =
+    private fun isVisibleInAllLibrary(game: EpicGame): Boolean =
         !game.isDLC && game.namespace != "ue" && game.namespace != UNREAL_ENGINE_NAMESPACE
 
     private companion object {

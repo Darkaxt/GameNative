@@ -138,6 +138,13 @@ object PrefManager {
         }
     }
 
+    private val CANONICAL_PROJECTION_ENABLED = booleanPreferencesKey("canonical_projection_enabled")
+    var canonicalProjectionEnabled: Boolean
+        get() = getPref(CANONICAL_PROJECTION_ENABLED, true)
+        set(value) {
+            setPref(CANONICAL_PROJECTION_ENABLED, value)
+        }
+
     /* Manifest Cache */
     private val COMPONENT_MANIFEST_JSON = stringPreferencesKey("component_manifest_json")
     var componentManifestJson: String

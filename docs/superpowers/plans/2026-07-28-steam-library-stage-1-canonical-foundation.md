@@ -1013,7 +1013,7 @@ data class SourceProjectionBatch(
     val completeness: SnapshotCompleteness,
     val copies: List<OwnedCopyProjection>,
     val reason: SnapshotReason? = null,
-    val errorType: String? = null,
+    val errorClass: KClass<out Throwable>? = null,
 )
 
 sealed interface SourceOwnedCopyReference {
@@ -1491,77 +1491,149 @@ git push fork HEAD
 **Files:**
 - Create: `app/src/main/java/app/gamenative/library/canonical/CanonicalDiagnostics.kt`
 - Create: `app/src/main/java/app/gamenative/library/canonical/CanonicalProjectionCoordinator.kt`
-- Create: `app/src/main/java/app/gamenative/di/CanonicalLibraryModule.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/CanonicalProjectionEngine.kt`
+- Modify: `app/src/main/java/app/gamenative/di/CanonicalLibraryModule.kt`
 - Modify: `app/src/main/java/app/gamenative/PrefManager.kt`
 - Modify: `app/src/main/java/app/gamenative/PluviaApp.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/source/OwnedCopySourceAdapter.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/source/SteamOwnedCopySourceAdapter.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/source/GogOwnedCopySourceAdapter.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/source/EpicOwnedCopySourceAdapter.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/source/AmazonOwnedCopySourceAdapter.kt`
 - Test: `app/src/test/java/app/gamenative/library/canonical/CanonicalProjectionCoordinatorTest.kt`
+- Test: `app/src/test/java/app/gamenative/library/canonical/source/OwnedCopySourceAdapterTest.kt`
 
 - [ ] **Step 1: Write coordinator and diagnostic API tests**
 
-Use fake adapters, engine, gate, clock, and diagnostic sink. Assert:
+Use fake adapters, projection runner, gate, clock, and aggregate diagnostic sink. Assert:
 
 - startup triggers one projection after `PrefManager.init`;
 - invalidations during a running build conflate into one later rebuild rather than canceling the transaction;
 - one adapter failure becomes an unavailable batch and other sources still project;
-- engine failure records FAILED and the collection job remains alive for a later invalidation;
+- one invalidation-flow failure records only source/exception class and restarts that collector with bounded backoff without terminating the coordinator;
+- engine or gate failure records FAILED and the collection job remains alive for a later invalidation;
 - disabled gate records SKIPPED and never calls adapters/engine;
 - emitted attributes contain only source, reason, error class, aggregate counts, match method, and confidence;
-- raw account IDs, account scopes, stable IDs, titles, candidate titles, paths, and exception messages are absent from the diagnostic API by construction.
+- raw account IDs, account scopes, stable IDs, titles, candidate titles, paths, and exception messages are absent from both the diagnostic API and adapter batch error field by construction.
 
 - [ ] **Step 2: Add a narrow aggregate-only diagnostic wrapper**
 
 Expose methods whose signatures cannot accept private strings:
 
 ```kotlin
-class CanonicalDiagnostics @Inject constructor() {
+interface CanonicalDiagnosticSink {
     fun indexStarted()
     fun sourceSnapshot(
         source: GameSource,
         completeness: SnapshotCompleteness,
         copyCount: Int,
         reason: SnapshotReason?,
-        errorType: String?,
+        errorClass: KClass<out Throwable>?,
     )
+    fun invalidationFailed(source: GameSource, errorClass: KClass<out Throwable>)
     fun matchBucket(bucket: MatchBucket, count: Int)
     fun indexSucceeded(result: CanonicalProjectionResult, durationMs: Long)
-    fun indexFailed(errorType: String, durationMs: Long)
+    fun indexFailed(errorClass: KClass<out Throwable>, durationMs: Long)
     fun indexSkipped(reason: SnapshotReason)
+}
+
+sealed interface CanonicalDiagnosticEvent {
+    data object IndexStarted : CanonicalDiagnosticEvent
+    data class SourceSnapshot(
+        val source: GameSource,
+        val completeness: SnapshotCompleteness,
+        val copyCount: Int,
+        val reason: SnapshotReason?,
+        val errorClass: KClass<out Throwable>?,
+    ) : CanonicalDiagnosticEvent
+    data class InvalidationFailed(
+        val source: GameSource,
+        val errorClass: KClass<out Throwable>,
+    ) : CanonicalDiagnosticEvent
+    data class MatchResolution(val bucket: MatchBucket, val count: Int) : CanonicalDiagnosticEvent
+    data class IndexSucceeded(
+        val result: CanonicalProjectionResult,
+        val durationMs: Long,
+    ) : CanonicalDiagnosticEvent
+    data class IndexFailed(
+        val errorClass: KClass<out Throwable>,
+        val durationMs: Long,
+    ) : CanonicalDiagnosticEvent
+    data class IndexSkipped(val reason: SnapshotReason) : CanonicalDiagnosticEvent
+}
+
+fun interface CanonicalEventRecorder {
+    fun record(event: CanonicalDiagnosticEvent)
 }
 ```
 
-Implementation records `CANONICAL_INDEX_BUILD` and aggregated `MATCH_RESOLUTION` events. `sourceSnapshot` receives no copy objects and may use only its source, completeness, count, fixed reason, and exception class name. `indexSucceeded` uses `CANONICAL_COUNT`, `COPY_COUNT`, and the existing per-source count attributes. The coordinator derives `error.javaClass.simpleName` for `indexFailed`, never its message.
+Implementation maps the typed events internally to `CANONICAL_INDEX_BUILD` and aggregated `MATCH_RESOLUTION` records. `sourceSnapshot` receives no copy objects and may use only its source, completeness, count, fixed reason, and exception class. `indexSucceeded` uses `CANONICAL_COUNT`, `COPY_COUNT`, and the existing per-source count attributes. `SourceProjectionBatch.errorClass` is likewise `KClass<out Throwable>?`, populated only from a caught throwable; neither adapters nor the coordinator may pass an exception message. The recorder accepts only the sealed aggregate-safe event family and its production implementation delegates locally to `FeatureDiagnostics`; tests capture typed events without replacing the global manual-export store. No network or automatic upload path is added.
 
 - [ ] **Step 3: Implement the sequential conflated coordinator**
 
-Use an initial event plus merged adapter invalidations:
+Use one explicit startup trigger and a `Channel.CONFLATED` fed by adapter invalidation collectors:
 
 ```kotlin
 @Singleton
 class CanonicalProjectionCoordinator @Inject constructor(
-    private val adapters: Set<@JvmSuppressWildcards OwnedCopySourceAdapter>,
-    private val engine: CanonicalProjectionEngine,
-    private val diagnostics: CanonicalDiagnostics,
+    adapters: Set<@JvmSuppressWildcards OwnedCopySourceAdapter>,
+    private val runner: CanonicalProjectionRunner,
+    private val diagnostics: CanonicalDiagnosticSink,
+    private val gate: CanonicalProjectionGate,
+    private val clock: CanonicalProjectionClock,
 ) {
     fun start(scope: CoroutineScope): Job = scope.launch {
-        merge(
-            flowOf(Unit),
-            *adapters.map { it.invalidations() }.toTypedArray(),
-        ).conflate().collect {
-            rebuildSafely()
+        coroutineScope {
+            val triggers = Channel<Unit>(Channel.CONFLATED)
+            val invalidationJobs = orderedAdapters.map { adapter ->
+                launch { collectInvalidations(adapter, triggers) }
+            }
+            triggers.trySend(Unit)
+            try {
+                for (ignored in triggers) rebuildSafely()
+            } finally {
+                invalidationJobs.forEach { job -> job.cancel() }
+                triggers.close()
+            }
+        }
+    }
+
+    private suspend fun collectInvalidations(
+        adapter: OwnedCopySourceAdapter,
+        triggers: Channel<Unit>,
+    ) {
+        var retryDelayMs = 1_000L
+        while (true) {
+            try {
+                adapter.invalidations().collect {
+                    retryDelayMs = 1_000L
+                    triggers.trySend(Unit)
+                }
+                return
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                diagnostics.invalidationFailed(adapter.source, error::class)
+                delay(retryDelayMs)
+                retryDelayMs = (retryDelayMs * 2).coerceAtMost(60_000L)
+            }
         }
     }
 }
 ```
 
+A plain `merge(...).conflate()` is insufficient here because `merge` can buffer every invalidation upstream while a rebuild is suspended, then drain them as separate rebuilds. Retain each Room DAO flow's initial state emission: dropping it creates a subscription race in which a source sync committed between the explicit startup snapshot and Room observer registration can be lost. The conflated channel may produce one harmless follow-up startup rebuild, but it cannot lose that state transition. Account/custom signals remain edge-triggered. A non-cancellation observer failure records only source and exception class, then restarts that collector with exponential delay capped at 60 seconds; it cannot cancel the other collectors or coordinator.
+
 `rebuildSafely`:
 
-1. checks `PrefManager.canonicalProjectionEnabled`;
-2. snapshots adapters in fixed source order, catching each adapter independently;
-3. records source aggregate states;
-4. calls the engine once with all batches and `System.currentTimeMillis()`;
-5. records bucket/final aggregates;
-6. catches non-cancellation exceptions around the complete run, records failure, and returns so the flow can process a future event;
-7. rethrows `CancellationException`.
+1. contains gate evaluation, timing, diagnostics, snapshots, and projection inside one cancellation-aware failure boundary;
+2. checks `PrefManager.canonicalProjectionEnabled`;
+3. snapshots adapters in fixed source order, catching each adapter independently;
+4. records source aggregate states;
+5. calls the engine once with all batches and `System.currentTimeMillis()`;
+6. records bucket/final aggregates;
+7. catches non-cancellation exceptions around the complete run, records only the exception class, and returns so the flow can process a future event;
+8. rethrows `CancellationException`.
 
 Do not use `collectLatest`; cancellation during a newer invalidation would deliberately abort an in-flight transaction and create avoidable churn.
 
@@ -1573,6 +1645,7 @@ Do not use `collectLatest`; cancellation during a newer invalidation would delib
 - bind each adapter into `Set<OwnedCopySourceAdapter>` with `@IntoSet`;
 - bind `CanonicalGameResolver` to `CanonicalResolver`;
 - bind `RoomCanonicalMutationRepository` to `CanonicalMutationRepository`;
+- bind the engine/diagnostics/recorder/gate/clock production implementations to their narrow coordinator interfaces;
 - provide `CanonicalIdGenerator { CanonicalGameId.random() }`;
 - declare `@Multibinds abstract fun trustedSteamMappingProviders(): Set<TrustedSteamMappingProvider>` so the Stage 1 production set is empty without a fake provider;
 
@@ -1589,14 +1662,15 @@ var canonicalProjectionEnabled: Boolean
     set(value) = setPref(CANONICAL_PROJECTION_ENABLED, value)
 ```
 
-Inject `CanonicalProjectionCoordinator` into `PluviaApp` and call `canonicalProjectionCoordinator.start(appScope)` after `PrefManager.init(this)`. Do not await it, query canonical rows from the UI, or alter app startup if it fails.
+Inject `CanonicalProjectionCoordinator` into `PluviaApp` and call `canonicalProjectionCoordinator.start(appScope)` after `PrefManager.init(this)` and the synchronous GOG/Amazon path migration. Do not await it, query canonical rows from the UI, or alter app startup if it fails.
 
 - [ ] **Step 6: Run coordinator tests and compile both flavors**
 
 ```bash
-./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionCoordinatorTest" \
-  :app:testModernDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionCoordinatorTest" \
-  :app:compileLegacyDebugKotlin :app:compileModernDebugKotlin
+./gradlew :app:testLegacyDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionCoordinatorTest" --tests "app.gamenative.library.canonical.source.OwnedCopySourceAdapterTest"
+./gradlew :app:testModernDebugUnitTest --tests "app.gamenative.library.canonical.CanonicalProjectionCoordinatorTest" --tests "app.gamenative.library.canonical.source.OwnedCopySourceAdapterTest"
+./gradlew :app:compileLegacyDebugKotlin :app:hiltJavaCompileLegacyDebug
+./gradlew :app:compileModernDebugKotlin :app:hiltJavaCompileModernDebug
 ```
 
 Expected: coordinator recovery/privacy tests pass and Hilt compiles in both flavors.
@@ -1606,10 +1680,18 @@ Expected: coordinator recovery/privacy tests pass and Hilt compiles in both flav
 ```bash
 git add app/src/main/java/app/gamenative/library/canonical/CanonicalDiagnostics.kt \
   app/src/main/java/app/gamenative/library/canonical/CanonicalProjectionCoordinator.kt \
+  app/src/main/java/app/gamenative/library/canonical/CanonicalProjectionEngine.kt \
+  app/src/main/java/app/gamenative/library/canonical/source/OwnedCopySourceAdapter.kt \
+  app/src/main/java/app/gamenative/library/canonical/source/SteamOwnedCopySourceAdapter.kt \
+  app/src/main/java/app/gamenative/library/canonical/source/GogOwnedCopySourceAdapter.kt \
+  app/src/main/java/app/gamenative/library/canonical/source/EpicOwnedCopySourceAdapter.kt \
+  app/src/main/java/app/gamenative/library/canonical/source/AmazonOwnedCopySourceAdapter.kt \
   app/src/main/java/app/gamenative/di/CanonicalLibraryModule.kt \
   app/src/main/java/app/gamenative/PrefManager.kt \
   app/src/main/java/app/gamenative/PluviaApp.kt \
-  app/src/test/java/app/gamenative/library/canonical/CanonicalProjectionCoordinatorTest.kt
+  app/src/test/java/app/gamenative/library/canonical/CanonicalProjectionCoordinatorTest.kt \
+  app/src/test/java/app/gamenative/library/canonical/source/OwnedCopySourceAdapterTest.kt \
+  docs/superpowers/plans/2026-07-28-steam-library-stage-1-canonical-foundation.md
 git commit -m "feat: run canonical projection in shadow mode"
 git push fork HEAD
 ```

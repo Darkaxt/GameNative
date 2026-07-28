@@ -65,10 +65,7 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
                     appType = CanonicalAppType.GAME,
                 )
             }
-            if (
-                accountScopeProvider.current(source) != accountScope ||
-                AccountScopeInvalidations.generation(source) != accountGeneration
-            ) {
+            if (!accountScopeProvider.isAccountScopeUnchanged(source, accountScope, accountGeneration)) {
                 accountScopeChanged(source)
             } else {
                 sourceBatch(
@@ -97,10 +94,7 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
         ) ?: return null
         val entitlementId = presence.resolvedSourceId ?: return null
         val game = amazonGameDao.getByProductId(key.stableSourceId) ?: return null
-        if (
-            accountScopeProvider.current(source) != currentScope ||
-            AccountScopeInvalidations.generation(source) != accountGeneration
-        ) {
+        if (!accountScopeProvider.isAccountScopeUnchanged(source, currentScope, accountGeneration)) {
             return null
         }
         return SourceOwnedCopyReference.Amazon(

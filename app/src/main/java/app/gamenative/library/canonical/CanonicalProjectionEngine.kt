@@ -25,7 +25,7 @@ data class MatchBucket(
     val confidence: MatchConfidence,
 )
 
-data class CanonicalProjectionResult internal constructor(
+data class CanonicalProjectionResult(
     val sourceCounts: Map<GameSource, Int>,
     val canonicalCount: Int,
     val copyCount: Int,
@@ -42,16 +42,23 @@ data class CanonicalProjectionResult internal constructor(
     }
 }
 
+interface CanonicalProjectionRunner {
+    suspend fun rebuild(
+        batches: List<SourceProjectionBatch>,
+        nowEpochMs: Long,
+    ): CanonicalProjectionResult
+}
+
 @Singleton
 class CanonicalProjectionEngine @Inject constructor(
     private val db: PluviaDatabase,
     private val resolver: CanonicalResolver,
-) {
+) : CanonicalProjectionRunner {
     private val canonicalGameDao = db.canonicalGameDao()
     private val storeMatchDao = db.storeMatchDao()
     private val facetDao = db.canonicalFacetDao()
 
-    suspend fun rebuild(
+    override suspend fun rebuild(
         batches: List<SourceProjectionBatch>,
         nowEpochMs: Long,
     ): CanonicalProjectionResult {

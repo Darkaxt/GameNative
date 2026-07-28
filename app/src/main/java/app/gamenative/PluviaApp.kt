@@ -9,6 +9,7 @@ import app.gamenative.db.dao.AmazonGameDao
 import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.events.EventDispatcher
+import app.gamenative.library.canonical.CanonicalProjectionCoordinator
 import app.gamenative.service.ActiveGameRegistry
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
@@ -47,6 +48,7 @@ class PluviaApp : SplitCompatApplication() {
 
     @Inject lateinit var gogGameDao: GOGGameDao
     @Inject lateinit var amazonGameDao: AmazonGameDao
+    @Inject lateinit var canonicalProjectionCoordinator: CanonicalProjectionCoordinator
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -86,6 +88,7 @@ class PluviaApp : SplitCompatApplication() {
         DownloadService.populateDownloadService(this)
 
         migrateGogAmazonPaths()
+        canonicalProjectionCoordinator.start(appScope)
 
         appScope.launch {
             ContainerMigrator.migrateLegacyContainersIfNeeded(

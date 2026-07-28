@@ -65,10 +65,7 @@ class SteamOwnedCopySourceAdapter @Inject constructor(
                     )
                 }.sortedBy { it.key.stableSourceId }
 
-            if (
-                accountScopeProvider.current(source) != accountScope ||
-                AccountScopeInvalidations.generation(source) != accountGeneration
-            ) {
+            if (!accountScopeProvider.isAccountScopeUnchanged(source, accountScope, accountGeneration)) {
                 accountScopeChanged(source)
             } else {
                 sourceBatch(source, accountScope, copies, partialReason)
@@ -89,10 +86,7 @@ class SteamOwnedCopySourceAdapter @Inject constructor(
             ?.takeIf { it > 0 && it.toString() == key.stableSourceId }
             ?: return null
         steamAppDao.findOwnedApp(appId) ?: return null
-        if (
-            accountScopeProvider.current(source) != currentScope ||
-            AccountScopeInvalidations.generation(source) != accountGeneration
-        ) {
+        if (!accountScopeProvider.isAccountScopeUnchanged(source, currentScope, accountGeneration)) {
             return null
         }
         return SourceOwnedCopyReference.Steam(key, appId)

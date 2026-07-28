@@ -93,7 +93,7 @@ class OwnedCopySourceAdapterTest {
         )
         coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns apps
         coEvery { dao.findOwnedApp(3, any(), any()) } returns apps[1]
-        every { dao._observeOwnedAppCount(any(), any()) } returns flowOf(2, 2)
+        every { dao._observeOwnedAppCount(any(), any()) } returns flowOf(2, 3)
         val adapter = SteamOwnedCopySourceAdapter(dao, scopes(GameSource.STEAM))
 
         val batch = adapter.snapshot()
@@ -325,7 +325,7 @@ class OwnedCopySourceAdapterTest {
             assertEquals(SnapshotReason.MISSING_ACCOUNT_SCOPE, batch.reason)
             assertNull(batch.accountScope)
             assertTrue(batch.copies.isEmpty())
-            assertNull(batch.errorType)
+            assertNull(batch.errorClass)
         }
         coVerify(exactly = 0) { steamDao._getAllOwnedAppsPaged(any(), any()) }
         coVerify(exactly = 0) { gogDao.getAllAsList() }
@@ -365,7 +365,7 @@ class OwnedCopySourceAdapterTest {
         batches.forEach { batch ->
             assertEquals(SnapshotCompleteness.UNAVAILABLE, batch.completeness)
             assertEquals(SnapshotReason.SOURCE_READ_FAILED, batch.reason)
-            assertEquals("SensitiveDaoException", batch.errorType)
+            assertEquals(SensitiveDaoException::class, batch.errorClass)
             assertTrue(batch.copies.isEmpty())
             assertFalse(batch.toString().contains(SENSITIVE_EXCEPTION_MESSAGE))
         }
