@@ -4,6 +4,7 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.SteamAppDao
+import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
 import javax.inject.Inject
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.merge
 class SteamOwnedCopySourceAdapter @Inject constructor(
     private val steamAppDao: SteamAppDao,
     private val accountScopeProvider: AccountScopeProvider,
+    private val accountLifecycleState: AccountLifecycleState = AccountScopeInvalidations,
 ) : OwnedCopySourceAdapter {
     override val source: GameSource = GameSource.STEAM
 
@@ -33,7 +35,10 @@ class SteamOwnedCopySourceAdapter @Inject constructor(
         } catch (error: Exception) {
             return sourceReadFailed(source, null, error)
         } ?: return missingAccountScope(source)
-        val accountGeneration = AccountScopeInvalidations.generation(source)
+        val accountGeneration = accountLifecycleState.generation(source)
+        if (accountLifecycleState.readyGeneration(source) != accountGeneration) {
+            return presenceLedgerNotReady(source, accountScope)
+        }
 
         return try {
             var partialReason: SnapshotReason? = null
@@ -65,7 +70,14 @@ class SteamOwnedCopySourceAdapter @Inject constructor(
                     )
                 }.sortedBy { it.key.stableSourceId }
 
-            if (!accountScopeProvider.isAccountScopeUnchanged(source, accountScope, accountGeneration)) {
+            if (
+                !accountScopeProvider.isAccountScopeUnchanged(
+                    source,
+                    accountScope,
+                    accountGeneration,
+                    accountLifecycleState,
+                )
+            ) {
                 accountScopeChanged(source)
             } else {
                 sourceBatch(source, accountScope, copies, partialReason)
@@ -80,13 +92,21 @@ class SteamOwnedCopySourceAdapter @Inject constructor(
     override suspend fun resolve(key: OwnedCopyKey): SourceOwnedCopyReference? {
         if (key.source != source) return null
         val currentScope = accountScopeProvider.current(source) ?: return null
-        val accountGeneration = AccountScopeInvalidations.generation(source)
+        val accountGeneration = accountLifecycleState.generation(source)
         if (key.accountScope != currentScope) return null
+        if (accountLifecycleState.readyGeneration(source) != accountGeneration) return null
         val appId = key.stableSourceId.toIntOrNull()
             ?.takeIf { it > 0 && it.toString() == key.stableSourceId }
             ?: return null
         steamAppDao.findOwnedApp(appId) ?: return null
-        if (!accountScopeProvider.isAccountScopeUnchanged(source, currentScope, accountGeneration)) {
+        if (
+            !accountScopeProvider.isAccountScopeUnchanged(
+                source,
+                currentScope,
+                accountGeneration,
+                accountLifecycleState,
+            )
+        ) {
             return null
         }
         return SourceOwnedCopyReference.Steam(key, appId)

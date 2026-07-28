@@ -26,8 +26,14 @@ object AccountScopeInvalidations : AccountLifecycleState {
 
     override fun generation(source: GameSource): Long = lifecycleState.generation(source)
 
+    override fun readyGeneration(source: GameSource): Long? =
+        lifecycleState.readyGeneration(source)
+
     override fun advanceGeneration(source: GameSource): Long =
         lifecycleState.advanceGeneration(source)
+
+    override fun markReady(source: GameSource, expectedGeneration: Long): Boolean =
+        lifecycleState.markReady(source, expectedGeneration)
 
     internal fun install(state: AccountLifecycleState) {
         lifecycleState = state
@@ -39,7 +45,11 @@ object AccountScopeInvalidations : AccountLifecycleState {
     }
 
     internal fun publishChange(change: AccountLifecycleChange) {
-        changes.tryEmit(change.source)
+        publishInvalidation(change.source)
+    }
+
+    internal fun publishInvalidation(source: GameSource) {
+        changes.tryEmit(source)
     }
 
     internal inline fun <T> runLifecycleChange(

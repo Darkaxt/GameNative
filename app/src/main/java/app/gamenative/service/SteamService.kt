@@ -50,7 +50,7 @@ import app.gamenative.enums.SaveLocation
 import app.gamenative.enums.SyncResult
 import app.gamenative.events.AndroidEvent
 import app.gamenative.events.SteamEvent
-import app.gamenative.library.canonical.AccountScopeInvalidations
+import app.gamenative.library.canonical.SteamOwnershipReadiness
 import app.gamenative.utils.CaseInsensitiveFileSystem
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.FileUtils
@@ -207,6 +207,9 @@ class SteamService : Service(), IChallengeUrlChanged {
     lateinit var db: PluviaDatabase
 
     @Inject
+    lateinit var steamOwnershipReadiness: SteamOwnershipReadiness
+
+    @Inject
     lateinit var licenseDao: SteamLicenseDao
 
     @Inject
@@ -274,7 +277,14 @@ class SteamService : Service(), IChallengeUrlChanged {
         },
     )
 
+    private data class SteamOwnershipSession(
+        val lifecycleGeneration: Long,
+        val accountId: Int,
+    )
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    @Volatile
+    private var steamOwnershipSession: SteamOwnershipSession? = null
     private var reconnectJob: Job? = null
     private var offlineAchievementSyncJob: Job? = null
     private val pendingSyncAppIds: MutableSet<Int> = java.util.concurrent.ConcurrentHashMap.newKeySet()
@@ -2657,7 +2667,9 @@ class SteamService : Service(), IChallengeUrlChanged {
             emailAuth: String? = null,
             clientId: Long? = null,
         ) {
-            val steamUser = instance!!._steamUser!!
+            val steamInstance = instance!!
+            steamInstance.steamOwnershipSession = null
+            val steamUser = steamInstance._steamUser!!
 
             // Sensitive info, only print in DEBUG build.
 //            if (BuildConfig.DEBUG) {
@@ -2887,9 +2899,19 @@ class SteamService : Service(), IChallengeUrlChanged {
         }
 
         private fun clearUserData(clearCloudSyncState: Boolean = false) {
-            PrefManager.clearSteamSessionPreferences()
-            instance?.clearPendingSync()
-            clearDatabase(clearCloudSyncState = clearCloudSyncState)
+            val steamInstance = instance ?: return
+            steamInstance.steamOwnershipSession = null
+            val lifecycleGeneration = steamInstance.steamOwnershipReadiness.clearAccount(
+                hasAccountIdentity = PrefManager.steamUserSteamId64 != 0L,
+            ) {
+                PrefManager.clearSteamSessionPreferencesSynchronously()
+            }
+            steamInstance.clearPendingSync()
+            clearDatabase(
+                steamInstance = steamInstance,
+                clearCloudSyncState = clearCloudSyncState,
+                lifecycleGeneration = lifecycleGeneration,
+            )
             SteamCollectionRepository.clear()
         }
 
@@ -2913,18 +2935,35 @@ class SteamService : Service(), IChallengeUrlChanged {
         }
 
         fun clearDatabase(clearCloudSyncState: Boolean = false) {
-            with(instance!!) {
+            val steamInstance = instance!!
+            val lifecycleGeneration = steamInstance.steamOwnershipReadiness.transitionAccount {}
+            clearDatabase(
+                steamInstance = steamInstance,
+                clearCloudSyncState = clearCloudSyncState,
+                lifecycleGeneration = lifecycleGeneration,
+            )
+        }
+
+        private fun clearDatabase(
+            steamInstance: SteamService,
+            clearCloudSyncState: Boolean,
+            lifecycleGeneration: Long,
+        ) {
+            with(steamInstance) {
                 scope.launch {
-                    db.withTransaction {
-                        appDao.deleteAll()
-                        if (clearCloudSyncState) {
-                            changeNumbersDao.deleteAll()
-                            fileChangeListsDao.deleteAll()
+                    steamOwnershipReadiness.clearLicenseSnapshot(lifecycleGeneration) {
+                        db.withTransaction {
+                            appDao.deleteAll()
+                            if (clearCloudSyncState) {
+                                changeNumbersDao.deleteAll()
+                                fileChangeListsDao.deleteAll()
+                            }
+                            cachedLicenseDao.deleteAll()
+                            licenseDao.deleteAll()
+                            encryptedAppTicketDao.deleteAll()
+                            downloadingAppInfoDao.deleteAll()
+                            steamUnlockedBranchDao.deleteAll()
                         }
-                        licenseDao.deleteAll()
-                        encryptedAppTicketDao.deleteAll()
-                        downloadingAppInfoDao.deleteAll()
-                        steamUnlockedBranchDao.deleteAll()
                     }
                 }
             }
@@ -3629,6 +3668,7 @@ class SteamService : Service(), IChallengeUrlChanged {
         isConnected = false
         isLoggingOut = false
         isWaitingForQRAuth = false
+        steamOwnershipSession = null
 
         steamClient = null
         _steamUser = null
@@ -3698,6 +3738,7 @@ class SteamService : Service(), IChallengeUrlChanged {
         Timber.i("Disconnected from Steam. User initiated: ${callback.isUserInitiated}")
 
         isConnected = false
+        steamOwnershipSession = null
         offlineAchievementSyncJob?.cancel()
         offlineAchievementSyncJob = null
 
@@ -3727,22 +3768,28 @@ class SteamService : Service(), IChallengeUrlChanged {
         }
     }
 
+    private fun persistCurrentSteamIdentity(): SteamOwnershipSession? {
+        val steamId = userSteamId?.takeIf { it.isValid } ?: return null
+        val accountId = steamId.accountID.toInt()
+        val steamId64 = steamId.convertToUInt64()
+        val lifecycleGeneration = if (PrefManager.steamUserSteamId64 == steamId64) {
+            if (PrefManager.steamUserAccountId != accountId) {
+                PrefManager.setSteamAccountIdentitySynchronously(accountId, steamId64)
+            }
+            steamOwnershipReadiness.currentGeneration()
+        } else {
+            steamOwnershipReadiness.transitionAccount {
+                PrefManager.setSteamAccountIdentitySynchronously(accountId, steamId64)
+            }.also {
+                Timber.d("Saved logged-in Steam account identity")
+            }
+        }
+        return SteamOwnershipSession(lifecycleGeneration, accountId)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private fun onLoggedOn(callback: LoggedOnCallback) {
         Timber.i("Logged onto Steam: ${callback.result}")
-
-        if (userSteamId?.isValid == true) {
-            if (PrefManager.steamUserAccountId != userSteamId!!.accountID.toInt()) {
-                PrefManager.steamUserAccountId = userSteamId!!.accountID.toInt()
-                Timber.d("Saving logged in Steam accountID ${userSteamId!!.accountID.toInt()}")
-            }
-            val steamId64 = userSteamId!!.convertToUInt64()
-            if (PrefManager.steamUserSteamId64 != steamId64) {
-                PrefManager.steamUserSteamId64 = steamId64
-                AccountScopeInvalidations.notifyChanged(GameSource.STEAM)
-                Timber.d("Saving logged in Steam ID64 $steamId64")
-            }
-        }
 
         when (callback.result) {
             EResult.TryAnotherCM -> {
@@ -3751,6 +3798,8 @@ class SteamService : Service(), IChallengeUrlChanged {
             }
 
             EResult.OK -> {
+                steamOwnershipSession = persistCurrentSteamIdentity()
+
                 // save the current cellid somewhere. if we lose our saved server list, we can use this when retrieving
                 // servers from the Steam Directory.
                 if (!PrefManager.cellIdManuallySet) {
@@ -3817,8 +3866,9 @@ class SteamService : Service(), IChallengeUrlChanged {
             }
 
             else -> {
+                steamOwnershipSession = null
                 if (shouldClearUserDataForLoggedOnFailure(callback.result)) {
-                    PrefManager.clearSteamSessionPreferences()
+                    clearUserData()
                 }
 
                 _loginResult = LoginResult.Failed
@@ -3967,8 +4017,6 @@ class SteamService : Service(), IChallengeUrlChanged {
         notificationHelper.notify("Disconnected...")
 
         if (isLoggingOut) {
-            performLogOffDuties(clearCloudSyncState = true)
-
             scope.launch { stop() }
         } else if (callback.result == EResult.LogonSessionReplaced) {
             // Unexpected session replacement should not wipe persisted Steam state.
@@ -4146,80 +4194,107 @@ class SteamService : Service(), IChallengeUrlChanged {
             return
         }
 
-        Timber.i("Received License List ${callback.result}, size: ${callback.licenseList.size}")
+        val ownershipSession = steamOwnershipSession
+        if (ownershipSession == null) {
+            Timber.w("Ignoring Steam license list outside an active account session")
+            return
+        }
+        val callbackLicenses = callback.licenseList.toList()
+        Timber.i("Received License List ${callback.result}, size: ${callbackLicenses.size}")
 
         scope.launch {
-            db.withTransaction {
-                // Note: I assume with every launch we do, in fact, update the licenses for app the apps if we join or get removed
-                //      from family sharing... We really can't test this as there is a 1-year cooldown.
-                //      Then 'findStaleLicences' will find these now invalid items to remove.
-
-                // Chunk the input to reduce memory pressures for very large items.
-                licenses = callback.licenseList
-                cachedLicenseDao.deleteAll()
-                callback.licenseList.chunked(500).forEach { chunk ->
-                    cachedLicenseDao.insertAll(
-                        chunk.map { license ->
-                            CachedLicense(licenseJson = LicenseSerializer.serializeLicense(license))
-                        },
+            var packageRequests = emptyList<PICSRequest>()
+            val committed = try {
+                steamOwnershipReadiness.commitLicenseSnapshot(
+                    ownershipSession.lifecycleGeneration,
+                ) {
+                    licenses = callbackLicenses
+                    packageRequests = replaceLicenseSnapshot(
+                        callbackLicenses,
+                        ownershipSession.accountId,
                     )
                 }
-                val licensesToAdd = callback.licenseList
-                    .groupBy { it.packageID }
-                    .map { licensesEntry ->
-                        val preferred = licensesEntry.value.firstOrNull {
-                            it.ownerAccountID == userSteamId?.accountID?.toInt()
-                        } ?: licensesEntry.value.first()
-                        SteamLicense(
-                            packageId = licensesEntry.key,
-                            lastChangeNumber = preferred.lastChangeNumber,
-                            timeCreated = preferred.timeCreated,
-                            timeNextProcess = preferred.timeNextProcess,
-                            minuteLimit = preferred.minuteLimit,
-                            minutesUsed = preferred.minutesUsed,
-                            paymentMethod = preferred.paymentMethod,
-                            licenseFlags = licensesEntry.value
-                                .map { it.licenseFlags }
-                                .reduceOrNull { first, second ->
-                                    val combined = EnumSet.copyOf(first)
-                                    combined.addAll(second)
-                                    combined
-                                } ?: EnumSet.noneOf(ELicenseFlags::class.java),
-                            purchaseCode = preferred.purchaseCode,
-                            licenseType = preferred.licenseType,
-                            territoryCode = preferred.territoryCode,
-                            accessToken = preferred.accessToken,
-                            ownerAccountId = licensesEntry.value.map { it.ownerAccountID }, // Read note above
-                            masterPackageID = preferred.masterPackageID,
-                        )
-                    }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Timber.e(error, "Failed to persist Steam license snapshot")
+                false
+            }
 
-                if (licensesToAdd.isNotEmpty()) {
-                    Timber.i("Adding ${licensesToAdd.size} licenses")
-                    licensesToAdd.chunked(500).forEach { chunk ->
-                        licenseDao.insertAll(chunk)
-                    }
-                }
+            if (!committed) {
+                Timber.i("Discarded stale Steam license snapshot")
+                return@launch
+            }
 
-                val licensesToRemove = licenseDao.findStaleLicences(
-                    packageIds = callback.licenseList.map { it.packageID },
-                )
-                if (licensesToRemove.isNotEmpty()) {
-                    Timber.i("Removing ${licensesToRemove.size} (stale) licenses")
-                    val packageIds = licensesToRemove.map { it.packageId }
-                    licenseDao.deleteStaleLicenses(packageIds)
-                }
-
-                // Get PICS information with the current license database.
-                licenseDao.getAllLicenses()
-                    .map { PICSRequest(it.packageId, it.accessToken) }
-                    .chunked(MAX_PICS_BUFFER)
-                    .forEach { chunk ->
-                        Timber.d("onLicenseList: Queueing ${chunk.size} package(s) for PICS")
-                        packagePicsChannel.send(chunk)
-                    }
+            packageRequests.chunked(MAX_PICS_BUFFER).forEach { chunk ->
+                Timber.d("onLicenseList: Queueing ${chunk.size} package(s) for PICS")
+                packagePicsChannel.send(chunk)
             }
         }
+    }
+
+    private suspend fun replaceLicenseSnapshot(
+        callbackLicenses: List<License>,
+        accountId: Int,
+    ): List<PICSRequest> = db.withTransaction {
+        // Chunk the input to reduce memory pressures for very large items.
+        cachedLicenseDao.deleteAll()
+        callbackLicenses.chunked(500).forEach { chunk ->
+            cachedLicenseDao.insertAll(
+                chunk.map { license ->
+                    CachedLicense(licenseJson = LicenseSerializer.serializeLicense(license))
+                },
+            )
+        }
+        val licensesToAdd = callbackLicenses
+            .groupBy { it.packageID }
+            .map { licensesEntry ->
+                val preferred = licensesEntry.value.firstOrNull {
+                    it.ownerAccountID == accountId
+                } ?: licensesEntry.value.first()
+                SteamLicense(
+                    packageId = licensesEntry.key,
+                    lastChangeNumber = preferred.lastChangeNumber,
+                    timeCreated = preferred.timeCreated,
+                    timeNextProcess = preferred.timeNextProcess,
+                    minuteLimit = preferred.minuteLimit,
+                    minutesUsed = preferred.minutesUsed,
+                    paymentMethod = preferred.paymentMethod,
+                    licenseFlags = licensesEntry.value
+                        .map { it.licenseFlags }
+                        .reduceOrNull { first, second ->
+                            val combined = EnumSet.copyOf(first)
+                            combined.addAll(second)
+                            combined
+                        } ?: EnumSet.noneOf(ELicenseFlags::class.java),
+                    purchaseCode = preferred.purchaseCode,
+                    licenseType = preferred.licenseType,
+                    territoryCode = preferred.territoryCode,
+                    accessToken = preferred.accessToken,
+                    ownerAccountId = licensesEntry.value.map { it.ownerAccountID },
+                    masterPackageID = preferred.masterPackageID,
+                )
+            }
+
+        if (licensesToAdd.isNotEmpty()) {
+            Timber.i("Adding ${licensesToAdd.size} licenses")
+            licensesToAdd.chunked(500).forEach { chunk ->
+                licenseDao.insertAll(chunk)
+            }
+        }
+
+        val licensesToRemove = licenseDao.findStaleLicences(
+            packageIds = callbackLicenses.map { it.packageID },
+        )
+        if (licensesToRemove.isNotEmpty()) {
+            Timber.i("Removing ${licensesToRemove.size} (stale) licenses")
+            licenseDao.deleteStaleLicenses(
+                licensesToRemove.map { it.packageId },
+            )
+        }
+
+        licenseDao.getAllLicenses()
+            .map { PICSRequest(it.packageId, it.accessToken) }
     }
 
     override fun onChanged(qrAuthSession: QrAuthSession?) {

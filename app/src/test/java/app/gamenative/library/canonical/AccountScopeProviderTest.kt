@@ -89,6 +89,20 @@ class AccountScopeProviderTest {
     }
 
     @Test
+    fun synchronousSteamIdentityChangesAreImmediatelyVisible() = runTest {
+        val steamId = 123456789L
+
+        PrefManager.setSteamAccountIdentitySynchronously(
+            accountId = 42,
+            steamId64 = steamId,
+        )
+        assertEquals(expectedScope(GameSource.STEAM, steamId.toString()), provider.current(GameSource.STEAM)?.value)
+
+        PrefManager.clearSteamSessionPreferencesSynchronously()
+        assertNull(provider.current(GameSource.STEAM))
+    }
+
+    @Test
     fun malformedOrMissingCredentialFilesHaveNoAccountScope() = runTest {
         assertNull(provider.current(GameSource.GOG))
         assertNull(provider.current(GameSource.EPIC))

@@ -95,7 +95,11 @@ class OwnedCopySourceAdapterTest {
         coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns apps
         coEvery { dao.findOwnedApp(3, any(), any()) } returns apps[1]
         every { dao._observeOwnedAppCount(any(), any()) } returns flowOf(2, 3)
-        val adapter = SteamOwnedCopySourceAdapter(dao, scopes(GameSource.STEAM))
+        val adapter = SteamOwnedCopySourceAdapter(
+            dao,
+            scopes(GameSource.STEAM),
+            steamReadyLifecycle(),
+        )
 
         val batch = adapter.snapshot()
 
@@ -119,13 +123,41 @@ class OwnedCopySourceAdapterTest {
     fun steamResolutionRejectsRowsWithoutACurrentOwnedLicense() = runTest {
         val dao = mockk<SteamAppDao>()
         coEvery { dao.findOwnedApp(3, any(), any()) } returns null
-        val adapter = SteamOwnedCopySourceAdapter(dao, scopes(GameSource.STEAM))
+        val adapter = SteamOwnedCopySourceAdapter(
+            dao,
+            scopes(GameSource.STEAM),
+            steamReadyLifecycle(),
+        )
 
         val resolved = adapter.resolve(OwnedCopyKey(scope, GameSource.STEAM, "3"))
 
         assertNull(resolved)
         coVerify(exactly = 1) { dao.findOwnedApp(3, any(), any()) }
         coVerify(exactly = 0) { dao.findApp(any()) }
+    }
+
+    @Test
+    fun steamRejectsPriorLicenseRowsUntilCurrentGenerationIsReady() = runTest {
+        val dao = mockk<SteamAppDao>()
+        val lifecycleState = InMemoryAccountLifecycleState().apply {
+            markReady(GameSource.STEAM, 0L)
+            advanceGeneration(GameSource.STEAM)
+        }
+        val adapter = SteamOwnedCopySourceAdapter(
+            dao,
+            scopes(GameSource.STEAM),
+            lifecycleState,
+        )
+
+        val batch = adapter.snapshot()
+        val resolved = adapter.resolve(OwnedCopyKey(scope, GameSource.STEAM, "3"))
+
+        assertEquals(SnapshotCompleteness.UNAVAILABLE, batch.completeness)
+        assertEquals(SnapshotReason.PRESENCE_LEDGER_NOT_READY, batch.reason)
+        assertTrue(batch.copies.isEmpty())
+        assertNull(resolved)
+        coVerify(exactly = 0) { dao._getAllOwnedAppsPaged(any(), any()) }
+        coVerify(exactly = 0) { dao.findOwnedApp(any(), any(), any()) }
     }
 
     @Test
@@ -345,7 +377,11 @@ class OwnedCopySourceAdapterTest {
         coEvery { epicDao.getAllAsList() } throws SensitiveDaoException()
         coEvery { amazonDao.getAllAsList() } throws SensitiveDaoException()
         val batches = listOf(
-            SteamOwnedCopySourceAdapter(steamDao, scopes(GameSource.STEAM)).snapshot(),
+            SteamOwnedCopySourceAdapter(
+                steamDao,
+                scopes(GameSource.STEAM),
+                steamReadyLifecycle(),
+            ).snapshot(),
             GogOwnedCopySourceAdapter(
                 gogDao,
                 scopes(GameSource.GOG),
@@ -468,7 +504,11 @@ class OwnedCopySourceAdapterTest {
         coEvery { amazonDao.getAllAsList() } returns listOf(AmazonGame(productId = "", title = "Invalid"))
 
         val batches = listOf(
-            SteamOwnedCopySourceAdapter(steamDao, scopes(GameSource.STEAM)).snapshot(),
+            SteamOwnedCopySourceAdapter(
+                steamDao,
+                scopes(GameSource.STEAM),
+                steamReadyLifecycle(),
+            ).snapshot(),
             GogOwnedCopySourceAdapter(
                 gogDao,
                 scopes(GameSource.GOG),
@@ -635,6 +675,11 @@ class OwnedCopySourceAdapterTest {
 
         assertEquals(Unit, awaiting.await())
     }
+
+    private fun steamReadyLifecycle(): InMemoryAccountLifecycleState =
+        InMemoryAccountLifecycleState().apply {
+            markReady(GameSource.STEAM, 0L)
+        }
 
     private fun completedLedger(source: GameSource, vararg stableSourceIds: String): OwnedCopyLedgerDao {
         val dao = mockk<OwnedCopyLedgerDao>()
