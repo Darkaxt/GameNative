@@ -114,4 +114,6 @@ data class AmazonCredentials(
     val deviceSerial: String,
     val clientId: String,
     val expiresAt: Long = 0,
+    /** Random local profile identity. It is never derived from Amazon credentials. */
+    val profileScopeId: String,
 )

@@ -5,13 +5,11 @@ import app.gamenative.data.GOGCredentials
 import app.gamenative.utils.Net
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
 import timber.log.Timber
 import java.io.File
+import java.io.IOException
 
 /**
  * Manages GOG authentication and account operations.
@@ -24,6 +22,8 @@ import java.io.File
 object GOGAuthManager {
 
     private val httpClient = Net.http
+    private val credentialLifecycleLock = Any()
+    private var credentialGeneration = 0L
 
     // Internal for testing - allows tests to override token URL
     @JvmField
@@ -38,11 +38,30 @@ object GOGAuthManager {
         return authFile.exists()
     }
 
+    /** Reads only the locally stored Galaxy user ID. This never validates or refreshes credentials. */
+    internal fun getStoredUserId(context: Context): String? = synchronized(credentialLifecycleLock) {
+        val file = File(getAuthConfigPath(context))
+        if (!file.isFile) return@synchronized null
+
+        runCatching {
+            JSONObject(file.readText())
+                .optJSONObject(GOGConstants.GOG_CLIENT_ID)
+                ?.optString("user_id")
+                ?.takeIf(String::isNotBlank)
+        }.onFailure { error ->
+            Timber.tag("GOG").w(
+                "Unable to read local account identity: %s",
+                error.javaClass.simpleName,
+            )
+        }.getOrNull()
+    }
+
     /**
      * Authenticate with GOG using authorization code
      * Users must visit GOG login page, authenticate, and copy the authorization code
      */
     suspend fun authenticateWithCode(context: Context, authorizationCode: String): Result<GOGCredentials> {
+        val operationGeneration = captureCredentialGeneration()
         return try {
             Timber.tag("GOG").i("Starting GOG authentication with authorization code...")
 
@@ -131,10 +150,19 @@ object GOGAuthManager {
                 })
             }
 
-            withContext(Dispatchers.IO) {
-                authFile.writeText(authData.toString(2))
+            val credentialsSaved = withContext(Dispatchers.IO) {
+                writeCredentialFileIfCurrent(
+                    file = authFile,
+                    expectedGeneration = operationGeneration,
+                    contents = authData.toString(2),
+                )
             }
-            Timber.tag("GOG").i("GOG authentication successful for user: $userId")
+            if (!credentialsSaved) {
+                return Result.failure(
+                    IOException("GOG credential lifecycle changed during authentication"),
+                )
+            }
+            Timber.tag("GOG").i("GOG authentication successful")
 
             Result.success(credentials)
         } catch (e: Exception) {
@@ -214,6 +242,7 @@ object GOGAuthManager {
         clientId: String,
         clientSecret: String
     ): Result<GOGCredentials> {
+        val operationGeneration = captureCredentialGeneration()
         return try {
             val authFile = File(getAuthConfigPath(context))
             if (!authFile.exists()) {
@@ -281,18 +310,22 @@ object GOGAuthManager {
                 }
 
                 val responseBody = response.body?.string() ?: return Result.failure(Exception("Empty response"))
-                val json = JSONObject(responseBody)
-
-                // Store the new game-specific credentials
-                json.put("loginTime", System.currentTimeMillis() / 1000.0)
-                authJson.put(clientId, json)
-
-                // Write updated auth file
-                withContext(Dispatchers.IO) { authFile.writeText(authJson.toString(2)) }
-
-                Timber.tag("GOG").i("Successfully obtained game-specific token for clientId: $clientId")
-                json
+                JSONObject(responseBody)
             }
+
+            tokenJson.put("loginTime", System.currentTimeMillis() / 1000.0)
+            val credentialsSaved = withContext(Dispatchers.IO) {
+                updateCredentialFileIfCurrent(authFile, operationGeneration) { latestAuthJson ->
+                    latestAuthJson.put(clientId, tokenJson)
+                }
+            }
+            if (!credentialsSaved) {
+                return Result.failure(
+                    IOException("GOG credential lifecycle changed during game-token exchange"),
+                )
+            }
+
+            Timber.tag("GOG").i("Successfully obtained game-specific token")
 
             return Result.success(GOGCredentials(
                 accessToken = tokenJson.getString("access_token"),
@@ -337,8 +370,9 @@ object GOGAuthManager {
     /**
      * Clear stored credentials (logout)
      */
-    fun clearStoredCredentials(context: Context): Boolean {
-        return try {
+    fun clearStoredCredentials(context: Context): Boolean = synchronized(credentialLifecycleLock) {
+        credentialGeneration++
+        try {
             val authFile = File(getAuthConfigPath(context))
             if (authFile.exists()) {
                 authFile.delete()
@@ -355,6 +389,7 @@ object GOGAuthManager {
      * Refresh credentials using refresh token
      */
     private suspend fun refreshCredentials(context: Context, clientId: String, clientSecret: String): Result<Boolean> {
+        val operationGeneration = captureCredentialGeneration()
         return try {
             val authFile = File(getAuthConfigPath(context))
             if (!authFile.exists()) {
@@ -404,17 +439,52 @@ object GOGAuthManager {
                 JSONObject(responseBody)
             }
 
-            // Update credentials in auth file
             tokenJson.put("loginTime", System.currentTimeMillis() / 1000.0)
-            authJson.put(clientId, tokenJson)
-            withContext(Dispatchers.IO) { authFile.writeText(authJson.toString(2)) }
+            val credentialsSaved = withContext(Dispatchers.IO) {
+                updateCredentialFileIfCurrent(authFile, operationGeneration) { latestAuthJson ->
+                    latestAuthJson.put(clientId, tokenJson)
+                }
+            }
+            if (!credentialsSaved) {
+                return Result.failure(
+                    IOException("GOG credential lifecycle changed during refresh"),
+                )
+            }
 
-            Timber.tag("GOG").i("Successfully refreshed credentials for clientId: $clientId")
+            Timber.tag("GOG").i("Successfully refreshed credentials")
             Result.success(true)
         } catch (e: Exception) {
             Timber.tag("GOG").e(e, "Failed to refresh credentials")
             Result.failure(e)
         }
+    }
+
+    private fun captureCredentialGeneration(): Long = synchronized(credentialLifecycleLock) {
+        credentialGeneration
+    }
+
+    private fun writeCredentialFileIfCurrent(
+        file: File,
+        expectedGeneration: Long,
+        contents: String,
+    ): Boolean = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration) return@synchronized false
+        file.writeText(contents)
+        true
+    }
+
+    private fun updateCredentialFileIfCurrent(
+        file: File,
+        expectedGeneration: Long,
+        update: (JSONObject) -> Unit,
+    ): Boolean = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration || !file.isFile) {
+            return@synchronized false
+        }
+        val latestAuthJson = JSONObject(file.readText())
+        update(latestAuthJson)
+        file.writeText(latestAuthJson.toString(2))
+        true
     }
 
     /**

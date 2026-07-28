@@ -144,7 +144,10 @@ class GOGService : Service() {
                     // Clear stored credentials
                     val credentialsCleared = clearStoredCredentials(context)
                     if (!credentialsCleared) {
-                        Timber.w("[GOGService] Failed to clear credentials during logout")
+                        Timber.e("[GOGService] Failed to clear credentials during logout")
+                        return@withContext Result.failure(
+                            IllegalStateException("Unable to delete GOG credentials"),
+                        )
                     }
 
                     // Clear all non-installed GOG games from database

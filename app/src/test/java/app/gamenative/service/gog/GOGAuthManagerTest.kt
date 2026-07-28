@@ -1,11 +1,16 @@
 package app.gamenative.service.gog
 
 import android.content.Context
+import android.content.ContextWrapper
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
-import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
@@ -13,13 +18,12 @@ import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.mockito.Mock
-import org.mockito.Mockito.`when`
-import org.mockito.MockitoAnnotations
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import timber.log.Timber
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -28,11 +32,8 @@ import java.io.File
     application = android.app.Application::class
 )
 class GOGAuthManagerTest {
-    @Mock
     private lateinit var context: Context
-
     private lateinit var mockWebServer: MockWebServer
-    private lateinit var closeable: AutoCloseable
     private lateinit var tempDir: File
 
     companion object {
@@ -46,17 +47,17 @@ class GOGAuthManagerTest {
 
     @Before
     fun setUp() {
-        closeable = MockitoAnnotations.openMocks(this)
         mockWebServer = MockWebServer()
         mockWebServer.start()
-        tempDir = createTempDir("gogtest")
-        `when`(context.filesDir).thenReturn(tempDir)
+        tempDir = kotlin.io.path.createTempDirectory("gogtest").toFile()
+        context = object : ContextWrapper(ApplicationProvider.getApplicationContext()) {
+            override fun getFilesDir(): File = tempDir
+        }
     }
 
     @After
     fun tearDown() {
         mockWebServer.shutdown()
-        closeable.close()
         tempDir.deleteRecursively()
     }
 
@@ -92,6 +93,25 @@ class GOGAuthManagerTest {
         val request = mockWebServer.takeRequest()
         assertTrue(request.path?.startsWith("/token?") == true)
         assertTrue(request.path?.contains("authorization_code") == true)
+    }
+
+    @Test
+    fun authenticationFinishingAfterClearCannotRecreateCredentials() = runTest {
+        val controlledResponse = controlledTokenResponse("authenticated-token")
+        mockWebServer.dispatcher = controlledResponse
+
+        val authentication = async(Dispatchers.IO) {
+            withMockedHttpClient(mockWebServer.url("/token").toString()) {
+                GOGAuthManager.authenticateWithCode(context, "good_code")
+            }
+        }
+        assertTrue(controlledResponse.requestStarted.await(10, TimeUnit.SECONDS))
+
+        assertTrue(GOGAuthManager.clearStoredCredentials(context))
+        controlledResponse.releaseResponse.countDown()
+
+        assertTrue(authentication.await().isFailure)
+        assertFalse(File(tempDir, "gog_auth.json").exists())
     }
 
     @Test
@@ -139,6 +159,51 @@ class GOGAuthManagerTest {
     }
 
     @Test
+    fun storedUserIdReadsOnlyLocalGalaxyIdentityWithoutRefreshing() {
+        val authFile = File(tempDir, "gog_auth.json")
+        val authJson = JSONObject().apply {
+            put(GOGConstants.GOG_CLIENT_ID, JSONObject().apply {
+                put("access_token", "local-only-access-token")
+                put("refresh_token", "local-only-refresh-token")
+                put("user_id", "stored-user-id")
+                put("expires_in", 1)
+                put("loginTime", 0)
+            })
+        }.toString()
+        authFile.writeText(authJson)
+
+        assertEquals("stored-user-id", GOGAuthManager.getStoredUserId(context))
+        assertEquals(0, mockWebServer.requestCount)
+        assertEquals(authJson, authFile.readText())
+    }
+
+    @Test
+    fun storedUserIdReturnsNullForMissingMalformedOrBlankFiles() {
+        val authFile = File(tempDir, "gog_auth.json")
+        assertNull(GOGAuthManager.getStoredUserId(context))
+
+        authFile.writeText("not-json")
+        assertNull(GOGAuthManager.getStoredUserId(context))
+
+        authFile.writeText(
+            JSONObject()
+                .put(GOGConstants.GOG_CLIENT_ID, JSONObject().put("user_id", ""))
+                .toString(),
+        )
+        assertNull(GOGAuthManager.getStoredUserId(context))
+        assertEquals(0, mockWebServer.requestCount)
+    }
+
+    @Test
+    fun clearStoredCredentialsReturnsFalseWhenCredentialFileCannotBeDeleted() {
+        val authPath = File(tempDir, "gog_auth.json").also { it.mkdirs() }
+        File(authPath, "blocking-child").writeText("x")
+
+        assertFalse(GOGAuthManager.clearStoredCredentials(context))
+        assertTrue(authPath.exists())
+    }
+
+    @Test
     fun testGetStoredCredentials_expired_refreshSuccess() = runTest {
         // Arrange
         val authJson = JSONObject().apply {
@@ -179,6 +244,49 @@ class GOGAuthManagerTest {
         // Verify refresh request
         val request = mockWebServer.takeRequest()
         assertTrue(request.path?.contains("refresh_token") == true)
+    }
+
+    @Test
+    fun refreshFinishingAfterClearCannotRecreateCredentials() = runTest {
+        writeGalaxyCredentials(loginTime = 0.0, expiresIn = 1)
+        val controlledResponse = controlledTokenResponse("refreshed-token")
+        mockWebServer.dispatcher = controlledResponse
+
+        val refresh = async(Dispatchers.IO) {
+            withMockedHttpClient(mockWebServer.url("/token").toString()) {
+                GOGAuthManager.getStoredCredentials(context)
+            }
+        }
+        assertTrue(controlledResponse.requestStarted.await(10, TimeUnit.SECONDS))
+
+        assertTrue(GOGAuthManager.clearStoredCredentials(context))
+        controlledResponse.releaseResponse.countDown()
+
+        assertTrue(refresh.await().isFailure)
+        assertFalse(File(tempDir, "gog_auth.json").exists())
+    }
+
+    @Test
+    fun gameTokenFinishingAfterClearCannotRecreateCredentials() = runTest {
+        writeGalaxyCredentials(
+            loginTime = System.currentTimeMillis() / 1000.0,
+            expiresIn = 3600,
+        )
+        val controlledResponse = controlledTokenResponse("game-token")
+        mockWebServer.dispatcher = controlledResponse
+
+        val gameToken = async(Dispatchers.IO) {
+            withMockedHttpClient(mockWebServer.url("/token").toString()) {
+                GOGAuthManager.getGameCredentials(context, "game-client", "game-secret")
+            }
+        }
+        assertTrue(controlledResponse.requestStarted.await(10, TimeUnit.SECONDS))
+
+        assertTrue(GOGAuthManager.clearStoredCredentials(context))
+        controlledResponse.releaseResponse.countDown()
+
+        assertTrue(gameToken.await().isFailure)
+        assertFalse(File(tempDir, "gog_auth.json").exists())
     }
 
     @Test
@@ -237,6 +345,50 @@ class GOGAuthManagerTest {
     }
 
     // --- Helpers ---
+    private fun tokenResponse(accessToken: String): String = JSONObject().apply {
+        put("access_token", accessToken)
+        put("refresh_token", "refresh123")
+        put("user_id", "user123")
+        put("expires_in", 3600)
+    }.toString()
+
+    private fun controlledTokenResponse(accessToken: String): ControlledResponse = ControlledResponse(
+        MockResponse()
+            .setResponseCode(200)
+            .setBody(tokenResponse(accessToken))
+            .addHeader("Content-Type", "application/json"),
+    )
+
+    private fun writeGalaxyCredentials(loginTime: Double, expiresIn: Int) {
+        File(tempDir, "gog_auth.json").writeText(
+            JSONObject().apply {
+                put(GOGConstants.GOG_CLIENT_ID, JSONObject().apply {
+                    put("access_token", "old-token")
+                    put("refresh_token", "refresh123")
+                    put("user_id", "user123")
+                    put("expires_in", expiresIn)
+                    put("loginTime", loginTime)
+                })
+            }.toString(),
+        )
+    }
+
+    private class ControlledResponse(
+        private val response: MockResponse,
+    ) : Dispatcher() {
+        val requestStarted = CountDownLatch(1)
+        val releaseResponse = CountDownLatch(1)
+
+        override fun dispatch(request: RecordedRequest): MockResponse {
+            requestStarted.countDown()
+            return if (releaseResponse.await(10, TimeUnit.SECONDS)) {
+                response
+            } else {
+                MockResponse().setResponseCode(500)
+            }
+        }
+    }
+
     private suspend fun <T> withMockedHttpClient(testTokenUrl: String, block: suspend () -> T): T {
         // Override the token URL to point to MockWebServer
         val originalTokenUrl = GOGAuthManager.tokenUrl

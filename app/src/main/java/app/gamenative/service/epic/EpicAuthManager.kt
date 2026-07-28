@@ -50,29 +50,45 @@ object EpicAuthManager {
         }.onFailure { Timber.tag("Epic").w(it, "Failed clearing ownership token cache") }
     }
 
-
     fun hasStoredCredentials(context: Context): Boolean {
         val credentialsFile = File(getCredentialsFilePath(context))
         return credentialsFile.exists()
     }
 
-        /**
-         * Clear stored credentials (logout)
-         */
-        fun clearStoredCredentials(context: Context): Boolean {
-            return try {
-                clearOwnershipTokenCache(context)
-                val authFile = File(getCredentialsFilePath(context))
-                if (authFile.exists()) {
-                    authFile.delete()
-                } else {
-                    true
-                }
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to clear Epic credentials")
-                false
+    /** Reads only the locally stored account ID. This never validates or refreshes credentials. */
+    internal fun getStoredAccountId(context: Context): String? {
+        val file = File(context.filesDir, "epic/credentials.json")
+        if (!file.isFile) return null
+
+        return runCatching {
+            JSONObject(file.readText())
+                .optString("account_id")
+                .takeIf(String::isNotBlank)
+        }.onFailure { error ->
+            Timber.tag("Epic").w(
+                "Unable to read local account identity: %s",
+                error.javaClass.simpleName,
+            )
+        }.getOrNull()
+    }
+
+    /**
+     * Clear stored credentials (logout)
+     */
+    fun clearStoredCredentials(context: Context): Boolean {
+        return try {
+            clearOwnershipTokenCache(context)
+            val authFile = File(getCredentialsFilePath(context))
+            if (authFile.exists()) {
+                authFile.delete()
+            } else {
+                true
             }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to clear Epic credentials")
+            false
         }
+    }
 
     /**
      * Extract authorization code from various input formats:

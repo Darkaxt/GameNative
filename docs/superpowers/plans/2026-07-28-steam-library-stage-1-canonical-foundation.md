@@ -107,9 +107,11 @@ Out of scope until later stages:
 - `app/src/main/java/app/gamenative/db/dao/EpicGameDao.kt` — namespace/catalog source lookup.
 - `app/src/main/java/app/gamenative/db/dao/AmazonGameDao.kt` — product source lookup.
 - `app/src/main/java/app/gamenative/service/gog/GOGAuthManager.kt` — local-only stored user-ID reader.
+- `app/src/main/java/app/gamenative/service/gog/GOGService.kt` — fail logout rather than retaining credentials/account identity after local deletion failure.
 - `app/src/main/java/app/gamenative/service/gog/GOGManager.kt` — preserve parsed DLC app type.
 - `app/src/main/java/app/gamenative/service/epic/EpicAuthManager.kt` — local-only stored account-ID reader.
 - `app/src/main/java/app/gamenative/service/amazon/AmazonAuthManager.kt` — create/migrate/preserve/delete random profile scope.
+- `app/src/main/java/app/gamenative/service/amazon/AmazonService.kt` — propagate mandatory local credential cleanup failures during logout.
 - `app/src/main/java/app/gamenative/service/SteamService.kt` — reparse owned PICS rows when the dedicated parser revision changes.
 - `app/src/main/java/app/gamenative/utils/KeyValueUtils.kt` — PICS facet parser and revision.
 - `app/src/main/java/app/gamenative/utils/CustomGameScanner.kt` — pure canonical snapshot and invalidation signal without invoking legacy scan side effects.
@@ -765,8 +767,10 @@ git push fork HEAD
 - Create: `app/src/main/java/app/gamenative/library/canonical/AccountScopeProvider.kt`
 - Modify: `app/src/main/java/app/gamenative/data/AmazonGame.kt`
 - Modify: `app/src/main/java/app/gamenative/service/gog/GOGAuthManager.kt`
+- Modify: `app/src/main/java/app/gamenative/service/gog/GOGService.kt`
 - Modify: `app/src/main/java/app/gamenative/service/epic/EpicAuthManager.kt`
 - Modify: `app/src/main/java/app/gamenative/service/amazon/AmazonAuthManager.kt`
+- Modify: `app/src/main/java/app/gamenative/service/amazon/AmazonService.kt`
 - Test: `app/src/test/java/app/gamenative/library/canonical/AccountScopeProviderTest.kt`
 - Modify: `app/src/test/java/app/gamenative/service/gog/GOGAuthManagerTest.kt`
 - Create: `app/src/test/java/app/gamenative/service/epic/EpicAuthManagerTest.kt`
@@ -785,10 +789,14 @@ Cover these assertions:
 - malformed/missing credential files return null, not a raw exception or token;
 - existing Amazon JSON without `profile_scope_id` gains one UUID once;
 - repeated Amazon reads and token refresh preserve it;
-- logout deletes it with the credentials;
-- a later authentication creates a different profile scope.
+- logout deletes it with the credentials and reports failure if local deletion cannot complete;
+- GOG local deletion failure is likewise not reported as successful logout;
+- a later authentication creates a different profile scope;
+- Amazon credential replacement preserves the prior valid file when an injected write fails before commit;
+- an Amazon save captured before credential clearing is rejected and cannot recreate the file;
+- delayed offline GOG authentication, Galaxy refresh, and game-token responses cannot recreate credentials after clearing, and each stale operation returns failure.
 
-The Amazon tests may call internal JSON load/save helpers made `internal` for testing. They must not make a network request.
+The Amazon tests may call internal JSON load/save and generation-gated atomic replacement helpers made `internal` for testing. They must not make a network request. GOG lifecycle races use `MockWebServer` with latch-controlled responses so logout/clear deterministically wins before the response is released; do not use sleeps or live endpoints.
 
 - [ ] **Step 2: Confirm tests fail**
 
@@ -806,7 +814,7 @@ Expected: failures for missing account-scope and local-reader APIs.
 Add synchronous local-file helpers that callers invoke on `Dispatchers.IO`:
 
 ```kotlin
-fun getStoredUserId(context: Context): String? = runCatching {
+internal fun getStoredUserId(context: Context): String? = runCatching {
     val root = JSONObject(File(getAuthConfigPath(context)).readText())
     root.optJSONObject(GOGConstants.GOG_CLIENT_ID)
         ?.optString("user_id")
@@ -815,14 +823,14 @@ fun getStoredUserId(context: Context): String? = runCatching {
 ```
 
 ```kotlin
-fun getStoredAccountId(context: Context): String? = runCatching {
+internal fun getStoredAccountId(context: Context): String? = runCatching {
     JSONObject(File(getCredentialsFilePath(context)).readText())
         .optString("account_id")
         .takeIf(String::isNotBlank)
 }.getOrNull()
 ```
 
-These helpers must not call `getStoredCredentials`, refresh a token, log the value, or return the surrounding credential object.
+These internal helpers must not call `getStoredCredentials`, refresh a token, log the value, or return the surrounding credential object. Missing files return null normally; malformed or unreadable files also return null as the contract requires, but may log only a fixed message and exception class for local debugging.
 
 - [ ] **Step 4: Add Amazon's random local profile scope**
 
@@ -831,22 +839,26 @@ Add `profileScopeId: String` to `AmazonCredentials`. On successful authenticatio
 Implement an IO-only synchronized migration reader:
 
 ```kotlin
-@Synchronized
-fun getOrCreateProfileScopeId(context: Context): String? {
-    val file = File(getCredentialsFilePath(context))
-    if (!file.exists()) return null
-    return runCatching {
-        val json = JSONObject(file.readText())
-        val existing = json.optString("profile_scope_id").takeIf(String::isNotBlank)
-        existing ?: UUID.randomUUID().toString().also {
-            json.put("profile_scope_id", it)
-            file.writeText(json.toString())
-        }
-    }.getOrNull()
-}
+internal fun getOrCreateProfileScopeId(context: Context): String? =
+    synchronized(credentialLifecycleLock) {
+        val file = File(getCredentialsFilePath(context))
+        if (!file.exists()) return@synchronized null
+        runCatching {
+            val json = JSONObject(file.readText())
+            val existing = json.optString("profile_scope_id").takeIf(String::isNotBlank)
+            existing ?: UUID.randomUUID().toString().also {
+                json.put("profile_scope_id", it)
+                replaceFileAtomically(file) { output ->
+                    output.write(json.toString().toByteArray(Charsets.UTF_8))
+                }
+            }
+        }.getOrNull()
+    }
 ```
 
-`loadCredentials` lazily uses the same method for an old file. `clearStoredCredentials` and both logout paths continue deleting the whole file. Do not derive scope from access token, refresh token, client ID, device serial, product ID, or entitlement ID.
+`loadCredentials` lazily uses the same method for an old file. Require all existing Amazon credential fields to be present and nonblank before attaching a profile identity. Replace the direct `writeText` in both legacy migration and normal saves with one rollback-safe helper that writes and syncs a same-directory temporary file, then commits with `Files.move(ATOMIC_MOVE, REPLACE_EXISTING)`; a failed temporary write or move must preserve the exact prior credential bytes and remove the staging file. `clearStoredCredentials` and logout delete the whole file; a local deletion failure must propagate through `AmazonService.logout` rather than claiming success. Remote Amazon deregistration remains best-effort and runs only after local invalidation/deletion, without holding a credential lock.
+
+Amazon and GOG each own a small process-local credential generation guarded by a provider-local lock. Authentication/refresh/game-token operations capture it before network suspension; every resulting credential-file write rechecks the captured generation and writes in that same locked section. Clear/logout increments the generation and attempts deletion in one locked section even when deletion fails. A rejected stale save returns operation failure rather than success. Never hold the lock across suspension or network I/O. GOG refresh/game-token commits reload the latest JSON while locked before merging their response, so concurrent current-generation writes are not lost. Apply the same no-false-success rule to GOG logout now that its local file supplies canonical account identity. Do not derive scope from access token, refresh token, client ID, device serial, product ID, or entitlement ID.
 
 - [ ] **Step 5: Implement the centralized account-scope provider**
 
@@ -889,7 +901,7 @@ Keep `sha256` internal and test it through `current`. Never expose `rawKey` from
   --tests "app.gamenative.service.amazon.AmazonAuthManagerTest"
 ```
 
-Expected: all focused tests pass and no test contacts a live endpoint.
+Expected: all focused tests pass, Amazon replacement rollback and stale-save rejection are deterministic, latch-controlled GOG logout races reject every delayed credential write, and no test contacts a live endpoint.
 
 - [ ] **Step 7: Commit and push**
 
@@ -897,8 +909,10 @@ Expected: all focused tests pass and no test contacts a live endpoint.
 git add app/src/main/java/app/gamenative/data/AmazonGame.kt \
   app/src/main/java/app/gamenative/library/canonical/AccountScopeProvider.kt \
   app/src/main/java/app/gamenative/service/gog/GOGAuthManager.kt \
+  app/src/main/java/app/gamenative/service/gog/GOGService.kt \
   app/src/main/java/app/gamenative/service/epic/EpicAuthManager.kt \
   app/src/main/java/app/gamenative/service/amazon/AmazonAuthManager.kt \
+  app/src/main/java/app/gamenative/service/amazon/AmazonService.kt \
   app/src/test/java/app/gamenative/library/canonical/AccountScopeProviderTest.kt \
   app/src/test/java/app/gamenative/service/gog/GOGAuthManagerTest.kt \
   app/src/test/java/app/gamenative/service/epic/EpicAuthManagerTest.kt \

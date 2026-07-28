@@ -2,19 +2,26 @@ package app.gamenative.service.amazon
 
 import android.content.Context
 import app.gamenative.data.AmazonCredentials
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import timber.log.Timber
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.util.UUID
 
 /** Manages Amazon authentication and credential lifecycle. */
 object AmazonAuthManager {
 
+    private val credentialLifecycleLock = Any()
+    private var credentialGeneration = 0L
+
     /** In-flight PKCE state between start and code exchange. */
-    @Volatile private var pendingCodeVerifier: String? = null
-    @Volatile private var pendingDeviceSerial: String? = null
-    @Volatile private var pendingClientId: String? = null
+    private var pendingCodeVerifier: String? = null
+    private var pendingDeviceSerial: String? = null
+    private var pendingClientId: String? = null
 
     // ── Paths ───────────────────────────────────────────────────────────────
 
@@ -39,16 +46,15 @@ object AmazonAuthManager {
         val verifier = AmazonPKCEGenerator.generateCodeVerifier()
         val challenge = AmazonPKCEGenerator.generateCodeChallenge(verifier)
 
-        pendingCodeVerifier = verifier
-        pendingDeviceSerial = serial
-        pendingClientId = clientId
+        synchronized(credentialLifecycleLock) {
+            pendingCodeVerifier = verifier
+            pendingDeviceSerial = serial
+            pendingClientId = clientId
+        }
 
         val authUrl = AmazonConstants.buildAuthUrl(clientId, challenge)
-        
-        Timber.d("[Amazon] Auth flow started (serial=${serial.take(8)}…)")
-        Timber.d("[Amazon] Client ID: device:$clientId")
-        Timber.d("[Amazon] Auth URL scope: device_auth_access")
-        Timber.d("[Amazon] Full auth URL: $authUrl")
+
+        Timber.d("[Amazon] Auth flow started")
 
         return authUrl
     }
@@ -60,9 +66,17 @@ object AmazonAuthManager {
         context: Context,
         authorizationCode: String,
     ): Result<AmazonCredentials> {
-        val verifier = pendingCodeVerifier
-        val serial = pendingDeviceSerial
-        val clientId = pendingClientId
+        val pending = synchronized(credentialLifecycleLock) {
+            PendingAuthentication(
+                generation = credentialGeneration,
+                codeVerifier = pendingCodeVerifier,
+                deviceSerial = pendingDeviceSerial,
+                clientId = pendingClientId,
+            )
+        }
+        val verifier = pending.codeVerifier
+        val serial = pending.deviceSerial
+        val clientId = pending.clientId
 
         if (verifier == null || serial == null || clientId == null) {
             return Result.failure(Exception("No pending auth flow – call startAuthFlow() first"))
@@ -93,12 +107,15 @@ object AmazonAuthManager {
                 deviceSerial = serial,
                 clientId = clientId,
                 expiresAt = expiresAt,
+                profileScopeId = UUID.randomUUID().toString(),
             )
 
-            saveCredentials(context, credentials)
+            if (!saveCredentialsIfCurrent(context, credentials, pending.generation)) {
+                return Result.failure(IOException("Amazon credential lifecycle changed during authentication"))
+            }
 
             // Clear in-flight state
-            clearPendingState()
+            clearPendingStateIfCurrent(pending.generation)
 
             Timber.i("[Amazon] Authentication successful")
             Result.success(credentials)
@@ -113,6 +130,7 @@ object AmazonAuthManager {
     /** Return stored credentials, refreshing access token when needed. */
     suspend fun getStoredCredentials(context: Context): Result<AmazonCredentials> {
         return try {
+            val operationGeneration = captureCredentialGeneration()
             val credentials = loadCredentials(context)
                 ?: return Result.failure(Exception("No stored credentials found"))
 
@@ -139,7 +157,9 @@ object AmazonAuthManager {
                     expiresAt = System.currentTimeMillis() + (auth.expiresIn * 1000L),
                 )
 
-                saveCredentials(context, refreshed)
+                if (!saveCredentialsIfCurrent(context, refreshed, operationGeneration)) {
+                    return Result.failure(IOException("Amazon credential lifecycle changed during refresh"))
+                }
                 Timber.i("[Amazon] Token refreshed successfully")
                 return Result.success(refreshed)
             }
@@ -153,12 +173,12 @@ object AmazonAuthManager {
 
     // ── Logout ──────────────────────────────────────────────────────────────
 
-    /** Logout by best-effort deregister + local credential cleanup. */
+    /** Logout by best-effort deregister + mandatory local credential cleanup. */
     suspend fun logout(context: Context): Result<Unit> {
-        return try {
-            val credentials = loadCredentials(context)
+        val credentials = loadCredentials(context)
+        val credentialsCleared = clearStoredCredentials(context)
 
-            // Best-effort remote deregister
+        try {
             if (credentials != null) {
                 AmazonAuthClient.deregisterDevice(
                     accessToken = credentials.accessToken,
@@ -166,69 +186,178 @@ object AmazonAuthManager {
                     clientId = credentials.clientId,
                 )
             }
+        } catch (error: Exception) {
+            Timber.e(error, "[Amazon] Remote logout failed after clearing local credentials")
+        }
 
-            // Always clear locally
-            clearStoredCredentials(context)
-            clearPendingState()
-
+        return if (credentialsCleared) {
             Timber.i("[Amazon] Logged out successfully")
             Result.success(Unit)
-        } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Logout exception")
-            // Still clear local creds even if deregister fails
-            clearStoredCredentials(context)
-            Result.success(Unit)
+        } else {
+            Result.failure(IOException("Unable to delete Amazon credentials"))
         }
     }
 
-    fun clearStoredCredentials(context: Context): Boolean {
-        return try {
+    fun clearStoredCredentials(context: Context): Boolean = synchronized(credentialLifecycleLock) {
+        credentialGeneration++
+        clearPendingStateLocked()
+        try {
             val file = File(getCredentialsFilePath(context))
             if (file.exists()) file.delete() else true
         } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Failed to clear credentials")
+            Timber.e("[Amazon] Failed to clear credentials: ${e.javaClass.simpleName}")
             false
         }
     }
 
+    /**
+     * Returns the random local profile identity stored beside valid credentials.
+     * Legacy credential JSON is migrated once without validating or refreshing tokens.
+     */
+    internal fun getOrCreateProfileScopeId(context: Context): String? =
+        synchronized(credentialLifecycleLock) {
+            getOrCreateProfileScopeIdLocked(context)
+        }
+
+    private fun getOrCreateProfileScopeIdLocked(context: Context): String? {
+        val file = File(getCredentialsFilePath(context))
+        if (!file.exists()) return null
+
+        return runCatching {
+            val json = JSONObject(file.readText())
+            require(json.hasRequiredCredentialFields())
+
+            val existing = json.optString("profile_scope_id").takeIf(String::isNotBlank)
+            if (existing != null) {
+                require(UUID.fromString(existing).toString() == existing)
+                existing
+            } else {
+                UUID.randomUUID().toString().also { generated ->
+                    json.put("profile_scope_id", generated)
+                    replaceFileAtomically(file) { output ->
+                        output.write(json.toString().toByteArray(Charsets.UTF_8))
+                    }
+                }
+            }
+        }.onFailure { error ->
+            Timber.w(
+                "[Amazon] Unable to read or migrate profile scope: %s",
+                error.javaClass.simpleName,
+            )
+        }.getOrNull()
+    }
+
     // ── Private helpers ─────────────────────────────────────────────────────
 
-    private fun clearPendingState() {
+    private fun clearPendingStateIfCurrent(expectedGeneration: Long) {
+        synchronized(credentialLifecycleLock) {
+            if (credentialGeneration == expectedGeneration) {
+                clearPendingStateLocked()
+            }
+        }
+    }
+
+    private fun clearPendingStateLocked() {
         pendingCodeVerifier = null
         pendingDeviceSerial = null
         pendingClientId = null
     }
 
-    private fun saveCredentials(context: Context, credentials: AmazonCredentials) {
+    internal fun captureCredentialGeneration(): Long = synchronized(credentialLifecycleLock) {
+        credentialGeneration
+    }
+
+    internal fun saveCredentials(context: Context, credentials: AmazonCredentials) {
+        val expectedGeneration = captureCredentialGeneration()
+        check(saveCredentialsIfCurrent(context, credentials, expectedGeneration)) {
+            "Amazon credential lifecycle changed while saving credentials"
+        }
+    }
+
+    internal fun saveCredentialsIfCurrent(
+        context: Context,
+        credentials: AmazonCredentials,
+        expectedGeneration: Long,
+    ): Boolean = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration) return@synchronized false
+
+        require(UUID.fromString(credentials.profileScopeId).toString() == credentials.profileScopeId)
+
         val json = JSONObject().apply {
             put("access_token", credentials.accessToken)
             put("refresh_token", credentials.refreshToken)
             put("device_serial", credentials.deviceSerial)
             put("client_id", credentials.clientId)
             put("expires_at", credentials.expiresAt)
+            put("profile_scope_id", credentials.profileScopeId)
         }
 
         val file = File(getCredentialsFilePath(context))
-        file.writeText(json.toString())
-        Timber.d("[Amazon] Credentials saved to ${file.absolutePath}")
+        replaceFileAtomically(file) { output ->
+            output.write(json.toString().toByteArray(Charsets.UTF_8))
+        }
+        Timber.d("[Amazon] Credentials saved")
+        true
     }
 
-    private fun loadCredentials(context: Context): AmazonCredentials? {
-        return try {
-            val file = File(getCredentialsFilePath(context))
-            if (!file.exists()) return null
+    internal fun loadCredentials(context: Context): AmazonCredentials? =
+        synchronized(credentialLifecycleLock) {
+            val profileScopeId = getOrCreateProfileScopeIdLocked(context) ?: return@synchronized null
+            runCatching {
+                val json = JSONObject(File(getCredentialsFilePath(context)).readText())
+                AmazonCredentials(
+                    accessToken = json.getString("access_token"),
+                    refreshToken = json.getString("refresh_token"),
+                    deviceSerial = json.getString("device_serial"),
+                    clientId = json.getString("client_id"),
+                    expiresAt = json.getLong("expires_at"),
+                    profileScopeId = profileScopeId,
+                )
+            }.onFailure { error ->
+                Timber.e("[Amazon] Failed to load credentials: ${error.javaClass.simpleName}")
+            }.getOrNull()
+        }
 
-            val json = JSONObject(file.readText())
-            AmazonCredentials(
-                accessToken = json.getString("access_token"),
-                refreshToken = json.getString("refresh_token"),
-                deviceSerial = json.getString("device_serial"),
-                clientId = json.getString("client_id"),
-                expiresAt = json.getLong("expires_at"),
+    internal fun replaceFileAtomically(
+        file: File,
+        writeContents: (FileOutputStream) -> Unit,
+    ) {
+        val parent = requireNotNull(file.parentFile) { "Atomic replacement requires a parent directory" }
+        val temporaryFile = Files.createTempFile(
+            parent.toPath(),
+            "${file.name}.",
+            ".tmp",
+        ).toFile()
+
+        try {
+            FileOutputStream(temporaryFile).use { output ->
+                writeContents(output)
+                output.fd.sync()
+            }
+            Files.move(
+                temporaryFile.toPath(),
+                file.toPath(),
+                ATOMIC_MOVE,
+                REPLACE_EXISTING,
             )
-        } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Failed to load credentials")
-            null
+        } finally {
+            temporaryFile.delete()
         }
     }
+
+    private data class PendingAuthentication(
+        val generation: Long,
+        val codeVerifier: String?,
+        val deviceSerial: String?,
+        val clientId: String?,
+    )
+
+    private fun JSONObject.hasRequiredCredentialFields(): Boolean = runCatching {
+        require(getString("access_token").isNotBlank())
+        require(getString("refresh_token").isNotBlank())
+        require(getString("device_serial").isNotBlank())
+        require(getString("client_id").isNotBlank())
+        getLong("expires_at")
+        true
+    }.getOrDefault(false)
 }

@@ -144,7 +144,7 @@ class AmazonService : Service() {
                     Timber.tag("Amazon").i("Starting logout...")
 
                     // Deregister device and clear credentials
-                    AmazonAuthManager.logout(context)
+                    AmazonAuthManager.logout(context).getOrThrow()
                     Timber.tag("Amazon").i("Credentials cleared")
 
                     // Delete non-installed games from database
