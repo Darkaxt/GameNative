@@ -120,10 +120,48 @@ class GOGAuthManagerTest {
         }
         assertTrue(GOGAuthManager.clearStoredCredentials(context))
         assertEquals(Unit, invalidation.await())
+        val lifecycleGenerationAfterClear =
+            AccountScopeInvalidations.generation(GameSource.GOG)
         controlledResponse.releaseResponse.countDown()
 
         assertTrue(authentication.await().isFailure)
         assertFalse(File(tempDir, "gog_auth.json").exists())
+        assertEquals(
+            lifecycleGenerationAfterClear,
+            AccountScopeInvalidations.generation(GameSource.GOG),
+        )
+    }
+
+    @Test
+    fun olderAuthenticationCannotAdvanceLifecycleOrOverwriteNewerLogin() = runTest {
+        val responses = StaggeredAuthenticationDispatcher()
+        mockWebServer.dispatcher = responses
+
+        withMockedHttpClient(mockWebServer.url("/token").toString()) {
+            val olderAuthentication = async(Dispatchers.IO) {
+                GOGAuthManager.authenticateWithCode(context, "older")
+            }
+            assertTrue(responses.olderRequestStarted.await(10, TimeUnit.SECONDS))
+
+            val newerAuthentication =
+                GOGAuthManager.authenticateWithCode(context, "newer")
+            assertTrue(newerAuthentication.isSuccess)
+            val lifecycleGenerationAfterNewerLogin =
+                AccountScopeInvalidations.generation(GameSource.GOG)
+
+            responses.releaseOlderResponse.countDown()
+
+            assertTrue(olderAuthentication.await().isFailure)
+            assertEquals(
+                lifecycleGenerationAfterNewerLogin,
+                AccountScopeInvalidations.generation(GameSource.GOG),
+            )
+            val storedCredentials = JSONObject(
+                File(tempDir, "gog_auth.json").readText(),
+            ).getJSONObject(GOGConstants.GOG_CLIENT_ID)
+            assertEquals("newer-token", storedCredentials.getString("access_token"))
+            assertEquals("newer-user", storedCredentials.getString("user_id"))
+        }
     }
 
     @Test
@@ -425,6 +463,37 @@ class GOGAuthManagerTest {
                 })
             }.toString(),
         )
+    }
+
+    private class StaggeredAuthenticationDispatcher : Dispatcher() {
+        val olderRequestStarted = CountDownLatch(1)
+        val releaseOlderResponse = CountDownLatch(1)
+
+        override fun dispatch(request: RecordedRequest): MockResponse {
+            val code = request.requestUrl?.queryParameter("code")
+            if (code == "older") {
+                olderRequestStarted.countDown()
+                if (!releaseOlderResponse.await(10, TimeUnit.SECONDS)) {
+                    return MockResponse().setResponseCode(500)
+                }
+            }
+            val (accessToken, userId) = if (code == "older") {
+                "older-token" to "older-user"
+            } else {
+                "newer-token" to "newer-user"
+            }
+            return MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    JSONObject().apply {
+                        put("access_token", accessToken)
+                        put("refresh_token", "refresh123")
+                        put("user_id", userId)
+                        put("expires_in", 3600)
+                    }.toString(),
+                )
+                .addHeader("Content-Type", "application/json")
+        }
     }
 
     private class ControlledResponse(

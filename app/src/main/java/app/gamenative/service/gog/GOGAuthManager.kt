@@ -152,14 +152,12 @@ object GOGAuthManager {
                 })
             }
 
-            val credentialsSaved = AccountScopeInvalidations.runLifecycleChange(GameSource.GOG) {
-                withContext(Dispatchers.IO) {
-                    writeCredentialFileIfCurrent(
-                        file = authFile,
-                        expectedGeneration = operationGeneration,
-                        contents = authData.toString(2),
-                    )
-                }
+            val credentialsSaved = withContext(Dispatchers.IO) {
+                replaceCredentialFileIfCurrent(
+                    file = authFile,
+                    expectedGeneration = operationGeneration,
+                    contents = authData.toString(2),
+                )
             }
             if (!credentialsSaved) {
                 return Result.failure(
@@ -484,27 +482,17 @@ object GOGAuthManager {
         credentialGeneration
     }
 
-    private fun writeCredentialFileIfCurrent(
+    private fun replaceCredentialFileIfCurrent(
         file: File,
         expectedGeneration: Long,
         contents: String,
     ): Boolean = synchronized(credentialLifecycleLock) {
         if (credentialGeneration != expectedGeneration) return@synchronized false
-        val priorUserId = runCatching {
-            if (file.isFile) {
-                JSONObject(file.readText())
-                    .optJSONObject(GOGConstants.GOG_CLIENT_ID)
-                    ?.optString("user_id")
-                    ?.ifBlank { null }
-            } else {
-                null
-            }
-        }.getOrNull()
-        val nextUserId = JSONObject(contents)
-            .getJSONObject(GOGConstants.GOG_CLIENT_ID)
-            .getString("user_id")
-        file.writeText(contents)
-        if (priorUserId != nextUserId) credentialGeneration++
+
+        AccountScopeInvalidations.runLifecycleChange(GameSource.GOG) {
+            file.writeText(contents)
+            credentialGeneration++
+        }
         true
     }
 
