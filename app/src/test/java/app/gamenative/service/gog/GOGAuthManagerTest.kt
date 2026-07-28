@@ -3,9 +3,13 @@ package app.gamenative.service.gog
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
+import app.gamenative.data.GameSource
+import app.gamenative.library.canonical.AccountScopeInvalidations
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -78,12 +82,16 @@ class GOGAuthManagerTest {
             .addHeader("Content-Type", "application/json"))
 
         // Act
+        val invalidation = async(start = CoroutineStart.UNDISPATCHED) {
+            AccountScopeInvalidations.forSource(GameSource.GOG).first()
+        }
         val result = withMockedHttpClient(mockWebServer.url("/token").toString()) {
             GOGAuthManager.authenticateWithCode(context, code)
         }
 
         // Assert
         assertTrue(result.isSuccess)
+        assertEquals(Unit, invalidation.await())
         val creds = result.getOrNull()!!
         assertEquals("token123", creds.accessToken)
         assertEquals("refresh123", creds.refreshToken)
@@ -107,7 +115,11 @@ class GOGAuthManagerTest {
         }
         assertTrue(controlledResponse.requestStarted.await(10, TimeUnit.SECONDS))
 
+        val invalidation = async(start = CoroutineStart.UNDISPATCHED) {
+            AccountScopeInvalidations.forSource(GameSource.GOG).first()
+        }
         assertTrue(GOGAuthManager.clearStoredCredentials(context))
+        assertEquals(Unit, invalidation.await())
         controlledResponse.releaseResponse.countDown()
 
         assertTrue(authentication.await().isFailure)
@@ -244,6 +256,31 @@ class GOGAuthManagerTest {
         // Verify refresh request
         val request = mockWebServer.takeRequest()
         assertTrue(request.path?.contains("refresh_token") == true)
+    }
+
+    @Test
+    fun refreshCannotReplaceTheStoredAccountIdentity() = runTest {
+        writeGalaxyCredentials(loginTime = 0.0, expiresIn = 1)
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    JSONObject()
+                        .put("access_token", "new-token")
+                        .put("refresh_token", "refresh-token")
+                        .put("user_id", "different-user")
+                        .put("expires_in", 3600)
+                        .toString(),
+                )
+                .addHeader("Content-Type", "application/json"),
+        )
+
+        val result = withMockedHttpClient(mockWebServer.url("/token").toString()) {
+            GOGAuthManager.getStoredCredentials(context)
+        }
+
+        assertTrue(result.isFailure)
+        assertEquals("user123", GOGAuthManager.getStoredUserId(context))
     }
 
     @Test

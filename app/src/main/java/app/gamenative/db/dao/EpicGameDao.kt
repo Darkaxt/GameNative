@@ -50,6 +50,9 @@ interface EpicGameDao {
     @Query("SELECT * FROM epic_games WHERE catalog_id = :catalogId")
     suspend fun getByCatalogId(catalogId: String): EpicGame?
 
+    @Query("SELECT * FROM epic_games WHERE namespace = :namespace AND catalog_id = :catalogId LIMIT 1")
+    suspend fun getByProviderIdentity(namespace: String, catalogId: String): EpicGame?
+
     @Query("SELECT * FROM epic_games WHERE app_name = :appName")
     suspend fun getByAppName(appName: String): EpicGame?
 
@@ -94,10 +97,10 @@ interface EpicGameDao {
 
         val catalogIds = games.map { it.catalogId }
         val existingGames = getGamesByCatalogIds(catalogIds)
-        val existingMap = existingGames.associateBy { it.catalogId }
+        val existingMap = existingGames.associateBy { it.namespace to it.catalogId }
 
         val toInsert = games.map { newGame ->
-            val existingGame = existingMap[newGame.catalogId]
+            val existingGame = existingMap[newGame.namespace to newGame.catalogId]
             if (existingGame != null) {
                 newGame.copy(
                     id = existingGame.id,

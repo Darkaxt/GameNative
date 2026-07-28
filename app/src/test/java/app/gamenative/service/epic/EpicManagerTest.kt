@@ -1,6 +1,7 @@
 package app.gamenative.service.epic
 
 import app.gamenative.db.dao.EpicGameDao
+import app.gamenative.library.canonical.AccountScopedOwnershipLedger
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Before
@@ -22,7 +23,7 @@ class EpicManagerTest {
     @Before
     fun setup() {
         val mockDao = mock(EpicGameDao::class.java)
-        epicManager = EpicManager(mockDao)
+        epicManager = EpicManager(mockDao, mock(AccountScopedOwnershipLedger::class.java))
     }
 
     private fun loadJsonResource(filename: String): String {

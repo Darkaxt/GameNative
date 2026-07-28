@@ -1,0 +1,152 @@
+package app.gamenative.library.canonical.source
+
+import app.gamenative.data.GameSource
+import app.gamenative.data.canonical.AccountScope
+import app.gamenative.data.canonical.CanonicalAppType
+import app.gamenative.data.canonical.OwnedCopyKey
+import kotlinx.coroutines.flow.Flow
+
+enum class SnapshotCompleteness {
+    COMPLETE,
+    PARTIAL,
+    UNAVAILABLE,
+}
+
+enum class SnapshotReason {
+    MISSING_ACCOUNT_SCOPE,
+    SOURCE_READ_FAILED,
+    MISSING_STABLE_ID,
+    MALFORMED_SOURCE_ID,
+    FEATURE_DISABLED,
+    PRESENCE_LEDGER_NOT_READY,
+    MISSING_MATERIALIZED_ROW,
+    ACCOUNT_SCOPE_CHANGED,
+}
+
+data class OwnedCopyProjection(
+    val key: OwnedCopyKey,
+    val displayName: String,
+    val developer: String,
+    val releaseYear: Int?,
+    val appType: CanonicalAppType,
+    val directSteamAppId: Int? = null,
+    val genreKeys: Set<String> = emptySet(),
+    val tagIds: Set<Int> = emptySet(),
+    val featureKeys: Set<String> = emptySet(),
+)
+
+data class SourceProjectionBatch(
+    val source: GameSource,
+    val accountScope: AccountScope?,
+    val completeness: SnapshotCompleteness,
+    val copies: List<OwnedCopyProjection>,
+    val reason: SnapshotReason? = null,
+    val errorType: String? = null,
+)
+
+sealed interface SourceOwnedCopyReference {
+    val key: OwnedCopyKey
+
+    data class Steam(
+        override val key: OwnedCopyKey,
+        val appId: Int,
+    ) : SourceOwnedCopyReference
+
+    data class Gog(
+        override val key: OwnedCopyKey,
+        val gameId: String,
+    ) : SourceOwnedCopyReference
+
+    data class Epic(
+        override val key: OwnedCopyKey,
+        val localRowId: Int,
+        val namespace: String,
+        val catalogId: String,
+    ) : SourceOwnedCopyReference
+
+    data class Amazon(
+        override val key: OwnedCopyKey,
+        val localRowId: Int,
+        val productId: String,
+        val entitlementId: String,
+    ) : SourceOwnedCopyReference
+
+    data class Custom(
+        override val key: OwnedCopyKey,
+        val appId: Int,
+    ) : SourceOwnedCopyReference
+}
+
+interface OwnedCopySourceAdapter {
+    val source: GameSource
+
+    fun invalidations(): Flow<Unit>
+
+    suspend fun snapshot(): SourceProjectionBatch
+
+    suspend fun resolve(key: OwnedCopyKey): SourceOwnedCopyReference?
+}
+
+internal fun missingAccountScope(source: GameSource): SourceProjectionBatch = SourceProjectionBatch(
+    source = source,
+    accountScope = null,
+    completeness = SnapshotCompleteness.UNAVAILABLE,
+    copies = emptyList(),
+    reason = SnapshotReason.MISSING_ACCOUNT_SCOPE,
+)
+
+internal fun presenceLedgerNotReady(
+    source: GameSource,
+    accountScope: AccountScope,
+): SourceProjectionBatch = SourceProjectionBatch(
+    source = source,
+    accountScope = accountScope,
+    completeness = SnapshotCompleteness.UNAVAILABLE,
+    copies = emptyList(),
+    reason = SnapshotReason.PRESENCE_LEDGER_NOT_READY,
+)
+
+internal fun accountScopeChanged(source: GameSource): SourceProjectionBatch = SourceProjectionBatch(
+    source = source,
+    accountScope = null,
+    completeness = SnapshotCompleteness.UNAVAILABLE,
+    copies = emptyList(),
+    reason = SnapshotReason.ACCOUNT_SCOPE_CHANGED,
+)
+
+internal fun sourceReadFailed(
+    source: GameSource,
+    accountScope: AccountScope?,
+    error: Exception,
+): SourceProjectionBatch = SourceProjectionBatch(
+    source = source,
+    accountScope = accountScope,
+    completeness = SnapshotCompleteness.UNAVAILABLE,
+    copies = emptyList(),
+    reason = SnapshotReason.SOURCE_READ_FAILED,
+    errorType = error.javaClass.simpleName.ifBlank { "Exception" },
+)
+
+internal fun sourceBatch(
+    source: GameSource,
+    accountScope: AccountScope,
+    copies: List<OwnedCopyProjection>,
+    partialReason: SnapshotReason?,
+): SourceProjectionBatch = SourceProjectionBatch(
+    source = source,
+    accountScope = accountScope,
+    completeness = if (partialReason == null) {
+        SnapshotCompleteness.COMPLETE
+    } else {
+        SnapshotCompleteness.PARTIAL
+    },
+    copies = copies,
+    reason = partialReason,
+)
+
+internal fun sourceQualifiedKeys(provider: String, values: List<String>): Set<String> = values
+    .asSequence()
+    .map(app.gamenative.data.canonical.CanonicalNormalization::titleKey)
+    .filter(String::isNotEmpty)
+    .map { "$provider:$it" }
+    .toSortedSet()

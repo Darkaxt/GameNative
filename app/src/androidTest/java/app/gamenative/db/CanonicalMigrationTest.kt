@@ -245,6 +245,38 @@ class CanonicalMigrationTest {
     }
 
     @Test
+    fun ownershipLedgerAllowsSameStableIdAcrossAccountScopesAndCascadesPerHeader() {
+        migrateV25("canonical-account-scoped-ownership-ledger").use { database ->
+            database.setForeignKeyConstraintsEnabled(true)
+            val scopeA = "a".repeat(64)
+            val scopeB = "b".repeat(64)
+            database.execSQL(
+                "INSERT INTO `owned_copy_sync` (`account_scope`, `source`, `completed_at`) VALUES (?, 'GOG', 1)",
+                arrayOf<Any>(scopeA),
+            )
+            database.execSQL(
+                "INSERT INTO `owned_copy_sync` (`account_scope`, `source`, `completed_at`) VALUES (?, 'GOG', 2)",
+                arrayOf<Any>(scopeB),
+            )
+            database.execSQL(
+                "INSERT INTO `owned_copy_presence` (`account_scope`, `source`, `stable_source_id`) VALUES (?, 'GOG', 'shared')",
+                arrayOf<Any>(scopeA),
+            )
+            database.execSQL(
+                "INSERT INTO `owned_copy_presence` (`account_scope`, `source`, `stable_source_id`) VALUES (?, 'GOG', 'shared')",
+                arrayOf<Any>(scopeB),
+            )
+
+            assertEquals(2, database.rowCount("owned_copy_presence"))
+            database.execSQL(
+                "DELETE FROM `owned_copy_sync` WHERE `account_scope` = ? AND `source` = 'GOG'",
+                arrayOf<Any>(scopeA),
+            )
+            assertEquals(1, database.rowCount("owned_copy_presence"))
+        }
+    }
+
+    @Test
     fun duplicateOwnedCopyCompositeKeyFails() {
         migrateV25("canonical-owned-copy-key").use { database ->
             database.insertCanonical("canonical-one", null)
@@ -568,6 +600,8 @@ class CanonicalMigrationTest {
             "canonical_game_feature",
             "steam_tag_dictionary",
             "game_detail_snapshot",
+            "owned_copy_sync",
+            "owned_copy_presence",
         )
 
         val CANONICAL_INDEXES = setOf(
@@ -580,6 +614,7 @@ class CanonicalMigrationTest {
             "index_canonical_game_tag_tag_id_canonical_id",
             "index_canonical_game_feature_feature_key_canonical_id",
             "index_game_detail_snapshot_canonical_id",
+            "index_owned_copy_presence_account_scope_source",
         )
 
         val CASCADE_TABLES = setOf(

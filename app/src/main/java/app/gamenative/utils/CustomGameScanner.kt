@@ -22,16 +22,36 @@ import app.gamenative.service.SteamService.Companion.getMainAppDepots
 import com.winlator.container.Container
 import com.winlator.container.ContainerManager
 import java.io.File
+import kotlin.collections.component1
+import kotlin.collections.component2
 import kotlin.math.abs
+import kotlin.text.ifEmpty
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import timber.log.Timber
-import kotlin.collections.component1
-import kotlin.collections.component2
-import kotlin.text.ifEmpty
+
+internal data class CustomGameProjectionEntry(
+    val appId: Int,
+    val displayName: String,
+)
+
+internal data class CustomGameProjectionScan(
+    val entries: List<CustomGameProjectionEntry>,
+    val partial: Boolean,
+)
 
 object CustomGameScanner {
+    private val projectionInvalidations = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    internal fun canonicalInvalidations(): Flow<Unit> = projectionInvalidations.asSharedFlow()
 
     // Default root path for Custom Games. Always use the app's external storage sandbox
     // (Android/data/<package>/CustomGames) when available; fall back to internal only if external is unavailable.
@@ -502,6 +522,36 @@ object CustomGameScanner {
     }
 
     /**
+     * Reads only persisted custom-game identities needed by canonical projection.
+     * This scan never generates IDs, writes metadata, inspects Steam imports, or exposes paths.
+     */
+    internal fun scanForCanonicalProjection(): CustomGameProjectionScan {
+        var partial = false
+        val seenIds = mutableSetOf<Int>()
+        val entries = buildList {
+            for (path in PrefManager.customGameManualFolders) {
+                val folder = File(path)
+                if (!folder.exists() || !folder.isDirectory) {
+                    partial = true
+                    continue
+                }
+
+                val appId = GameMetadataManager.getAppIdReadOnly(folder)
+                if (appId == null || !seenIds.add(appId)) {
+                    partial = true
+                    continue
+                }
+
+                add(CustomGameProjectionEntry(appId = appId, displayName = folder.name))
+            }
+        }
+        return CustomGameProjectionScan(entries = entries, partial = partial)
+    }
+
+    internal fun hasPersistedCanonicalAppId(appId: Int): Boolean =
+        appId > 0 && scanForCanonicalProjection().entries.any { it.appId == appId }
+
+    /**
      * All manually added folders are included regardless of content.
      * Optionally filter by [query] contained in folder name (case-insensitive).
      */
@@ -663,6 +713,7 @@ object CustomGameScanner {
      */
     fun invalidateCache() {
         CustomGameCache.invalidate()
+        projectionInvalidations.tryEmit(Unit)
     }
 
     /**
@@ -724,6 +775,7 @@ object CustomGameScanner {
 
         // Store it in the file for future use
         writeGameIdToFile(folder, candidateId)
+        projectionInvalidations.tryEmit(Unit)
 
         return candidateId
     }

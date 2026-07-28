@@ -899,7 +899,7 @@ class AmazonService : Service() {
     private suspend fun syncLibrary() {
         setSyncInProgress(true)
         try {
-            amazonManager.refreshLibrary()
+            amazonManager.refreshLibrary().getOrThrow()
             lastSyncTimestamp = System.currentTimeMillis()
             hasPerformedInitialSync = true
             Timber.i("[Amazon] Sync complete — next auto-sync in 15 minutes")

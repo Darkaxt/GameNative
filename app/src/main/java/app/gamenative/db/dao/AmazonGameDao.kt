@@ -17,7 +17,10 @@ interface AmazonGameDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(games: List<AmazonGame>)
 
-    @Query("SELECT * FROM amazon_games WHERE product_id = :productId")
+    @Query(
+        "SELECT * FROM amazon_games WHERE product_id = :productId " +
+            "ORDER BY is_installed DESC, app_id ASC LIMIT 1",
+    )
     suspend fun getByProductId(productId: String): AmazonGame?
 
     @Query("SELECT * FROM amazon_games WHERE app_id = :appId")

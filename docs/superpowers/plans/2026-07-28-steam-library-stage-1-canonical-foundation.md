@@ -115,6 +115,7 @@ Out of scope until later stages:
 - `app/src/main/java/app/gamenative/service/SteamService.kt` — reparse owned PICS rows when the dedicated parser revision changes.
 - `app/src/main/java/app/gamenative/utils/KeyValueUtils.kt` — PICS facet parser and revision.
 - `app/src/main/java/app/gamenative/utils/CustomGameScanner.kt` — pure canonical snapshot and invalidation signal without invoking legacy scan side effects.
+- `app/src/main/java/app/gamenative/utils/GameMetadataManager.kt` — read-only persisted custom-ID access that never performs legacy metadata migration writes.
 - `app/src/main/java/app/gamenative/PrefManager.kt` — private shadow-projection capability flag, default enabled.
 - `app/src/main/java/app/gamenative/PluviaApp.kt` — start the shadow coordinator on the existing application IO scope.
 - `gradle/libs.versions.toml` and `app/build.gradle.kts` — Room migration-test dependency.
@@ -794,9 +795,10 @@ Cover these assertions:
 - a later authentication creates a different profile scope;
 - Amazon credential replacement preserves the prior valid file when an injected write fails before commit;
 - an Amazon save captured before credential clearing is rejected and cannot recreate the file;
-- delayed offline GOG authentication, Galaxy refresh, and game-token responses cannot recreate credentials after clearing, and each stale operation returns failure.
+- delayed offline GOG authentication, Galaxy refresh, and game-token responses cannot recreate credentials after clearing, and each stale operation returns failure;
+- Epic authentication and refresh writes are generation-gated and atomically replaced, refresh cannot change account identity, and ownership-token cache entries are account-scoped and rejected when their captured credential generation becomes stale.
 
-The Amazon tests may call internal JSON load/save and generation-gated atomic replacement helpers made `internal` for testing. They must not make a network request. GOG lifecycle races use `MockWebServer` with latch-controlled responses so logout/clear deterministically wins before the response is released; do not use sleeps or live endpoints.
+The Amazon and Epic tests may call internal JSON load/save and generation-gated atomic replacement helpers made `internal` for testing. They must not make a network request. GOG lifecycle races use `MockWebServer` with latch-controlled responses so logout/clear deterministically wins before the response is released; do not use sleeps or live endpoints.
 
 - [ ] **Step 2: Confirm tests fail**
 
@@ -936,9 +938,24 @@ git push fork HEAD
 - Modify: `app/src/main/java/app/gamenative/db/dao/EpicGameDao.kt`
 - Modify: `app/src/main/java/app/gamenative/db/dao/AmazonGameDao.kt`
 - Modify: `app/src/main/java/app/gamenative/utils/CustomGameScanner.kt`
+- Modify: `app/src/main/java/app/gamenative/utils/GameMetadataManager.kt`
 - Modify: `app/src/main/java/app/gamenative/service/gog/GOGManager.kt`
 - Test: `app/src/test/java/app/gamenative/library/canonical/source/OwnedCopySourceAdapterTest.kt`
 - Create: `app/src/test/java/app/gamenative/service/gog/GOGManagerTest.kt`
+
+#### Material ownership gap discovered during Task 5
+
+Legacy GOG, Epic, and Amazon rows are not account-scoped and can survive logout or account replacement, so they cannot prove that a row belongs to the current account. Before Task 5 is complete, fold an additive ownership-presence ledger into unreleased v26 (never create v27):
+
+- `owned_copy_sync` is keyed by `(account_scope, source)` with non-key `completed_at`;
+- `owned_copy_presence` is keyed by `(account_scope, source, stable_source_id)`, cascade-references the header key, and may carry a separately resolved source action ID such as the current account's Amazon entitlement ID;
+- one focused DAO validates nonblank, already-trimmed IDs and atomically replaces a sorted, de-duplicated complete snapshot; a verified empty snapshot retains its completed header, and any malformed or failed replacement preserves the previous ledger;
+- GOG, Epic, and Amazon full-library sync capture account scope plus a source-scoped lifecycle generation, complete pagination and required source-row materialization, recheck both, then commit the ledger; missing/malformed pages, cursors, required details, identity mismatches, lifecycle changes, or writes fail closed without replacing it;
+- their adapters require the current scope's completed ledger and filter both snapshots and resolution through it. No header returns fixed `PRESENCE_LEDGER_NOT_READY`, an empty completed ledger is `COMPLETE`, and a ledger ID without a visible source row is `PARTIAL` with `MISSING_MATERIALIZED_ROW`. Amazon resolution uses the account-scoped entitlement stored with ledger presence rather than trusting a retained unscoped row;
+- successful account replacement/removal increments a process-local source lifecycle generation and emits only a source-scoped `Unit` invalidation so ABA account changes are detected without exposing account IDs, scope hashes, source IDs, titles, paths, URLs, tokens, payloads, or user text;
+- Steam resolution requires a currently owned license and rechecks account scope/lifecycle after source reads. Custom semantics remain unchanged, and no legacy source-table schema, card, or public action path changes.
+
+Migration/schema parity and deterministic offline tests must cover account switching (including A→B→A), the same ID in two scopes, account-scoped Amazon action resolution, complete empty, a missing materialized row, failed sync/replacement preservation, pre-commit scope/lifecycle recheck, and credential invalidation.
 
 - [ ] **Step 1: Write adapter contract tests with fake DAOs/account scopes**
 
@@ -967,7 +984,16 @@ Use explicit completeness and fixed reasons:
 
 ```kotlin
 enum class SnapshotCompleteness { COMPLETE, PARTIAL, UNAVAILABLE }
-enum class SnapshotReason { MISSING_ACCOUNT_SCOPE, SOURCE_READ_FAILED, MISSING_STABLE_ID, MALFORMED_SOURCE_ID, FEATURE_DISABLED }
+enum class SnapshotReason {
+    MISSING_ACCOUNT_SCOPE,
+    SOURCE_READ_FAILED,
+    MISSING_STABLE_ID,
+    MALFORMED_SOURCE_ID,
+    FEATURE_DISABLED,
+    PRESENCE_LEDGER_NOT_READY,
+    MISSING_MATERIALIZED_ROW,
+    ACCOUNT_SCOPE_CHANGED,
+}
 
 data class OwnedCopyProjection(
     val key: OwnedCopyKey,
@@ -1033,7 +1059,7 @@ Add a pure method that:
 
 1. reads `PrefManager.customGameManualFolders`;
 2. ignores missing/non-directory paths and marks the batch partial;
-3. reads existing IDs with `GameMetadataManager.getAppId`;
+3. reads existing IDs with a read-only `GameMetadataManager.getAppIdReadOnly` path, because the legacy `getAppId` reader may migrate plain-integer metadata by writing it;
 4. skips missing/invalid IDs and marks the batch partial;
 5. returns ID and folder name only;
 6. does not generate IDs, write metadata, extract icons, inspect Steam imports, insert `AppInfo`, add markers, or expose paths.
@@ -1075,6 +1101,7 @@ git add app/src/main/java/app/gamenative/library/canonical/source \
   app/src/main/java/app/gamenative/db/dao/EpicGameDao.kt \
   app/src/main/java/app/gamenative/db/dao/AmazonGameDao.kt \
   app/src/main/java/app/gamenative/utils/CustomGameScanner.kt \
+  app/src/main/java/app/gamenative/utils/GameMetadataManager.kt \
   app/src/main/java/app/gamenative/service/gog/GOGManager.kt \
   app/src/test/java/app/gamenative/library/canonical/source \
   app/src/test/java/app/gamenative/service/gog/GOGManagerTest.kt

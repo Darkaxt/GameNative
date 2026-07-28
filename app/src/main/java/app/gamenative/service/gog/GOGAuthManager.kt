@@ -2,6 +2,8 @@ package app.gamenative.service.gog
 
 import android.content.Context
 import app.gamenative.data.GOGCredentials
+import app.gamenative.data.GameSource
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.utils.Net
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -162,6 +164,7 @@ object GOGAuthManager {
                     IOException("GOG credential lifecycle changed during authentication"),
                 )
             }
+            AccountScopeInvalidations.notifyChanged(GameSource.GOG)
             Timber.tag("GOG").i("GOG authentication successful")
 
             Result.success(credentials)
@@ -220,7 +223,7 @@ object GOGAuthManager {
                 username = credentialsJson.optString("username", "GOG User")
             )
 
-            Timber.tag("GOG").d("Retrieved stored credentials for user: ${credentials.userId}")
+            Timber.tag("GOG").d("Retrieved stored credentials")
             Result.success(credentials)
         } catch (e: Exception) {
             Timber.tag("GOG").e(e, "Failed to get stored credentials")
@@ -370,19 +373,23 @@ object GOGAuthManager {
     /**
      * Clear stored credentials (logout)
      */
-    fun clearStoredCredentials(context: Context): Boolean = synchronized(credentialLifecycleLock) {
-        credentialGeneration++
-        try {
-            val authFile = File(getAuthConfigPath(context))
-            if (authFile.exists()) {
-                authFile.delete()
-            } else {
-                true
+    fun clearStoredCredentials(context: Context): Boolean {
+        val cleared = synchronized(credentialLifecycleLock) {
+            credentialGeneration++
+            try {
+                val authFile = File(getAuthConfigPath(context))
+                if (authFile.exists()) {
+                    authFile.delete()
+                } else {
+                    true
+                }
+            } catch (e: Exception) {
+                Timber.tag("GOG").e(e, "Failed to clear GOG credentials")
+                false
             }
-        } catch (e: Exception) {
-            Timber.tag("GOG").e(e, "Failed to clear GOG credentials")
-            false
         }
+        if (cleared) AccountScopeInvalidations.notifyChanged(GameSource.GOG)
+        return cleared
     }
 
     /**
@@ -407,9 +414,11 @@ object GOGAuthManager {
                 return Result.failure(Exception("No Galaxy credentials found"))
             }
 
+            // Get refresh token and immutable account identity
             val refreshToken = galaxyCredentials.optString("refresh_token", "")
-            if (refreshToken.isEmpty()) {
-                return Result.failure(Exception("No refresh token available"))
+            val existingUserId = galaxyCredentials.optString("user_id", "")
+            if (refreshToken.isEmpty() || existingUserId.isEmpty()) {
+                return Result.failure(Exception("No refresh token or account identity available"))
             }
 
             // Request new tokens
@@ -439,6 +448,9 @@ object GOGAuthManager {
                 JSONObject(responseBody)
             }
 
+            require(tokenJson.optString("user_id") == existingUserId) {
+                "GOG refresh changed account identity"
+            }
             tokenJson.put("loginTime", System.currentTimeMillis() / 1000.0)
             val credentialsSaved = withContext(Dispatchers.IO) {
                 updateCredentialFileIfCurrent(authFile, operationGeneration) { latestAuthJson ->
@@ -469,7 +481,21 @@ object GOGAuthManager {
         contents: String,
     ): Boolean = synchronized(credentialLifecycleLock) {
         if (credentialGeneration != expectedGeneration) return@synchronized false
+        val priorUserId = runCatching {
+            if (file.isFile) {
+                JSONObject(file.readText())
+                    .optJSONObject(GOGConstants.GOG_CLIENT_ID)
+                    ?.optString("user_id")
+                    ?.ifBlank { null }
+            } else {
+                null
+            }
+        }.getOrNull()
+        val nextUserId = JSONObject(contents)
+            .getJSONObject(GOGConstants.GOG_CLIENT_ID)
+            .getString("user_id")
         file.writeText(contents)
+        if (priorUserId != nextUserId) credentialGeneration++
         true
     }
 

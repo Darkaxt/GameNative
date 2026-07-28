@@ -2,6 +2,7 @@ package app.gamenative.service.gog
 
 import android.content.Context
 import app.gamenative.data.GOGGame
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -86,6 +87,36 @@ data class RawGogApiResponse(
  */
 object GOGApiClient {
 
+    internal fun parseOwnedGameIds(userData: JSONObject): Result<List<String>> = runCatching {
+        val ownedGames = userData.optJSONArray("owned")
+            ?: error("MALFORMED_GOG_OWNERSHIP")
+        buildList {
+            for (index in 0 until ownedGames.length()) {
+                val value = ownedGames.get(index)
+                require(value is Number || value is String) { "MALFORMED_GOG_OWNERSHIP" }
+                val stableSourceId = value.toString().trim()
+                require(stableSourceId.isNotEmpty() && stableSourceId.all(Char::isDigit)) {
+                    "MALFORMED_GOG_OWNERSHIP"
+                }
+                add(stableSourceId)
+            }
+        }.distinct()
+    }
+
+    internal fun parseGameDetails(
+        rawResponse: JSONObject,
+        gameId: String,
+    ): Result<ParsedGogGame> = runCatching {
+        val title = rawResponse.opt("title") as? String
+        require(!title.isNullOrBlank() && title == title.trim()) { "MALFORMED_GOG_DETAIL" }
+        if (rawResponse.has("game_type")) {
+            require(rawResponse.opt("game_type") in setOf("game", "dlc")) {
+                "MALFORMED_GOG_DETAIL"
+            }
+        }
+        transformGameDetails(rawResponse, gameId)
+    }
+
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -108,8 +139,6 @@ object GOGApiClient {
             // Get credentials from AuthManager
             val credentialsResult = GOGAuthManager.getStoredCredentials(context)
             if (credentialsResult.isFailure) {
-                val error = credentialsResult.exceptionOrNull()
-                Timber.tag("GOG").e(error, "Cannot list games: not authenticated")
                 return@withContext Result.failure(Exception("Not authenticated. Please log in first."))
             }
 
@@ -128,12 +157,8 @@ object GOGApiClient {
                 .get()
                 .build()
 
-            Timber.tag("GOG").d("Requesting game IDs from: $url")
-
             httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "Unknown error"
-                    Timber.e("Failed to fetch game IDs: HTTP ${response.code} - $errorBody")
                     return@withContext Result.failure(
                         Exception("Failed to fetch game IDs: HTTP ${response.code}")
                     )
@@ -147,19 +172,17 @@ object GOGApiClient {
 
                 // Parse JSON response
                 val userData = JSONObject(responseBody)
-                val ownedGames = userData.optJSONArray("owned") ?: JSONArray()
-
-                val gameIds = List(ownedGames.length()) {
-                    ownedGames.get(it).toString()
+                val gameIds = parseOwnedGameIds(userData).getOrElse {
+                    return@withContext Result.failure(IllegalStateException("MALFORMED_GOG_OWNERSHIP"))
                 }
 
                 Timber.tag("GOG").i("Successfully fetched ${gameIds.size} game IDs")
-                Timber.tag("GOG").d("First 10 game IDs: ${gameIds.take(10).joinToString()}")
                 return@withContext Result.success(gameIds)
             }
-        } catch (e: Exception) {
-            Timber.e(e, "Exception fetching game IDs: ${e.message}")
-            return@withContext Result.failure(e)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return@withContext Result.failure(IllegalStateException("GOG_OWNERSHIP_FAILED"))
         }
     }
 
@@ -181,13 +204,9 @@ object GOGApiClient {
         expanded: List<String> = listOf("downloads", "description", "screenshots")
     ): Result<ParsedGogGame> = withContext(Dispatchers.IO) {
         try {
-            Timber.tag("GOG").d("Fetching game details for gameId: $gameId")
-
             // Get credentials from AuthManager
             val credentialsResult = GOGAuthManager.getStoredCredentials(context)
             if (credentialsResult.isFailure) {
-                val error = credentialsResult.exceptionOrNull()
-                Timber.e(error, "Cannot fetch game details: not authenticated")
                 return@withContext Result.failure(Exception("Not authenticated"))
             }
 
@@ -212,13 +231,9 @@ object GOGApiClient {
                 .get()
                 .build()
 
-            Timber.tag("GOG").d("Requesting game details from: $url")
-
             // Execute request
             httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "Unknown error"
-                    Timber.tag("GOG").e("Failed to fetch game details for $gameId: HTTP ${response.code} - $errorBody")
                     return@withContext Result.failure(
                         Exception("Failed to fetch game details: HTTP ${response.code}")
                     )
@@ -226,21 +241,19 @@ object GOGApiClient {
 
                 val responseBody = response.body?.string() ?: ""
                 if (responseBody.isBlank()) {
-                    Timber.tag("GOG").w("Empty response when fetching game details for $gameId")
                     return@withContext Result.failure(Exception("Empty response from GOG"))
                 }
 
                 // Parse raw GOG API response
                 val rawApiResponse = JSONObject(responseBody)
-
-                // Transform to simplified, flattened structure
-                val transformedResponse = transformGameDetails(rawApiResponse, gameId)
+                val transformedResponse = parseGameDetails(rawApiResponse, gameId).getOrThrow()
 
                 return@withContext Result.success(transformedResponse)
             }
-        } catch (e: Exception) {
-            Timber.tag("GOG").e(e, "Exception fetching game details for $gameId: ${e.message}")
-            return@withContext Result.failure(e)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return@withContext Result.failure(IllegalStateException("GOG_DETAIL_FAILED"))
         }
     }
 
@@ -264,10 +277,7 @@ object GOGApiClient {
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Timber.tag("GOG").d("No GamesDB entry for $gameId: HTTP ${response.code}")
-                    return@withContext ""
-                }
+                if (!response.isSuccessful) return@withContext ""
 
                 val responseBody = response.body?.string()
                 if (responseBody.isNullOrBlank()) return@withContext ""
@@ -284,8 +294,9 @@ object GOGApiClient {
                     .replace("{formatter}", "_glx_vertical_cover")
                     .replace("{ext}", "webp")
             }
-        } catch (e: Exception) {
-            Timber.tag("GOG").d(e, "Failed to fetch vertical cover for $gameId: ${e.message}")
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
             return@withContext ""
         }
     }

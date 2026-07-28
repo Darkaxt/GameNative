@@ -147,6 +147,19 @@ object GameMetadataManager {
         return read(folder)?.appId
     }
 
+    /** Reads an existing app ID without migrating or writing metadata. */
+    internal fun getAppIdReadOnly(folder: File): Int? {
+        val metadataFile = File(folder, FILE_NAME)
+        if (!metadataFile.exists() || !metadataFile.isFile) return null
+        return runCatching {
+            val content = metadataFile.readText().trim()
+            if (content.isEmpty()) return@runCatching null
+            runCatching {
+                JSONObject(content).optInt("appId", -1).takeIf { it > 0 }
+            }.getOrNull() ?: content.toIntOrNull()?.takeIf { it > 0 }
+        }.getOrNull()
+    }
+
     /**
      * Checks if SteamGridDB images have been fetched for this game.
      */

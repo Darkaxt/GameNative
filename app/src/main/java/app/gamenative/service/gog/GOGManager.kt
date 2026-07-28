@@ -9,8 +9,11 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.LaunchInfo
 import app.gamenative.data.LibraryItem
 import app.gamenative.db.dao.GOGGameDao
+import app.gamenative.enums.AppType
 import app.gamenative.enums.Marker
 import app.gamenative.enums.PathType
+import app.gamenative.library.canonical.AccountScopedOwnershipLedger
+import app.gamenative.library.canonical.MaterializedOwnedCopySnapshot
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.FileUtils
 import app.gamenative.utils.MarkerUtils
@@ -57,6 +60,7 @@ data class GameSizeInfo(
 @Singleton
 class GOGManager @Inject constructor(
     private val gogGameDao: GOGGameDao,
+    private val ownershipLedger: AccountScopedOwnershipLedger,
     @ApplicationContext private val context: Context,
 ) {
 
@@ -159,103 +163,52 @@ class GOGManager @Inject constructor(
      * ! if coroutine parallel downloading would work without being rate-limited
      */
     suspend fun refreshLibrary(context: Context): Result<Int> = withContext(Dispatchers.IO) {
-        try {
-            if (!GOGAuthManager.hasStoredCredentials(context)) {
-                Timber.w("Cannot refresh library: not authenticated with GOG")
-                return@withContext Result.failure(Exception("Not authenticated with GOG"))
+        if (!GOGAuthManager.hasStoredCredentials(context)) {
+            return@withContext Result.failure(IllegalStateException("GOG_AUTH_UNAVAILABLE"))
+        }
+
+        ownershipLedger.runCompleteSnapshot(GameSource.GOG) {
+            val gameIds = GOGApiClient.getGameIds(context).getOrThrow()
+                .map(String::trim)
+                .also { ids -> require(ids.all(String::isNotEmpty)) }
+                .distinct()
+            val ownedIds = gameIds.toSet()
+            val ignoredGameId = "1801418160"
+            val requiredIds = ownedIds - ignoredGameId
+            val existingIds = gogGameDao.getAllGameIdsIncludingExcluded().toMutableSet().apply {
+                add(ignoredGameId)
             }
+            val newIds = gameIds.filterNot(existingIds::contains)
+            val pendingGames = mutableListOf<GOGGame>()
 
-            Timber.tag("GOG").i("Refreshing GOG library from GOG API...")
-
-            // Fetch games from GOG via GOGDL Python backend
-
-            var gameIdList = GOGApiClient.getGameIds(context)
-
-            if (!gameIdList.isSuccess) {
-                val error = gameIdList.exceptionOrNull()
-                Timber.e(error, "Failed to fetch GOG game IDs: ${error?.message}")
-                return@withContext Result.failure(error ?: Exception("Failed to fetch GOG game IDs"))
-            }
-
-            val gameIds = gameIdList.getOrNull() ?: emptyList()
-            Timber.tag("GOG").i("Successfully fetched ${gameIds.size} game IDs from GOG")
-
-            if (gameIds.isEmpty()) {
-                Timber.w("No games found in GOG library")
-                return@withContext Result.success(0)
-            }
-
-            val ignoredGameId = "1801418160" // Hidden ID for GOG Galaxy that we should ignore.
-
-            // Get existing game IDs from database to avoid re-fetching
-            val existingGameIds = gogGameDao.getAllGameIdsIncludingExcluded().toMutableSet()
-            existingGameIds.add(ignoredGameId)
-
-            Timber.tag("GOG").d("Found ${existingGameIds.size} games already in database")
-
-            // Filter to only new games that need details fetched
-            val newGameIds = gameIds.filter { it !in existingGameIds }
-            Timber.tag("GOG").d("${newGameIds.size} new games need details fetched")
-
-            if (newGameIds.isEmpty()) {
-                Timber.tag("GOG").d("No new games to fetch, library is up to date")
-                return@withContext Result.success(0)
-            }
-
-            var totalProcessed = 0
-
-            Timber.tag("GOG").d("Getting Game Details for ${newGameIds.size} new GOG Games...")
-
-            val games = mutableListOf<GOGGame>()
-
-            // Use direct HTTP calls via GOGApiClient
-            for ((index, id) in newGameIds.withIndex()) {
-                try {
-                    // Fetch game details using direct HTTP call
-                    val result = GOGApiClient.getGameById(context, id)
-
-                    if (result.isSuccess) {
-                        val gameDetails = result.getOrNull()
-                        if (gameDetails != null) {
-                            Timber.tag("GOG").d("Got Game Details for ID: $id")
-                            val parsedGame = parseGameObject(gameDetails)
-                            if (parsedGame != null) {
-                                // Only real (non-excluded) games are shown, so only fetch
-                                // their portrait cover to avoid wasting GamesDB requests.
-                                val game = if (parsedGame.exclude) {
-                                    parsedGame
-                                } else {
-                                    parsedGame.copy(verticalCoverUrl = GOGApiClient.getVerticalCoverUrl(id))
-                                }
-                                games.add(game)
-                                Timber.tag("GOG").d("Refreshed Game: ${game.title}")
-                                totalProcessed++
-                            }
-                        }
-                    } else {
-                        Timber.w("GOG game ID $id not found in library after refresh")
-                    }
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to parse game details for ID: $id")
+            for ((index, id) in newIds.withIndex()) {
+                val details = requireNotNull(GOGApiClient.getGameById(context, id).getOrThrow())
+                val parsed = requireNotNull(parseGameObject(details))
+                pendingGames += if (parsed.exclude) {
+                    parsed
+                } else {
+                    parsed.copy(verticalCoverUrl = GOGApiClient.getVerticalCoverUrl(id))
                 }
 
-                if ((index + 1) % REFRESH_BATCH_SIZE == 0 || index == newGameIds.size - 1) {
-                    if (games.isNotEmpty()) {
-                        gogGameDao.upsertPreservingInstallStatus(games)
-                        Timber.tag("GOG").d("Batch inserted ${games.size} games (processed ${index + 1}/${newGameIds.size})")
-                        games.clear()
-                    }
+                if ((index + 1) % REFRESH_BATCH_SIZE == 0 || index == newIds.lastIndex) {
+                    gogGameDao.upsertPreservingInstallStatus(pendingGames)
+                    pendingGames.clear()
                 }
             }
-            val detectedCount = detectAndUpdateExistingInstallations()
-            if (detectedCount > 0) {
-                Timber.d("Detected and updated $detectedCount existing installations")
-            }
-            Timber.tag("GOG").i("Successfully refreshed GOG library with $totalProcessed games")
-            return@withContext Result.success(totalProcessed)
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to refresh GOG library")
-            return@withContext Result.failure(e)
+
+            val materializedIds = gogGameDao.getAllGameIdsIncludingExcluded().toSet()
+            require(requiredIds.all(materializedIds::contains))
+            val visibleOwnedIds = gogGameDao.getAllAsList()
+                .asSequence()
+                .map { it.id }
+                .filter(requiredIds::contains)
+                .toList()
+
+            detectAndUpdateExistingInstallations()
+            MaterializedOwnedCopySnapshot(
+                value = newIds.size,
+                stableSourceIds = visibleOwnedIds,
+            )
         }
     }
 
@@ -284,7 +237,7 @@ class GOGManager @Inject constructor(
         }
     }
 
-    private fun parseGameObject(parsedGame: ParsedGogGame): GOGGame? {
+    internal fun parseGameObject(parsedGame: ParsedGogGame): GOGGame? {
         val title = parsedGame.title
         val id = parsedGame.id
         val downloadSize = parsedGame.downloadSize
@@ -317,6 +270,7 @@ class GOGManager @Inject constructor(
             installPath = "",
             lastPlayed = 0L,
             playTime = 0L,
+            type = if (isDlc) AppType.dlc else AppType.game,
         )
     }
 

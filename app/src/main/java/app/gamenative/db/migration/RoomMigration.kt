@@ -34,6 +34,7 @@ internal val ROOM_MIGRATION_V25_to_V26 = object : Migration(25, 26) {
             addSteamPicsRevisionColumnsV26(connection)
             createCanonicalCoreStorageV26(connection)
             createCanonicalFacetStorageV26(connection)
+            createOwnedCopyLedgerStorageV26(connection)
             V25ToV26MigrationDiagnostics.markPendingSuccess(connection)
         } catch (error: Exception) {
             V25ToV26MigrationDiagnostics.recordBodyFailed(error.javaClass.simpleName)
@@ -203,6 +204,36 @@ private fun createCanonicalFacetStorageV26(connection: SQLiteConnection) {
     )
     connection.execSQL(
         "CREATE INDEX IF NOT EXISTS `index_game_detail_snapshot_canonical_id` ON `game_detail_snapshot` (`canonical_id`)",
+    )
+}
+
+private fun createOwnedCopyLedgerStorageV26(connection: SQLiteConnection) {
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `owned_copy_sync` (
+            `account_scope` TEXT NOT NULL,
+            `source` TEXT NOT NULL,
+            `completed_at` INTEGER NOT NULL,
+            PRIMARY KEY(`account_scope`, `source`)
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS `owned_copy_presence` (
+            `account_scope` TEXT NOT NULL,
+            `source` TEXT NOT NULL,
+            `stable_source_id` TEXT NOT NULL,
+            `resolved_source_id` TEXT,
+            PRIMARY KEY(`account_scope`, `source`, `stable_source_id`),
+            FOREIGN KEY(`account_scope`, `source`) REFERENCES `owned_copy_sync`(`account_scope`, `source`)
+                ON UPDATE NO ACTION ON DELETE CASCADE
+        )
+        """.trimIndent(),
+    )
+    connection.execSQL(
+        "CREATE INDEX IF NOT EXISTS `index_owned_copy_presence_account_scope_source` " +
+            "ON `owned_copy_presence` (`account_scope`, `source`)",
     )
 }
 

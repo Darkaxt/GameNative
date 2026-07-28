@@ -4,9 +4,14 @@ import android.content.Context
 import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
 import app.gamenative.data.AmazonCredentials
+import app.gamenative.data.GameSource
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import java.io.File
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.After
@@ -38,6 +43,21 @@ class AmazonAuthManagerTest {
     @After
     fun tearDown() {
         tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun credentialReplacementAndRemovalEmitSourceOnlyInvalidations() = runTest {
+        val replacement = async(start = CoroutineStart.UNDISPATCHED) {
+            AccountScopeInvalidations.forSource(GameSource.AMAZON).first()
+        }
+        AmazonAuthManager.saveCredentials(context, credentials(UUID.randomUUID().toString()))
+        assertEquals(Unit, replacement.await())
+
+        val removal = async(start = CoroutineStart.UNDISPATCHED) {
+            AccountScopeInvalidations.forSource(GameSource.AMAZON).first()
+        }
+        assertTrue(AmazonAuthManager.clearStoredCredentials(context))
+        assertEquals(Unit, removal.await())
     }
 
     @Test

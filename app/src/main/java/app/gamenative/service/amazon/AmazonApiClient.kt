@@ -39,16 +39,45 @@ object AmazonApiClient {
 
     // ── Public API ───────────────────────────────────────────────────────────
 
+    data class EntitlementsPage(
+        val games: List<AmazonGame>,
+        val nextToken: String?,
+    )
+
+    internal fun parseEntitlementsPage(
+        responseJson: JSONObject,
+        seenNextTokens: Set<String>,
+    ): Result<EntitlementsPage> = runCatching {
+        val entitlements = responseJson.optJSONArray("entitlements")
+            ?: error("MALFORMED_AMAZON_PAGE")
+        val games = buildList {
+            for (index in 0 until entitlements.length()) {
+                val entitlement = entitlements.optJSONObject(index)
+                    ?: error("MALFORMED_AMAZON_PAGE")
+                add(parseEntitlement(entitlement) ?: error("MALFORMED_AMAZON_PAGE"))
+            }
+        }
+        val nextToken = if (!responseJson.has("nextToken") || responseJson.isNull("nextToken")) {
+            null
+        } else {
+            val rawToken = responseJson.get("nextToken")
+            require(rawToken is String && rawToken.isNotBlank() && rawToken !in seenNextTokens) {
+                "MALFORMED_AMAZON_PAGE"
+            }
+            rawToken
+        }
+        EntitlementsPage(games = games, nextToken = nextToken)
+    }
+
     /** Fetch all owned-game entitlements for the authenticated user. */
     suspend fun getEntitlements(
         bearerToken: String,
         deviceSerial: String,
-    ): List<AmazonGame> = withContext(Dispatchers.IO) {
-        val games = mutableMapOf<String, AmazonGame>() // keyed by product id to deduplicate
+    ): Result<List<AmazonGame>> = withContext(Dispatchers.IO) {
+        val games = mutableMapOf<String, AmazonGame>()
         val hardwareHash = sha256Upper(deviceSerial)
+        val seenNextTokens = mutableSetOf<String>()
         var nextToken: String? = null
-
-        Timber.i("[Amazon] Fetching entitlements (hardwareHash=${hardwareHash.take(8)}…)")
 
         do {
             val requestBody = buildGetEntitlementsRequestBody(nextToken, hardwareHash)
@@ -57,29 +86,22 @@ object AmazonApiClient {
                 target = GET_ENTITLEMENTS_TARGET,
                 bearerToken = bearerToken,
                 body = requestBody,
-            ) ?: break
-
-            val entitlementsArray = responseJson.optJSONArray("entitlements")
-            if (entitlementsArray != null) {
-                for (i in 0 until entitlementsArray.length()) {
-                    val entitlement = entitlementsArray.getJSONObject(i)
-                    val game = parseEntitlement(entitlement) ?: continue
-                    // Deduplicate by product id (nile does the same)
-                    games[game.productId] = game
-                }
-                Timber.d("[Amazon] Page returned ${entitlementsArray.length()} entitlements, total so far: ${games.size}")
+            ) ?: return@withContext Result.failure(IllegalStateException("AMAZON_PAGE_FAILED"))
+            val page = parseEntitlementsPage(responseJson, seenNextTokens).getOrElse {
+                return@withContext Result.failure(IllegalStateException("MALFORMED_AMAZON_PAGE"))
             }
-
-            nextToken = if (responseJson.has("nextToken")) {
-                responseJson.getString("nextToken").also {
-                    Timber.d("[Amazon] Got nextToken, fetching next page…")
+            for (game in page.games) {
+                if (games.putIfAbsent(game.productId, game) != null) {
+                    return@withContext Result.failure(
+                        IllegalStateException("DUPLICATE_AMAZON_PRODUCT"),
+                    )
                 }
-            } else null
-
+            }
+            nextToken = page.nextToken
+            if (nextToken != null) seenNextTokens += nextToken
         } while (nextToken != null)
 
-        Timber.i("[Amazon] Fetched ${games.size} total entitlements")
-        games.values.toList()
+        Result.success(games.values.toList())
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
@@ -119,8 +141,7 @@ object AmazonApiClient {
 
             Net.http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "(no body)"
-                    Timber.e("[Amazon] HTTP ${response.code} from $url (target=${target.substringAfterLast('.')}): $errorBody")
+                    Timber.e("[Amazon] Request failed: HTTP ${response.code}")
                     return null
                 }
 
@@ -128,7 +149,7 @@ object AmazonApiClient {
                 JSONObject(responseText)
             }
         } catch (e: Exception) {
-            Timber.e(e, "[Amazon] POST to $url failed")
+            Timber.e("[Amazon] Request failed: ${e.javaClass.simpleName}")
             null
         }
     }
@@ -136,12 +157,14 @@ object AmazonApiClient {
     /** Parse one entitlement JSON object into an [AmazonGame]. */
     private fun parseEntitlement(entitlement: JSONObject): AmazonGame? {
         val product = entitlement.optJSONObject("product") ?: return null
-        val productId = product.optString("id", "").ifEmpty { return null }
+        val productId = product.opt("id") as? String ?: return null
+        if (productId.isBlank() || productId != productId.trim()) return null
         val title = product.optString("title", "")
         val purchasedDate = entitlement.optString("purchasedDate", "")
 
         // Top-level entitlement UUID  — needed for GetGameDownload, NOT the product ID
-        val entitlementId = entitlement.optString("id", "").ifEmpty { return null }
+        val entitlementId = entitlement.opt("id") as? String ?: return null
+        if (entitlementId.isBlank() || entitlementId != entitlementId.trim()) return null
 
         // productDetail sits between product and details:
         // product -> productDetail -> details

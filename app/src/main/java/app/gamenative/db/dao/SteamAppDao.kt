@@ -145,6 +145,16 @@ interface SteamAppDao {
     @Query("SELECT * FROM steam_app WHERE id = :appId")
     suspend fun findApp(appId: Int): SteamApp?
 
+    @Query(
+        "SELECT * FROM steam_app AS app " + OWNED_APPS_WHERE +
+            "AND app.id = :appId LIMIT 1",
+    )
+    suspend fun findOwnedApp(
+        appId: Int,
+        invalidPkgId: Int = INVALID_PKG_ID,
+        includeExpired: Int = 0,
+    ): SteamApp?
+
     /** Returns all Steam apps sorted by name. */
     @Query("SELECT * FROM steam_app ORDER BY name ASC")
     suspend fun getAllAsList(): List<SteamApp>

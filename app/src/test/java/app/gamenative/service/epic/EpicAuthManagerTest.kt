@@ -3,10 +3,18 @@ package app.gamenative.service.epic
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
+import app.gamenative.data.EpicCredentials
+import app.gamenative.data.GameSource
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import java.io.File
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -31,6 +39,45 @@ class EpicAuthManagerTest {
     @After
     fun tearDown() {
         tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun credentialReplacementAndRemovalEmitSourceOnlyInvalidations() = runTest {
+        val replacement = async(start = CoroutineStart.UNDISPATCHED) {
+            AccountScopeInvalidations.forSource(GameSource.EPIC).first()
+        }
+        EpicAuthManager.saveCredentials(
+            context,
+            EpicCredentials(
+                accessToken = "access",
+                refreshToken = "refresh",
+                accountId = "account",
+                displayName = "display",
+                expiresAt = 1L,
+            ),
+        )
+        assertEquals(Unit, replacement.await())
+
+        val removal = async(start = CoroutineStart.UNDISPATCHED) {
+            AccountScopeInvalidations.forSource(GameSource.EPIC).first()
+        }
+        assertEquals(true, EpicAuthManager.clearStoredCredentials(context))
+        assertEquals(Unit, removal.await())
+    }
+
+    @Test
+    fun staleGenerationCannotRecreateCredentialsAfterClear() {
+        val generation = EpicAuthManager.captureCredentialGeneration()
+
+        assertEquals(true, EpicAuthManager.clearStoredCredentials(context))
+        val saved = EpicAuthManager.saveCredentialsIfCurrent(
+            context = context,
+            credentials = credentials("account"),
+            expectedGeneration = generation,
+        )
+
+        assertFalse(saved)
+        assertFalse(credentialsFile().exists())
     }
 
     @Test
@@ -60,6 +107,14 @@ class EpicAuthManagerTest {
         credentialsFile.writeText(JSONObject().put("account_id", "").toString())
         assertNull(EpicAuthManager.getStoredAccountId(context))
     }
+
+    private fun credentials(accountId: String) = EpicCredentials(
+        accessToken = "access",
+        refreshToken = "refresh",
+        accountId = accountId,
+        displayName = "display",
+        expiresAt = 1L,
+    )
 
     private fun credentialsFile(): File {
         val directory = File(tempDir, "epic").also { it.mkdirs() }

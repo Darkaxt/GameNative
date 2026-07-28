@@ -2,6 +2,8 @@ package app.gamenative.service.amazon
 
 import android.content.Context
 import app.gamenative.data.AmazonCredentials
+import app.gamenative.data.GameSource
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import org.json.JSONObject
 import timber.log.Timber
 import java.io.File
@@ -47,6 +49,7 @@ object AmazonAuthManager {
         val challenge = AmazonPKCEGenerator.generateCodeChallenge(verifier)
 
         synchronized(credentialLifecycleLock) {
+            credentialGeneration++
             pendingCodeVerifier = verifier
             pendingDeviceSerial = serial
             pendingClientId = clientId
@@ -110,12 +113,15 @@ object AmazonAuthManager {
                 profileScopeId = UUID.randomUUID().toString(),
             )
 
-            if (!saveCredentialsIfCurrent(context, credentials, pending.generation)) {
+            if (!saveCredentialsIfCurrent(
+                    context = context,
+                    credentials = credentials,
+                    expectedGeneration = pending.generation,
+                    clearPendingAuthentication = true,
+                )
+            ) {
                 return Result.failure(IOException("Amazon credential lifecycle changed during authentication"))
             }
-
-            // Clear in-flight state
-            clearPendingStateIfCurrent(pending.generation)
 
             Timber.i("[Amazon] Authentication successful")
             Result.success(credentials)
@@ -130,9 +136,9 @@ object AmazonAuthManager {
     /** Return stored credentials, refreshing access token when needed. */
     suspend fun getStoredCredentials(context: Context): Result<AmazonCredentials> {
         return try {
-            val operationGeneration = captureCredentialGeneration()
             val credentials = loadCredentials(context)
                 ?: return Result.failure(Exception("No stored credentials found"))
+            val operationGeneration = captureCredentialGeneration()
 
             // Check expiration (5-minute buffer)
             val bufferMs = 5 * 60 * 1000L
@@ -164,6 +170,9 @@ object AmazonAuthManager {
                 return Result.success(refreshed)
             }
 
+            if (!isCredentialGenerationCurrent(operationGeneration)) {
+                return Result.failure(IOException("Amazon credential lifecycle changed while reading credentials"))
+            }
             Result.success(credentials)
         } catch (e: Exception) {
             Timber.e(e, "[Amazon] Error getting credentials: ${e.message}")
@@ -203,7 +212,9 @@ object AmazonAuthManager {
         clearPendingStateLocked()
         try {
             val file = File(getCredentialsFilePath(context))
-            if (file.exists()) file.delete() else true
+            val cleared = if (file.exists()) file.delete() else true
+            if (cleared) AccountScopeInvalidations.notifyChanged(GameSource.AMAZON)
+            cleared
         } catch (e: Exception) {
             Timber.e("[Amazon] Failed to clear credentials: ${e.javaClass.simpleName}")
             false
@@ -237,6 +248,8 @@ object AmazonAuthManager {
                     replaceFileAtomically(file) { output ->
                         output.write(json.toString().toByteArray(Charsets.UTF_8))
                     }
+                    credentialGeneration++
+                    AccountScopeInvalidations.notifyChanged(GameSource.AMAZON)
                 }
             }
         }.onFailure { error ->
@@ -249,14 +262,6 @@ object AmazonAuthManager {
 
     // ── Private helpers ─────────────────────────────────────────────────────
 
-    private fun clearPendingStateIfCurrent(expectedGeneration: Long) {
-        synchronized(credentialLifecycleLock) {
-            if (credentialGeneration == expectedGeneration) {
-                clearPendingStateLocked()
-            }
-        }
-    }
-
     private fun clearPendingStateLocked() {
         pendingCodeVerifier = null
         pendingDeviceSerial = null
@@ -266,6 +271,11 @@ object AmazonAuthManager {
     internal fun captureCredentialGeneration(): Long = synchronized(credentialLifecycleLock) {
         credentialGeneration
     }
+
+    private fun isCredentialGenerationCurrent(expectedGeneration: Long): Boolean =
+        synchronized(credentialLifecycleLock) {
+            credentialGeneration == expectedGeneration
+        }
 
     internal fun saveCredentials(context: Context, credentials: AmazonCredentials) {
         val expectedGeneration = captureCredentialGeneration()
@@ -278,11 +288,20 @@ object AmazonAuthManager {
         context: Context,
         credentials: AmazonCredentials,
         expectedGeneration: Long,
+        clearPendingAuthentication: Boolean = false,
     ): Boolean = synchronized(credentialLifecycleLock) {
         if (credentialGeneration != expectedGeneration) return@synchronized false
 
         require(UUID.fromString(credentials.profileScopeId).toString() == credentials.profileScopeId)
 
+        val file = File(getCredentialsFilePath(context))
+        val priorProfileScopeId = runCatching {
+            if (file.isFile) {
+                JSONObject(file.readText()).optString("profile_scope_id").ifBlank { null }
+            } else {
+                null
+            }
+        }.getOrNull()
         val json = JSONObject().apply {
             put("access_token", credentials.accessToken)
             put("refresh_token", credentials.refreshToken)
@@ -292,9 +311,15 @@ object AmazonAuthManager {
             put("profile_scope_id", credentials.profileScopeId)
         }
 
-        val file = File(getCredentialsFilePath(context))
         replaceFileAtomically(file) { output ->
             output.write(json.toString().toByteArray(Charsets.UTF_8))
+        }
+        if (clearPendingAuthentication) clearPendingStateLocked()
+        if (priorProfileScopeId != credentials.profileScopeId || clearPendingAuthentication) {
+            credentialGeneration++
+        }
+        if (priorProfileScopeId != credentials.profileScopeId) {
+            AccountScopeInvalidations.notifyChanged(GameSource.AMAZON)
         }
         Timber.d("[Amazon] Credentials saved")
         true

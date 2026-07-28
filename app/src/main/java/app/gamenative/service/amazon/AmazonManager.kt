@@ -2,7 +2,10 @@ package app.gamenative.service.amazon
 
 import android.content.Context
 import app.gamenative.data.AmazonGame
+import app.gamenative.data.GameSource
 import app.gamenative.db.dao.AmazonGameDao
+import app.gamenative.library.canonical.AccountScopedOwnershipLedger
+import app.gamenative.library.canonical.MaterializedOwnedCopySnapshot
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -14,32 +17,29 @@ import javax.inject.Singleton
 @Singleton
 class AmazonManager @Inject constructor(
     private val amazonGameDao: AmazonGameDao,
+    private val ownershipLedger: AccountScopedOwnershipLedger,
     @ApplicationContext private val context: Context,
 ) {
 
-    /** Refresh the Amazon library from API and persist it in DB. */
-    suspend fun refreshLibrary() = withContext(Dispatchers.IO) {
-        Timber.i("[Amazon] Starting library refresh…")
-
-        val credentialsResult = AmazonAuthManager.getStoredCredentials(context)
-        if (credentialsResult.isFailure) {
-            Timber.w("[Amazon] No stored credentials — ${credentialsResult.exceptionOrNull()?.message}")
-            return@withContext
+    /** Refresh the Amazon library from API and persist one complete ownership snapshot. */
+    suspend fun refreshLibrary(): Result<Int> = withContext(Dispatchers.IO) {
+        ownershipLedger.runCompleteSnapshot(GameSource.AMAZON) {
+            val credentials = AmazonAuthManager.getStoredCredentials(context).getOrThrow()
+            val games = AmazonApiClient.getEntitlements(
+                bearerToken = credentials.accessToken,
+                deviceSerial = credentials.deviceSerial,
+            ).getOrThrow()
+            amazonGameDao.upsertPreservingInstallStatus(games)
+            val stableSourceIds = games.map { it.productId }
+            require(stableSourceIds.size == stableSourceIds.toSet().size)
+            val persistedIds = amazonGameDao.getAllAsList().map { it.productId }.toSet()
+            require(stableSourceIds.all(persistedIds::contains))
+            MaterializedOwnedCopySnapshot(
+                value = games.size,
+                stableSourceIds = stableSourceIds,
+                resolvedSourceIds = games.associate { it.productId to it.entitlementId },
+            )
         }
-        val credentials = credentialsResult.getOrNull()!!
-
-        val games = AmazonApiClient.getEntitlements(
-            bearerToken = credentials.accessToken,
-            deviceSerial = credentials.deviceSerial,
-        )
-
-        if (games.isEmpty()) {
-            Timber.w("[Amazon] No entitlements returned from API")
-            return@withContext
-        }
-
-        amazonGameDao.upsertPreservingInstallStatus(games)
-        Timber.i("[Amazon] Library refresh complete — ${games.size} game(s) in DB")
     }
 
     /** Look up a game by product ID. */

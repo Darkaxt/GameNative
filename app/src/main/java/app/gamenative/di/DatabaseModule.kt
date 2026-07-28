@@ -113,4 +113,8 @@ class DatabaseModule {
     @Provides
     @Singleton
     fun provideGameDetailSnapshotDao(db: PluviaDatabase) = db.gameDetailSnapshotDao()
+
+    @Provides
+    @Singleton
+    fun provideOwnedCopyLedgerDao(db: PluviaDatabase) = db.ownedCopyLedgerDao()
 }

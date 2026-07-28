@@ -29,6 +29,8 @@ import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
 import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.CanonicalGameTagCrossRef
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
+import app.gamenative.data.canonical.OwnedCopyPresenceEntity
+import app.gamenative.data.canonical.OwnedCopySyncEntity
 import app.gamenative.data.canonical.SteamTagDictionaryEntity
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.converters.AppConverter
@@ -53,6 +55,7 @@ import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.db.dao.GameDetailSnapshotDao
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.ModDao
+import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.db.dao.SteamAppDao
 import app.gamenative.db.dao.SteamFileHashCacheDao
 import app.gamenative.db.dao.SteamLicenseDao
@@ -90,6 +93,8 @@ const val DATABASE_NAME = "pluvia.db"
         CanonicalGameFeatureCrossRef::class,
         SteamTagDictionaryEntity::class,
         GameDetailSnapshotEntity::class,
+        OwnedCopySyncEntity::class,
+        OwnedCopyPresenceEntity::class,
     ],
     version = 26,
     // For db migration, visit https://developer.android.com/training/data-storage/room/migrating-db-versions for more information
@@ -167,4 +172,6 @@ abstract class PluviaDatabase : RoomDatabase() {
     abstract fun canonicalFacetDao(): CanonicalFacetDao
 
     abstract fun gameDetailSnapshotDao(): GameDetailSnapshotDao
+
+    abstract fun ownedCopyLedgerDao(): OwnedCopyLedgerDao
 }

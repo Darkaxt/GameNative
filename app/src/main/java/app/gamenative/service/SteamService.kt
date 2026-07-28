@@ -50,6 +50,7 @@ import app.gamenative.enums.SaveLocation
 import app.gamenative.enums.SyncResult
 import app.gamenative.events.AndroidEvent
 import app.gamenative.events.SteamEvent
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.utils.CaseInsensitiveFileSystem
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.FileUtils
@@ -3736,6 +3737,7 @@ class SteamService : Service(), IChallengeUrlChanged {
             val steamId64 = userSteamId!!.convertToUInt64()
             if (PrefManager.steamUserSteamId64 != steamId64) {
                 PrefManager.steamUserSteamId64 = steamId64
+                AccountScopeInvalidations.notifyChanged(GameSource.STEAM)
                 Timber.d("Saving logged in Steam ID64 $steamId64")
             }
         }

@@ -3,15 +3,25 @@ package app.gamenative.service.epic
 import android.content.Context
 import app.gamenative.data.EpicCredentials
 import app.gamenative.data.EpicGameToken
+import app.gamenative.data.GameSource
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.utils.sanitizeForFilename
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.security.MessageDigest
 import org.json.JSONObject
 import timber.log.Timber
-import java.io.File
 
 /**
  * Manages Epic Games authentication and account operations.
  */
 object EpicAuthManager {
+    private val credentialLifecycleLock = Any()
+    private var credentialGeneration = 0L
 
     // Denuvo ownership tokens are valid ~30 minutes and the endpoint is rate-limited
     // (~5 requests / 24h / game). Cache to disk and re-use a few minutes under the
@@ -26,27 +36,54 @@ object EpicAuthManager {
         return File(dir, "credentials.json").absolutePath
     }
 
-    private fun ownershipTokenCacheFile(context: Context, namespace: String, catalogItemId: String): File {
-        val dir = File(context.filesDir, "epic/ownership_tokens").also { it.mkdirs() }
+    private fun ownershipTokenCacheFile(
+        context: Context,
+        accountId: String,
+        namespace: String,
+        catalogItemId: String,
+    ): File {
+        val accountCacheKey = MessageDigest.getInstance("SHA-256")
+            .digest(
+                ("gamenative-epic-token-cache-v1" + 0.toChar() + accountId)
+                    .toByteArray(Charsets.UTF_8),
+            )
+            .joinToString("") { "%02x".format(it) }
+        val dir = File(context.filesDir, "epic/ownership_tokens/$accountCacheKey").also { it.mkdirs() }
         return File(dir, "${namespace.sanitizeForFilename()}_${catalogItemId.sanitizeForFilename()}.hex")
     }
 
-    private fun readCachedOwnershipTokenHex(context: Context, namespace: String, catalogItemId: String): String? {
-        val file = ownershipTokenCacheFile(context, namespace, catalogItemId)
+    private fun readCachedOwnershipTokenHex(
+        context: Context,
+        accountId: String,
+        namespace: String,
+        catalogItemId: String,
+    ): String? {
+        val file = ownershipTokenCacheFile(context, accountId, namespace, catalogItemId)
         if (!file.exists()) return null
         if (System.currentTimeMillis() - file.lastModified() >= OWNERSHIP_TOKEN_CACHE_TTL_MS) return null
         return runCatching { file.readText().trim().takeIf { it.isNotEmpty() } }.getOrNull()
     }
 
-    private fun writeOwnershipTokenHex(context: Context, namespace: String, catalogItemId: String, hex: String) {
+    private fun writeOwnershipTokenHex(
+        context: Context,
+        accountId: String,
+        namespace: String,
+        catalogItemId: String,
+        hex: String,
+        expectedGeneration: Long,
+    ): Boolean = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration) return@synchronized false
         runCatching {
-            ownershipTokenCacheFile(context, namespace, catalogItemId).writeText(hex)
-        }.onFailure { Timber.tag("Epic").w(it, "Failed caching ownership token for $namespace:$catalogItemId") }
+            ownershipTokenCacheFile(context, accountId, namespace, catalogItemId).writeText(hex)
+        }.onFailure { Timber.tag("Epic").w(it, "Failed caching ownership token") }
+            .isSuccess
     }
 
     private fun clearOwnershipTokenCache(context: Context) {
         runCatching {
-            File(context.filesDir, "epic/ownership_tokens").listFiles()?.forEach { it.delete() }
+            File(context.filesDir, "epic/ownership_tokens")
+                .listFiles()
+                ?.forEach(File::deleteRecursively)
         }.onFailure { Timber.tag("Epic").w(it, "Failed clearing ownership token cache") }
     }
 
@@ -56,38 +93,40 @@ object EpicAuthManager {
     }
 
     /** Reads only the locally stored account ID. This never validates or refreshes credentials. */
-    internal fun getStoredAccountId(context: Context): String? {
-        val file = File(context.filesDir, "epic/credentials.json")
-        if (!file.isFile) return null
+    internal fun getStoredAccountId(context: Context): String? =
+        synchronized(credentialLifecycleLock) {
+            val file = File(context.filesDir, "epic/credentials.json")
+            if (!file.isFile) return@synchronized null
 
-        return runCatching {
-            JSONObject(file.readText())
-                .optString("account_id")
-                .takeIf(String::isNotBlank)
-        }.onFailure { error ->
-            Timber.tag("Epic").w(
-                "Unable to read local account identity: %s",
-                error.javaClass.simpleName,
-            )
-        }.getOrNull()
-    }
+            runCatching {
+                JSONObject(file.readText())
+                    .optString("account_id")
+                    .takeIf(String::isNotBlank)
+            }.onFailure { error ->
+                Timber.tag("Epic").w(
+                    "Unable to read local account identity: %s",
+                    error.javaClass.simpleName,
+                )
+            }.getOrNull()
+        }
 
     /**
      * Clear stored credentials (logout)
      */
     fun clearStoredCredentials(context: Context): Boolean {
-        return try {
+        val cleared = synchronized(credentialLifecycleLock) {
+            credentialGeneration++
             clearOwnershipTokenCache(context)
-            val authFile = File(getCredentialsFilePath(context))
-            if (authFile.exists()) {
-                authFile.delete()
-            } else {
-                true
+            try {
+                val authFile = File(getCredentialsFilePath(context))
+                if (authFile.exists()) authFile.delete() else true
+            } catch (error: Exception) {
+                Timber.e(error, "Failed to clear Epic credentials")
+                false
             }
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to clear Epic credentials")
-            false
         }
+        if (cleared) AccountScopeInvalidations.notifyChanged(GameSource.EPIC)
+        return cleared
     }
 
     /**
@@ -115,6 +154,7 @@ object EpicAuthManager {
      * @return Result containing EpicCredentials on success, exception on failure
      */
     suspend fun authenticateWithCode(context: Context, authorizationCode: String): Result<EpicCredentials> {
+        val operationGeneration = captureCredentialGeneration()
         return try {
             Timber.i("Starting Epic authentication with authorization code...")
 
@@ -146,7 +186,11 @@ object EpicAuthManager {
                 expiresAt = authResponse.expiresAt
             )
 
-            saveCredentials(context, credentials)
+            if (!saveCredentialsIfCurrent(context, credentials, operationGeneration)) {
+                return Result.failure(
+                    IOException("Epic credential lifecycle changed during authentication"),
+                )
+            }
 
             Timber.i("Epic authentication successful: ${credentials.displayName}")
             Result.success(credentials)
@@ -157,6 +201,7 @@ object EpicAuthManager {
     }
 
     suspend fun getStoredCredentials(context: Context): Result<EpicCredentials> {
+        val operationGeneration = captureCredentialGeneration()
         return try {
             if (!hasStoredCredentials(context)) {
                 return Result.failure(Exception("No stored credentials found"))
@@ -183,6 +228,9 @@ object EpicAuthManager {
                 }
 
                 val authResponse = refreshResult.getOrNull()!!
+                require(authResponse.accountId == credentials.accountId) {
+                    "Epic refresh changed account identity"
+                }
                 val refreshedCredentials = EpicCredentials(
                     accessToken = authResponse.accessToken,
                     refreshToken = authResponse.refreshToken,
@@ -191,12 +239,21 @@ object EpicAuthManager {
                     expiresAt = authResponse.expiresAt
                 )
 
-                saveCredentials(context, refreshedCredentials)
+                if (!saveCredentialsIfCurrent(context, refreshedCredentials, operationGeneration)) {
+                    return Result.failure(
+                        IOException("Epic credential lifecycle changed during refresh"),
+                    )
+                }
                 Timber.i("Access token refreshed successfully")
 
                 return Result.success(refreshedCredentials)
             }
 
+            if (!isCredentialGenerationCurrent(operationGeneration)) {
+                return Result.failure(
+                    IOException("Epic credential lifecycle changed while reading credentials"),
+                )
+            }
             Result.success(credentials)
         } catch (e: Exception) {
             Timber.e(e, "Error getting Epic credentials: ${e.message}")
@@ -215,6 +272,7 @@ object EpicAuthManager {
         catalogItemId: String? = null,
         requiresOwnershipToken: Boolean = false
     ): Result<EpicGameToken> {
+        val operationGeneration = captureCredentialGeneration()
         return try {
             // Get current valid credentials (will refresh if expired)
             val credentialsResult = getStoredCredentials(context)
@@ -223,6 +281,9 @@ object EpicAuthManager {
             }
 
             val credentials = credentialsResult.getOrNull()!!
+            if (!isCredentialGenerationCurrent(operationGeneration)) {
+                return Result.failure(IOException("Epic credential lifecycle changed before launch token"))
+            }
 
             // Get game exchange token (required for all games)
             Timber.d("Getting game exchange token for launch...")
@@ -239,7 +300,12 @@ object EpicAuthManager {
                     return Result.failure(Exception("Namespace and catalogItemId required for ownership token"))
                 }
 
-                val cachedHex = readCachedOwnershipTokenHex(context, namespace, catalogItemId)
+                val cachedHex = readCachedOwnershipTokenHex(
+                    context,
+                    credentials.accountId,
+                    namespace,
+                    catalogItemId,
+                )
                 if (cachedHex != null) {
                     Timber.d("Using cached ownership token for $namespace:$catalogItemId")
                     ownershipTokenHex = cachedHex
@@ -263,12 +329,34 @@ object EpicAuthManager {
                         // Use toInt() and 0xFF to prevent sign extension of negative bytes
                         val tokenBytes = ownershipResult.getOrNull()!!
                         ownershipTokenHex = tokenBytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
-                        writeOwnershipTokenHex(context, namespace, catalogItemId, ownershipTokenHex)
+                        if (!isCredentialGenerationCurrent(operationGeneration)) {
+                            return Result.failure(
+                                IOException("Epic credential lifecycle changed during ownership token"),
+                            )
+                        }
+                        val cached = writeOwnershipTokenHex(
+                            context = context,
+                            accountId = credentials.accountId,
+                            namespace = namespace,
+                            catalogItemId = catalogItemId,
+                            hex = ownershipTokenHex,
+                            expectedGeneration = operationGeneration,
+                        )
+                        if (!cached) {
+                            return Result.failure(
+                                IOException("Epic credential lifecycle changed during ownership token"),
+                            )
+                        }
                         Timber.d("Ownership token obtained (${tokenBytes.size} bytes) and cached")
                     }
                 }
             }
 
+            if (!isCredentialGenerationCurrent(operationGeneration)) {
+                return Result.failure(
+                    IOException("Epic credential lifecycle changed during launch token"),
+                )
+            }
             val gameToken = EpicGameToken(
                 authCode = exchangeCode,
                 accountId = credentials.accountId,
@@ -284,22 +372,41 @@ object EpicAuthManager {
         }
     }
 
-    suspend fun logout(context: Context): Result<Unit> {
-        return try {
-            clearOwnershipTokenCache(context)
-            val credentialsFile = File(getCredentialsFilePath(context))
-            if (credentialsFile.exists()) {
-                credentialsFile.delete()
-                Timber.i("Epic credentials cleared")
-            }
+    suspend fun logout(context: Context): Result<Unit> =
+        if (clearStoredCredentials(context)) {
+            Timber.i("Epic credentials cleared")
             Result.success(Unit)
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to clear Epic credentials")
-            Result.failure(e)
+        } else {
+            Result.failure(IOException("Unable to delete Epic credentials"))
+        }
+
+    internal fun captureCredentialGeneration(): Long = synchronized(credentialLifecycleLock) {
+        credentialGeneration
+    }
+
+    private fun isCredentialGenerationCurrent(expectedGeneration: Long): Boolean =
+        synchronized(credentialLifecycleLock) {
+            credentialGeneration == expectedGeneration
+        }
+
+    internal fun saveCredentials(context: Context, credentials: EpicCredentials) {
+        val expectedGeneration = captureCredentialGeneration()
+        check(saveCredentialsIfCurrent(context, credentials, expectedGeneration)) {
+            "Epic credential lifecycle changed while saving credentials"
         }
     }
 
-    private fun saveCredentials(context: Context, credentials: EpicCredentials) {
+    internal fun saveCredentialsIfCurrent(
+        context: Context,
+        credentials: EpicCredentials,
+        expectedGeneration: Long,
+    ): Boolean = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration) return@synchronized false
+
+        val file = File(getCredentialsFilePath(context))
+        val priorAccountId = runCatching {
+            if (file.isFile) JSONObject(file.readText()).optString("account_id").ifBlank { null } else null
+        }.getOrNull()
         val json = JSONObject().apply {
             put("access_token", credentials.accessToken)
             put("refresh_token", credentials.refreshToken)
@@ -308,31 +415,63 @@ object EpicAuthManager {
             put("expires_at", credentials.expiresAt)
         }
 
-        val file = File(getCredentialsFilePath(context))
-        file.writeText(json.toString())
+        replaceFileAtomically(file) { output ->
+            output.write(json.toString().toByteArray(Charsets.UTF_8))
+        }
+        if (priorAccountId != credentials.accountId) {
+            credentialGeneration++
+            AccountScopeInvalidations.notifyChanged(GameSource.EPIC)
+        }
 
-        Timber.d("Credentials saved to ${file.absolutePath}")
+        Timber.d("Credentials saved")
+        true
     }
 
-    private fun loadCredentials(context: Context): EpicCredentials? {
-        return try {
-            val file = File(getCredentialsFilePath(context))
-            if (!file.exists()) {
-                return null
+    private fun loadCredentials(context: Context): EpicCredentials? =
+        synchronized(credentialLifecycleLock) {
+            try {
+                val file = File(getCredentialsFilePath(context))
+                if (!file.exists()) return@synchronized null
+
+                val json = JSONObject(file.readText())
+                EpicCredentials(
+                    accessToken = json.getString("access_token"),
+                    refreshToken = json.getString("refresh_token"),
+                    accountId = json.getString("account_id"),
+                    displayName = json.getString("display_name"),
+                    expiresAt = json.getLong("expires_at"),
+                )
+            } catch (error: Exception) {
+                Timber.e(error, "Failed to load credentials")
+                null
             }
+        }
 
-            val json = JSONObject(file.readText())
+    internal fun replaceFileAtomically(
+        file: File,
+        writeContents: (FileOutputStream) -> Unit,
+    ) {
+        val parent = requireNotNull(file.parentFile) { "Atomic replacement requires a parent directory" }
+        parent.mkdirs()
+        val temporaryFile = Files.createTempFile(
+            parent.toPath(),
+            "${file.name}.",
+            ".tmp",
+        ).toFile()
 
-            EpicCredentials(
-                accessToken = json.getString("access_token"),
-                refreshToken = json.getString("refresh_token"),
-                accountId = json.getString("account_id"),
-                displayName = json.getString("display_name"),
-                expiresAt = json.getLong("expires_at")
+        try {
+            FileOutputStream(temporaryFile).use { output ->
+                writeContents(output)
+                output.fd.sync()
+            }
+            Files.move(
+                temporaryFile.toPath(),
+                file.toPath(),
+                ATOMIC_MOVE,
+                REPLACE_EXISTING,
             )
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to load credentials")
-            null
+        } finally {
+            temporaryFile.delete()
         }
     }
 }
