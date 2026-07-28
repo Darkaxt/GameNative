@@ -17,6 +17,8 @@ data class OwnedCopySyncEntity(
     val source: GameSource,
     @ColumnInfo("completed_at")
     val completedAt: Long,
+    @ColumnInfo(name = "lifecycle_generation", defaultValue = "-1")
+    val lifecycleGeneration: Long,
 )
 
 @Entity(

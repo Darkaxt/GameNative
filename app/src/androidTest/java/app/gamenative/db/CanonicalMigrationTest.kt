@@ -14,6 +14,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.gamenative.db.migration.PLUVIA_EXPLICIT_MIGRATIONS
 import app.gamenative.db.migration.ROOM_MIGRATION_V25_to_V26
+import app.gamenative.db.migration.ROOM_MIGRATION_V26_to_V27
 import app.gamenative.db.migration.UNSUPPORTED_PRESERVATION_VERSIONS
 import app.gamenative.db.migration.configurePluviaDatabaseMigrations
 import app.gamenative.diagnostics.DiagnosticArea
@@ -33,6 +34,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 private const val V25_TO_V26_PENDING_SUCCESS_ID = -26
+private const val V26_TO_V27_PENDING_SUCCESS_ID = -27
 
 @RunWith(AndroidJUnit4::class)
 class CanonicalMigrationTest {
@@ -45,21 +47,21 @@ class CanonicalMigrationTest {
     @Test
     fun testBuilderSharesTheProductionExplicitMigrationConfiguration() {
         assertEquals(
-            listOf(23 to 24, 24 to 25, 25 to 26),
+            listOf(23 to 24, 24 to 25, 25 to 26, 26 to 27),
             PLUVIA_EXPLICIT_MIGRATIONS.map { it.startVersion to it.endVersion },
         )
         assertArrayEquals((7..16).toList().toIntArray(), UNSUPPORTED_PRESERVATION_VERSIONS)
     }
 
     @Test
-    fun emptySchemasFromEverySupportedVersionReach26() {
-        (17..25).forEach { startVersion ->
+    fun emptySchemasFromEverySupportedVersionReach27() {
+        (17..26).forEach { startVersion ->
             val name = "canonical-supported-$startVersion"
             migrationHelper.createDatabase(name, startVersion).close()
 
             val database = openAtCurrentVersion(name)
             try {
-                assertEquals(26, database.openHelper.writableDatabase.version)
+                assertEquals(27, database.openHelper.writableDatabase.version)
             } finally {
                 database.close()
             }
@@ -67,7 +69,7 @@ class CanonicalMigrationTest {
     }
 
     @Test
-    fun populatedOldestSupportedV17RowSurvivesToV26() {
+    fun populatedOldestSupportedV17RowSurvivesToV27() {
         val name = "canonical-v17-preservation"
         migrationHelper.createDatabase(name, 17).use { database ->
             database.execSQL(
@@ -191,6 +193,46 @@ class CanonicalMigrationTest {
             assertEquals("0", columns.getValue("primary_genre_id"))
             assertEquals("0", columns.getValue("pics_parse_version"))
             assertTrue(columns.containsKey("primary_genre"))
+            assertEquals(
+                "-1",
+                database.tableColumns("owned_copy_sync").getValue("lifecycle_generation"),
+            )
+        }
+    }
+
+    @Test
+    fun v26LedgerRowsMigrateFailClosedWithPresenceRetained() {
+        val name = "canonical-v26-lifecycle-generation"
+        val accountScope = "a".repeat(64)
+        migrationHelper.createDatabase(name, 26).use { database ->
+            database.execSQL(
+                "INSERT INTO `owned_copy_sync` (`account_scope`, `source`, `completed_at`) " +
+                    "VALUES (?, 'GOG', 1)",
+                arrayOf<Any>(accountScope),
+            )
+            database.execSQL(
+                "INSERT INTO `owned_copy_presence` " +
+                    "(`account_scope`, `source`, `stable_source_id`) VALUES (?, 'GOG', 'owned')",
+                arrayOf<Any>(accountScope),
+            )
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            name,
+            27,
+            true,
+            ROOM_MIGRATION_V26_to_V27,
+        ).use { database ->
+            database.query(
+                "SELECT `lifecycle_generation` FROM `owned_copy_sync` " +
+                    "WHERE `account_scope` = ? AND `source` = 'GOG'",
+                arrayOf(accountScope),
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(-1L, cursor.getLong(0))
+                assertFalse(cursor.moveToNext())
+            }
+            assertEquals(1, database.rowCount("owned_copy_presence"))
         }
     }
 
@@ -337,7 +379,7 @@ class CanonicalMigrationTest {
         val roomDatabase = openAtCurrentVersion(name)
         try {
             val database = roomDatabase.openHelper.writableDatabase
-            assertEquals(26, database.version)
+            assertEquals(27, database.version)
             assertEquals(0, database.rowCount("app_change_numbers"))
             CANONICAL_TABLES.forEach { table -> assertTrue(database.hasTable(table)) }
             assertFalse(database.hasTable(DESTRUCTIVE_DIAGNOSTICS_MARKER_TABLE))
@@ -353,8 +395,8 @@ class CanonicalMigrationTest {
         events.forEach { event ->
             assertEquals(
                 mapOf(
-                    DiagnosticAttribute.MIGRATION.wireName to "7_to_16_to_26",
-                    DiagnosticAttribute.DB_VERSION.wireName to "26",
+                    DiagnosticAttribute.MIGRATION.wireName to "7_to_16_to_27",
+                    DiagnosticAttribute.DB_VERSION.wireName to "27",
                     DiagnosticAttribute.REASON.wireName to "destructive_recovery",
                 ),
                 event.attributes,
@@ -431,7 +473,7 @@ class CanonicalMigrationTest {
     }
 
     @Test
-    fun v25SuccessMarkerRetriesUntilAppendIsAcknowledged() {
+    fun chainedV25SuccessMarkersRetryUntilAppendIsAcknowledged() {
         val name = "canonical-v25-diagnostics-retry"
         migrationHelper.createDatabase(name, 25).close()
         resetDiagnostics()
@@ -439,7 +481,9 @@ class CanonicalMigrationTest {
 
         val firstOpen = openAtCurrentVersion(name)
         try {
-            assertTrue(firstOpen.openHelper.writableDatabase.hasV25ToV26PendingSuccess())
+            val database = firstOpen.openHelper.writableDatabase
+            assertTrue(database.hasV25ToV26PendingSuccess())
+            assertTrue(database.hasV26ToV27PendingSuccess())
         } finally {
             firstOpen.close()
             assertTrue(appendBlocker.delete())
@@ -448,11 +492,16 @@ class CanonicalMigrationTest {
 
         val retryOpen = openAtCurrentVersion(name)
         try {
-            assertFalse(retryOpen.openHelper.writableDatabase.hasV25ToV26PendingSuccess())
+            val database = retryOpen.openHelper.writableDatabase
+            assertFalse(database.hasV25ToV26PendingSuccess())
+            assertFalse(database.hasV26ToV27PendingSuccess())
         } finally {
             retryOpen.close()
         }
-        assertEquals(listOf(DiagnosticOutcome.SUCCEEDED), databaseMigrationEvents().map { it.outcome })
+        assertEquals(
+            listOf(DiagnosticOutcome.SUCCEEDED, DiagnosticOutcome.SUCCEEDED),
+            databaseMigrationEvents().map { it.outcome },
+        )
     }
 
     @Test
@@ -464,14 +513,27 @@ class CanonicalMigrationTest {
         openAtCurrentVersion(name).close()
 
         val events = databaseMigrationEvents()
-        assertEquals(listOf(DiagnosticOutcome.STARTED, DiagnosticOutcome.SUCCEEDED), events.map { it.outcome })
+        assertEquals(
+            listOf(
+                DiagnosticOutcome.STARTED,
+                DiagnosticOutcome.STARTED,
+                DiagnosticOutcome.SUCCEEDED,
+                DiagnosticOutcome.SUCCEEDED,
+            ),
+            events.map { it.outcome },
+        )
+        assertEquals(
+            listOf("25_to_26", "26_to_27", "25_to_26", "26_to_27"),
+            events.map { it.attributes.getValue(DiagnosticAttribute.MIGRATION.wireName) },
+        )
         events.forEach { event ->
+            assertEquals("27", event.attributes[DiagnosticAttribute.DB_VERSION.wireName])
             assertEquals(
-                mapOf(
-                    DiagnosticAttribute.MIGRATION.wireName to "25_to_26",
-                    DiagnosticAttribute.DB_VERSION.wireName to "26",
+                setOf(
+                    DiagnosticAttribute.MIGRATION.wireName,
+                    DiagnosticAttribute.DB_VERSION.wireName,
                 ),
-                event.attributes,
+                event.attributes.keys,
             )
         }
     }
@@ -527,7 +589,7 @@ class CanonicalMigrationTest {
             assertEquals(
                 mapOf(
                     DiagnosticAttribute.MIGRATION.wireName to "25_to_26",
-                    DiagnosticAttribute.DB_VERSION.wireName to "26",
+                    DiagnosticAttribute.DB_VERSION.wireName to "27",
                 ),
                 event.attributes,
             )
@@ -536,7 +598,7 @@ class CanonicalMigrationTest {
             assertEquals(
                 mapOf(
                     DiagnosticAttribute.MIGRATION.wireName to "25_to_26",
-                    DiagnosticAttribute.DB_VERSION.wireName to "26",
+                    DiagnosticAttribute.DB_VERSION.wireName to "27",
                     DiagnosticAttribute.ERROR_TYPE.wireName to thrown.causeChainMigrationErrorType(),
                 ),
                 event.attributes,
@@ -560,7 +622,7 @@ class CanonicalMigrationTest {
         migrationHelper.createDatabase(name, 25).close()
         return migrationHelper.runMigrationsAndValidate(
             name,
-            26,
+            27,
             true,
             *PLUVIA_EXPLICIT_MIGRATIONS.toTypedArray(),
         )
@@ -683,6 +745,14 @@ private fun SupportSQLiteDatabase.hasV25ToV26PendingSuccess(): Boolean =
     query(
         "SELECT 1 FROM `room_master_table` WHERE `id` = ? LIMIT 1",
         arrayOf(V25_TO_V26_PENDING_SUCCESS_ID),
+    ).use { cursor ->
+        cursor.moveToFirst()
+    }
+
+private fun SupportSQLiteDatabase.hasV26ToV27PendingSuccess(): Boolean =
+    query(
+        "SELECT 1 FROM `room_master_table` WHERE `id` = ? LIMIT 1",
+        arrayOf(V26_TO_V27_PENDING_SUCCESS_ID),
     ).use { cursor ->
         cursor.moveToFirst()
     }

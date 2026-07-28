@@ -6,6 +6,7 @@ import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.AmazonGameDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
+import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
 import javax.inject.Inject
@@ -20,6 +21,7 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
     private val amazonGameDao: AmazonGameDao,
     private val accountScopeProvider: AccountScopeProvider,
     private val ownedCopyLedgerDao: OwnedCopyLedgerDao,
+    private val accountLifecycleState: AccountLifecycleState = AccountScopeInvalidations,
 ) : OwnedCopySourceAdapter {
     override val source: GameSource = GameSource.AMAZON
 
@@ -37,11 +39,14 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
         } catch (error: Exception) {
             return sourceReadFailed(source, null, error)
         } ?: return missingAccountScope(source)
-        val accountGeneration = AccountScopeInvalidations.generation(source)
+        val accountGeneration = accountLifecycleState.generation(source)
 
         return try {
-            val ledger = ownedCopyLedgerDao.getCompletedSnapshot(accountScope.value, source)
-                ?: return presenceLedgerNotReady(source, accountScope)
+            val ledger = ownedCopyLedgerDao.getCompletedSnapshotForLifecycle(
+                accountScope = accountScope.value,
+                source = source,
+                lifecycleGeneration = accountGeneration,
+            ) ?: return presenceLedgerNotReady(source, accountScope)
             val rowsById = if (ledger.stableSourceIds.isEmpty()) {
                 emptyMap()
             } else {
@@ -65,7 +70,14 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
                     appType = CanonicalAppType.GAME,
                 )
             }
-            if (!accountScopeProvider.isAccountScopeUnchanged(source, accountScope, accountGeneration)) {
+            if (
+                !accountScopeProvider.isAccountScopeUnchanged(
+                    source,
+                    accountScope,
+                    accountGeneration,
+                    accountLifecycleState,
+                )
+            ) {
                 accountScopeChanged(source)
             } else {
                 sourceBatch(
@@ -85,16 +97,24 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
     override suspend fun resolve(key: OwnedCopyKey): SourceOwnedCopyReference? {
         if (key.source != source) return null
         val currentScope = accountScopeProvider.current(source) ?: return null
-        val accountGeneration = AccountScopeInvalidations.generation(source)
+        val accountGeneration = accountLifecycleState.generation(source)
         if (key.accountScope != currentScope) return null
-        val presence = ownedCopyLedgerDao.getPresence(
-            currentScope.value,
-            source,
-            key.stableSourceId,
+        val presence = ownedCopyLedgerDao.getPresenceForLifecycle(
+            accountScope = currentScope.value,
+            source = source,
+            stableSourceId = key.stableSourceId,
+            lifecycleGeneration = accountGeneration,
         ) ?: return null
         val entitlementId = presence.resolvedSourceId ?: return null
         val game = amazonGameDao.getByProductId(key.stableSourceId) ?: return null
-        if (!accountScopeProvider.isAccountScopeUnchanged(source, currentScope, accountGeneration)) {
+        if (
+            !accountScopeProvider.isAccountScopeUnchanged(
+                source,
+                currentScope,
+                accountGeneration,
+                accountLifecycleState,
+            )
+        ) {
             return null
         }
         return SourceOwnedCopyReference.Amazon(

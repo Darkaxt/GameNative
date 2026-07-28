@@ -207,6 +207,23 @@ class GOGAuthManagerTest {
     }
 
     @Test
+    fun staleClearDoesNotDeleteReplacementCredentials() {
+        val staleGeneration = GOGAuthManager.captureCredentialGeneration()
+        assertTrue(GOGAuthManager.clearStoredCredentials(context))
+        val replacement = File(tempDir, "gog_auth.json").apply {
+            writeText("replacement-credentials")
+        }
+
+        val cleared = GOGAuthManager.clearStoredCredentialsIfCurrent(
+            context = context,
+            expectedGeneration = staleGeneration,
+        )
+
+        assertNull(cleared)
+        assertEquals("replacement-credentials", replacement.readText())
+    }
+
+    @Test
     fun clearStoredCredentialsReturnsFalseWhenCredentialFileCannotBeDeleted() {
         val authPath = File(tempDir, "gog_auth.json").also { it.mkdirs() }
         File(authPath, "blocking-child").writeText("x")

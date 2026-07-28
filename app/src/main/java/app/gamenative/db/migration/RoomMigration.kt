@@ -29,15 +29,31 @@ internal val ROOM_MIGRATION_V24_to_V25 = object : Migration(24, 25) {
 
 internal val ROOM_MIGRATION_V25_to_V26 = object : Migration(25, 26) {
     override fun migrate(connection: SQLiteConnection) {
-        V25ToV26MigrationDiagnostics.recordStarted()
+        v25ToV26MigrationDiagnostics.recordStarted()
         try {
             addSteamPicsRevisionColumnsV26(connection)
             createCanonicalCoreStorageV26(connection)
             createCanonicalFacetStorageV26(connection)
             createOwnedCopyLedgerStorageV26(connection)
-            V25ToV26MigrationDiagnostics.markPendingSuccess(connection)
+            v25ToV26MigrationDiagnostics.markPendingSuccess(connection)
         } catch (error: Exception) {
-            V25ToV26MigrationDiagnostics.recordBodyFailed(error.javaClass.simpleName)
+            v25ToV26MigrationDiagnostics.recordBodyFailed(error.javaClass.simpleName)
+            throw error
+        }
+    }
+}
+
+internal val ROOM_MIGRATION_V26_to_V27 = object : Migration(26, 27) {
+    override fun migrate(connection: SQLiteConnection) {
+        v26ToV27MigrationDiagnostics.recordStarted()
+        try {
+            connection.execSQL(
+                "ALTER TABLE `owned_copy_sync` ADD COLUMN `lifecycle_generation` " +
+                    "INTEGER NOT NULL DEFAULT -1",
+            )
+            v26ToV27MigrationDiagnostics.markPendingSuccess(connection)
+        } catch (error: Exception) {
+            v26ToV27MigrationDiagnostics.recordBodyFailed(error.javaClass.simpleName)
             throw error
         }
     }

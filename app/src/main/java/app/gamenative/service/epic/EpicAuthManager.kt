@@ -114,7 +114,17 @@ object EpicAuthManager {
      * Clear stored credentials (logout)
      */
     fun clearStoredCredentials(context: Context): Boolean {
-        val cleared = synchronized(credentialLifecycleLock) {
+        val expectedGeneration = captureCredentialGeneration()
+        return clearStoredCredentialsIfCurrent(context, expectedGeneration) != false
+    }
+
+    internal fun clearStoredCredentialsIfCurrent(
+        context: Context,
+        expectedGeneration: Long,
+    ): Boolean? = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration) return@synchronized null
+
+        AccountScopeInvalidations.runLifecycleChange(GameSource.EPIC) {
             credentialGeneration++
             clearOwnershipTokenCache(context)
             try {
@@ -125,8 +135,6 @@ object EpicAuthManager {
                 false
             }
         }
-        if (cleared) AccountScopeInvalidations.notifyChanged(GameSource.EPIC)
-        return cleared
     }
 
     /**
@@ -415,16 +423,21 @@ object EpicAuthManager {
             put("expires_at", credentials.expiresAt)
         }
 
-        replaceFileAtomically(file) { output ->
-            output.write(json.toString().toByteArray(Charsets.UTF_8))
-        }
-        if (priorAccountId != credentials.accountId) {
-            credentialGeneration++
-            AccountScopeInvalidations.notifyChanged(GameSource.EPIC)
-        }
+        val accountChanged = priorAccountId != credentials.accountId
+        AccountScopeInvalidations.runLifecycleChange(
+            source = GameSource.EPIC,
+            shouldAdvance = accountChanged,
+        ) {
+            replaceFileAtomically(file) { output ->
+                output.write(json.toString().toByteArray(Charsets.UTF_8))
+            }
+            if (accountChanged) {
+                credentialGeneration++
+            }
 
-        Timber.d("Credentials saved")
-        true
+            Timber.d("Credentials saved")
+            true
+        }
     }
 
     private fun loadCredentials(context: Context): EpicCredentials? =

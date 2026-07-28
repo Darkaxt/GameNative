@@ -81,14 +81,32 @@ class CanonicalProjectionEngine @Inject constructor(
         }
 
         db.withTransaction {
-            orderedBatches
-                .filter { batch -> batch.completeness == SnapshotCompleteness.COMPLETE }
-                .forEach { batch ->
-                    storeMatchDao.markAbsentForCompleteSnapshot(
-                        accountScope = requireNotNull(batch.accountScope).value,
-                        source = batch.source,
-                    )
+            orderedBatches.forEach { batch ->
+                when {
+                    batch.reason == SnapshotReason.MISSING_ACCOUNT_SCOPE -> {
+                        storeMatchDao.markAbsentForSource(batch.source)
+                    }
+
+                    batch.accountScope != null -> {
+                        val accountScope = batch.accountScope.value
+                        storeMatchDao.markOtherAccountsAbsent(
+                            accountScope = accountScope,
+                            source = batch.source,
+                        )
+                        val isLifecycleUnavailable =
+                            batch.completeness == SnapshotCompleteness.UNAVAILABLE &&
+                                batch.reason == SnapshotReason.PRESENCE_LEDGER_NOT_READY
+                        val shouldMarkCurrentAccountAbsent =
+                            batch.completeness == SnapshotCompleteness.COMPLETE || isLifecycleUnavailable
+                        if (shouldMarkCurrentAccountAbsent) {
+                            storeMatchDao.markAbsentForCompleteSnapshot(
+                                accountScope = accountScope,
+                                source = batch.source,
+                            )
+                        }
+                    }
                 }
+            }
 
             orderedBatches
                 .filterNot { batch -> batch.completeness == SnapshotCompleteness.UNAVAILABLE }

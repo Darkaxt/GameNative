@@ -81,6 +81,22 @@ class EpicAuthManagerTest {
     }
 
     @Test
+    fun staleClearDoesNotDeleteReplacementCredentials() {
+        EpicAuthManager.saveCredentials(context, credentials("first-account"))
+        val staleGeneration = EpicAuthManager.captureCredentialGeneration()
+        val replacement = credentials("replacement-account")
+        EpicAuthManager.saveCredentials(context, replacement)
+
+        val cleared = EpicAuthManager.clearStoredCredentialsIfCurrent(
+            context = context,
+            expectedGeneration = staleGeneration,
+        )
+
+        assertNull(cleared)
+        assertEquals("replacement-account", EpicAuthManager.getStoredAccountId(context))
+    }
+
+    @Test
     fun storedAccountIdReadsOnlyLocalIdentity() {
         val credentialsFile = credentialsFile().also { it.parentFile?.mkdirs() }
         val credentialsJson = JSONObject()

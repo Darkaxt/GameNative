@@ -292,6 +292,59 @@ class CanonicalProjectionEngineTest {
     }
 
     @Test
+    fun `account lifecycle unavailability retires cached ownership but source failure preserves it`() = runBlocking {
+        val owned = copy(
+            source = GameSource.GOG,
+            stableSourceId = "owned",
+            displayName = "Owned Game",
+            developer = "Studio",
+            releaseYear = 2020,
+        )
+        engine.rebuild(listOf(batch(GameSource.GOG, copies = listOf(owned))), 100)
+
+        engine.rebuild(
+            listOf(
+                batch(
+                    source = GameSource.GOG,
+                    completeness = SnapshotCompleteness.UNAVAILABLE,
+                    copies = emptyList(),
+                    reason = SnapshotReason.SOURCE_READ_FAILED,
+                ),
+            ),
+            200,
+        )
+        assertTrue(db.storeMatchDao().getAll().single().isPresent)
+
+        engine.rebuild(
+            listOf(
+                batch(
+                    source = GameSource.GOG,
+                    completeness = SnapshotCompleteness.UNAVAILABLE,
+                    copies = emptyList(),
+                    reason = SnapshotReason.PRESENCE_LEDGER_NOT_READY,
+                ),
+            ),
+            300,
+        )
+        assertTrue(!db.storeMatchDao().getAll().single().isPresent)
+
+        engine.rebuild(listOf(batch(GameSource.GOG, copies = listOf(owned))), 400)
+        engine.rebuild(
+            listOf(
+                SourceProjectionBatch(
+                    source = GameSource.GOG,
+                    accountScope = null,
+                    completeness = SnapshotCompleteness.UNAVAILABLE,
+                    copies = emptyList(),
+                    reason = SnapshotReason.MISSING_ACCOUNT_SCOPE,
+                ),
+            ),
+            500,
+        )
+        assertTrue(!db.storeMatchDao().getAll().single().isPresent)
+    }
+
+    @Test
     fun `unmatched source facets are qualified and classify their canonical`() = runBlocking {
         val gog = copy(
             source = GameSource.GOG,
@@ -358,7 +411,7 @@ class CanonicalProjectionEngineTest {
     }
 
     @Test
-    fun `same provider id in two account scopes remains two owned copy keys`() = runBlocking {
+    fun `same provider id across account scopes retains history with only current account present`() = runBlocking {
         val primaryCopy = copy(
             source = GameSource.GOG,
             accountScope = primaryScope,
@@ -384,7 +437,10 @@ class CanonicalProjectionEngineTest {
         assertEquals(2, matches.size)
         assertEquals(2, matches.map { it.accountScope }.distinct().size)
         assertEquals(1, matches.map { it.canonicalId }.distinct().size)
-        assertTrue(matches.all { it.isPresent })
+        assertEquals(
+            mapOf(primaryScope.value to false, secondaryScope.value to true),
+            matches.associate { it.accountScope to it.isPresent },
+        )
     }
 
     @Test

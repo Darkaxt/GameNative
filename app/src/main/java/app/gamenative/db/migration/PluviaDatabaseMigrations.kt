@@ -14,19 +14,23 @@ import app.gamenative.diagnostics.DiagnosticOutcome
 import app.gamenative.diagnostics.FeatureDiagnostics
 import timber.log.Timber
 
-private const val TARGET_DATABASE_VERSION = "26"
+private const val TARGET_DATABASE_VERSION = "27"
 private const val V25_TO_V26_MIGRATION = "25_to_26"
-private const val DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_26"
+private const val V26_TO_V27_MIGRATION = "26_to_27"
+private const val DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_27"
 private const val DESTRUCTIVE_RECOVERY_REASON = "destructive_recovery"
 private const val V25_TO_V26_PENDING_SUCCESS_ID = -26
 private const val V25_TO_V26_PENDING_SUCCESS_HASH = "pluvia_pending_25_to_26"
+private const val V26_TO_V27_PENDING_SUCCESS_ID = -27
+private const val V26_TO_V27_PENDING_SUCCESS_HASH = "pluvia_pending_26_to_27"
 private const val MIGRATION_DIAGNOSTICS_MARKER_TABLE = "pluvia_migration_diagnostics"
-private const val DESTRUCTIVE_RECOVERY_PENDING_SUCCESS = "destructive_recovery_7_to_16_to_26"
+private const val DESTRUCTIVE_RECOVERY_PENDING_SUCCESS = "destructive_recovery_7_to_16_to_27"
 
 internal val PLUVIA_EXPLICIT_MIGRATIONS: List<Migration> = listOf(
     ROOM_MIGRATION_V23_to_V24,
     ROOM_MIGRATION_V24_to_V25,
     ROOM_MIGRATION_V25_to_V26,
+    ROOM_MIGRATION_V26_to_V27,
 )
 
 internal val UNSUPPORTED_PRESERVATION_VERSIONS = intArrayOf(7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
@@ -60,7 +64,8 @@ private val PLUVIA_MIGRATION_DIAGNOSTICS_CALLBACK = object : RoomDatabase.Callba
 }
 
 private fun completePendingMigrationSuccesses(connection: SQLiteConnection) {
-    V25ToV26MigrationDiagnostics.completePendingSuccess(connection)
+    v25ToV26MigrationDiagnostics.completePendingSuccess(connection)
+    v26ToV27MigrationDiagnostics.completePendingSuccess(connection)
     DestructiveRecoveryMigrationDiagnostics.completePendingSuccess(connection)
 }
 
@@ -138,15 +143,19 @@ private object DestructiveRecoveryMigrationDiagnostics {
     }
 }
 
-internal object V25ToV26MigrationDiagnostics {
+internal class PendingRoomMigrationDiagnostics(
+    private val migration: String,
+    private val pendingSuccessId: Int,
+    private val pendingSuccessHash: String,
+) {
     fun recordStarted() {
-        recordDatabaseMigration(DiagnosticOutcome.STARTED, migration = V25_TO_V26_MIGRATION)
+        recordDatabaseMigration(DiagnosticOutcome.STARTED, migration = migration)
     }
 
     fun recordBodyFailed(errorType: String) {
         recordDatabaseMigration(
             outcome = DiagnosticOutcome.FAILED,
-            migration = V25_TO_V26_MIGRATION,
+            migration = migration,
             errorType = errorType,
         )
     }
@@ -155,7 +164,7 @@ internal object V25ToV26MigrationDiagnostics {
         connection.execSQL(
             """
             INSERT OR REPLACE INTO `room_master_table` (`id`, `identity_hash`)
-            VALUES ($V25_TO_V26_PENDING_SUCCESS_ID, '$V25_TO_V26_PENDING_SUCCESS_HASH')
+            VALUES ($pendingSuccessId, '$pendingSuccessHash')
             """.trimIndent(),
         )
     }
@@ -164,8 +173,8 @@ internal object V25ToV26MigrationDiagnostics {
         val isPending = connection.hasResult(
             """
             SELECT 1 FROM `room_master_table`
-            WHERE `id` = $V25_TO_V26_PENDING_SUCCESS_ID
-                AND `identity_hash` = '$V25_TO_V26_PENDING_SUCCESS_HASH'
+            WHERE `id` = $pendingSuccessId
+                AND `identity_hash` = '$pendingSuccessHash'
             LIMIT 1
             """.trimIndent(),
         )
@@ -173,16 +182,28 @@ internal object V25ToV26MigrationDiagnostics {
 
         acknowledgeAndCleanupPendingMigrationSuccess(
             acknowledge = {
-                acknowledgeDatabaseMigrationSuccess(migration = V25_TO_V26_MIGRATION)
+                acknowledgeDatabaseMigrationSuccess(migration = migration)
             },
             cleanup = {
                 connection.execSQL(
-                    "DELETE FROM `room_master_table` WHERE `id` = $V25_TO_V26_PENDING_SUCCESS_ID",
+                    "DELETE FROM `room_master_table` WHERE `id` = $pendingSuccessId",
                 )
             },
         )
     }
 }
+
+internal val v25ToV26MigrationDiagnostics = PendingRoomMigrationDiagnostics(
+    migration = V25_TO_V26_MIGRATION,
+    pendingSuccessId = V25_TO_V26_PENDING_SUCCESS_ID,
+    pendingSuccessHash = V25_TO_V26_PENDING_SUCCESS_HASH,
+)
+
+internal val v26ToV27MigrationDiagnostics = PendingRoomMigrationDiagnostics(
+    migration = V26_TO_V27_MIGRATION,
+    pendingSuccessId = V26_TO_V27_PENDING_SUCCESS_ID,
+    pendingSuccessHash = V26_TO_V27_PENDING_SUCCESS_HASH,
+)
 
 private fun recordDatabaseMigration(
     outcome: DiagnosticOutcome,

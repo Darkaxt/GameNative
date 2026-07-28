@@ -22,6 +22,7 @@ import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.db.dao.SteamAppDao
 import app.gamenative.enums.AppType
 import app.gamenative.library.canonical.AccountScopeProvider
+import app.gamenative.library.canonical.InMemoryAccountLifecycleState
 import app.gamenative.utils.CustomGameScanner
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -517,6 +518,56 @@ class OwnedCopySourceAdapterTest {
     }
 
     @Test
+    fun providerAdaptersRejectPriorLifecycleLedgerBeforeReadingSourceRows() = runTest {
+        val gogDao = mockk<GOGGameDao>(relaxed = true)
+        val epicDao = mockk<EpicGameDao>(relaxed = true)
+        val amazonDao = mockk<AmazonGameDao>(relaxed = true)
+        val staleLedger = mockk<OwnedCopyLedgerDao>(relaxed = true)
+        val lifecycleState = InMemoryAccountLifecycleState().apply {
+            advanceGeneration(GameSource.GOG)
+            advanceGeneration(GameSource.EPIC)
+            advanceGeneration(GameSource.AMAZON)
+        }
+        coEvery { staleLedger.getCompletedSnapshot(any(), any()) } returns CompletedOwnedCopySnapshot(
+            completedAt = 1L,
+            lifecycleGeneration = 0L,
+            stableSourceIds = listOf("old-account"),
+        )
+        coEvery { staleLedger.getCompletedSnapshotForLifecycle(any(), any(), any()) } returns null
+        every { staleLedger.observeSourceHeaders(any()) } returns emptyFlow()
+
+        val batches = listOf(
+            GogOwnedCopySourceAdapter(
+                gogDao,
+                scopes(GameSource.GOG),
+                staleLedger,
+                lifecycleState,
+            ).snapshot(),
+            EpicOwnedCopySourceAdapter(
+                epicDao,
+                scopes(GameSource.EPIC),
+                staleLedger,
+                lifecycleState,
+            ).snapshot(),
+            AmazonOwnedCopySourceAdapter(
+                amazonDao,
+                scopes(GameSource.AMAZON),
+                staleLedger,
+                lifecycleState,
+            ).snapshot(),
+        )
+
+        batches.forEach { batch ->
+            assertEquals(SnapshotCompleteness.UNAVAILABLE, batch.completeness)
+            assertEquals(SnapshotReason.PRESENCE_LEDGER_NOT_READY, batch.reason)
+            assertTrue(batch.copies.isEmpty())
+        }
+        coVerify(exactly = 0) { gogDao.getAllAsList() }
+        coVerify(exactly = 0) { epicDao.getAllAsList() }
+        coVerify(exactly = 0) { amazonDao.getAllAsList() }
+    }
+
+    @Test
     fun completedEmptyLedgerIsCompleteAndExcludesStaleRows() = runTest {
         val dao = mockk<GOGGameDao>()
         coEvery { dao.getAllAsList() } returns listOf(GOGGame(id = "stale-a", title = "Stale"))
@@ -588,11 +639,19 @@ class OwnedCopySourceAdapterTest {
     private fun completedLedger(source: GameSource, vararg stableSourceIds: String): OwnedCopyLedgerDao {
         val dao = mockk<OwnedCopyLedgerDao>()
         val ids = stableSourceIds.toList().sorted()
-        coEvery { dao.getCompletedSnapshot(scope.value, source) } returns CompletedOwnedCopySnapshot(1L, ids)
-        coEvery { dao.isPresent(scope.value, source, any()) } answers {
+        coEvery {
+            dao.getCompletedSnapshotForLifecycle(scope.value, source, any())
+        } answers {
+            CompletedOwnedCopySnapshot(
+                completedAt = 1L,
+                lifecycleGeneration = invocation.args[2] as Long,
+                stableSourceIds = ids,
+            )
+        }
+        coEvery { dao.isPresentForLifecycle(scope.value, source, any(), any()) } answers {
             invocation.args[2] as String in ids
         }
-        coEvery { dao.getPresence(scope.value, source, any()) } answers {
+        coEvery { dao.getPresenceForLifecycle(scope.value, source, any(), any()) } answers {
             val stableSourceId = invocation.args[2] as String
             stableSourceId.takeIf(ids::contains)?.let {
                 OwnedCopyPresenceEntity(
@@ -609,7 +668,7 @@ class OwnedCopySourceAdapterTest {
 
     private fun emptyLedger(): OwnedCopyLedgerDao {
         val dao = mockk<OwnedCopyLedgerDao>(relaxed = true)
-        coEvery { dao.getCompletedSnapshot(any(), any()) } returns null
+        coEvery { dao.getCompletedSnapshotForLifecycle(any(), any(), any()) } returns null
         every { dao.observeSourceHeaders(any()) } returns emptyFlow()
         return dao
     }

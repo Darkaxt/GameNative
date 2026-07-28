@@ -9,6 +9,8 @@ import app.gamenative.db.dao.AmazonGameDao
 import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.events.EventDispatcher
+import app.gamenative.library.canonical.AccountLifecycleState
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.CanonicalProjectionCoordinator
 import app.gamenative.service.ActiveGameRegistry
 import app.gamenative.service.DownloadService
@@ -48,6 +50,7 @@ class PluviaApp : SplitCompatApplication() {
 
     @Inject lateinit var gogGameDao: GOGGameDao
     @Inject lateinit var amazonGameDao: AmazonGameDao
+    @Inject lateinit var accountLifecycleState: AccountLifecycleState
     @Inject lateinit var canonicalProjectionCoordinator: CanonicalProjectionCoordinator
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -80,6 +83,7 @@ class PluviaApp : SplitCompatApplication() {
 
         // Init our datastore preferences.
         PrefManager.init(this)
+        AccountScopeInvalidations.install(accountLifecycleState)
         FrontendSyncManager.init(this)
 
         // Initialize GOGConstants

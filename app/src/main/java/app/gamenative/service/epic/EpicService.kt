@@ -116,12 +116,19 @@ class EpicService : Service() {
          * Logout from Epic - clears credentials, database, and stops service
          */
         suspend fun logout(context: Context): Result<Unit> {
+            val expectedGeneration = EpicAuthManager.captureCredentialGeneration()
             return withContext(Dispatchers.IO) {
                 try {
                     Timber.tag("EPIC").i("Logging out from Epic...")
 
                     // Clear stored credentials first, regardless of service state
-                    val credentialsCleared = EpicAuthManager.clearStoredCredentials(context)
+                    val credentialsCleared = EpicAuthManager.clearStoredCredentialsIfCurrent(
+                        context = context,
+                        expectedGeneration = expectedGeneration,
+                    )
+                    if (credentialsCleared == null) {
+                        return@withContext Result.success(Unit)
+                    }
                     if (!credentialsCleared) {
                         Timber.tag("Epic").e("Failed to clear credentials during logout")
                         return@withContext Result.failure(Exception("Failed to clear stored credentials"))

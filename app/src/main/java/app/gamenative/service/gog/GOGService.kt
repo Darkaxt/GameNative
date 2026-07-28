@@ -130,6 +130,7 @@ class GOGService : Service() {
          * Logout from GOG - clears credentials, database, and stops service
          */
         suspend fun logout(context: Context): Result<Unit> {
+            val expectedGeneration = GOGAuthManager.captureCredentialGeneration()
             return withContext(Dispatchers.IO) {
                 try {
                     Timber.i("[GOGService] Logging out from GOG...")
@@ -142,7 +143,13 @@ class GOGService : Service() {
                     }
 
                     // Clear stored credentials
-                    val credentialsCleared = clearStoredCredentials(context)
+                    val credentialsCleared = GOGAuthManager.clearStoredCredentialsIfCurrent(
+                        context = context,
+                        expectedGeneration = expectedGeneration,
+                    )
+                    if (credentialsCleared == null) {
+                        return@withContext Result.success(Unit)
+                    }
                     if (!credentialsCleared) {
                         Timber.e("[GOGService] Failed to clear credentials during logout")
                         return@withContext Result.failure(

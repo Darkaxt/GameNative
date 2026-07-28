@@ -136,9 +136,10 @@ object AmazonAuthManager {
     /** Return stored credentials, refreshing access token when needed. */
     suspend fun getStoredCredentials(context: Context): Result<AmazonCredentials> {
         return try {
-            val credentials = loadCredentials(context)
+            val state = loadCredentialState(context)
+            val credentials = state.credentials
                 ?: return Result.failure(Exception("No stored credentials found"))
-            val operationGeneration = captureCredentialGeneration()
+            val operationGeneration = state.generation
 
             // Check expiration (5-minute buffer)
             val bufferMs = 5 * 60 * 1000L
@@ -184,15 +185,21 @@ object AmazonAuthManager {
 
     /** Logout by best-effort deregister + mandatory local credential cleanup. */
     suspend fun logout(context: Context): Result<Unit> {
-        val credentials = loadCredentials(context)
-        val credentialsCleared = clearStoredCredentials(context)
+        val state = loadCredentialState(context)
+        val credentialsCleared = clearStoredCredentialsIfCurrent(
+            context = context,
+            expectedGeneration = state.generation,
+        )
+        if (credentialsCleared == null) {
+            return Result.success(Unit)
+        }
 
         try {
-            if (credentials != null) {
+            if (state.credentials != null) {
                 AmazonAuthClient.deregisterDevice(
-                    accessToken = credentials.accessToken,
-                    deviceSerial = credentials.deviceSerial,
-                    clientId = credentials.clientId,
+                    accessToken = state.credentials.accessToken,
+                    deviceSerial = state.credentials.deviceSerial,
+                    clientId = state.credentials.clientId,
                 )
             }
         } catch (error: Exception) {
@@ -207,17 +214,27 @@ object AmazonAuthManager {
         }
     }
 
-    fun clearStoredCredentials(context: Context): Boolean = synchronized(credentialLifecycleLock) {
-        credentialGeneration++
-        clearPendingStateLocked()
-        try {
-            val file = File(getCredentialsFilePath(context))
-            val cleared = if (file.exists()) file.delete() else true
-            if (cleared) AccountScopeInvalidations.notifyChanged(GameSource.AMAZON)
-            cleared
-        } catch (e: Exception) {
-            Timber.e("[Amazon] Failed to clear credentials: ${e.javaClass.simpleName}")
-            false
+    fun clearStoredCredentials(context: Context): Boolean {
+        val expectedGeneration = captureCredentialGeneration()
+        return clearStoredCredentialsIfCurrent(context, expectedGeneration) != false
+    }
+
+    internal fun clearStoredCredentialsIfCurrent(
+        context: Context,
+        expectedGeneration: Long,
+    ): Boolean? = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration) return@synchronized null
+
+        AccountScopeInvalidations.runLifecycleChange(GameSource.AMAZON) {
+            credentialGeneration++
+            clearPendingStateLocked()
+            try {
+                val file = File(getCredentialsFilePath(context))
+                if (file.exists()) file.delete() else true
+            } catch (e: Exception) {
+                Timber.e("[Amazon] Failed to clear credentials: ${e.javaClass.simpleName}")
+                false
+            }
         }
     }
 
@@ -245,11 +262,12 @@ object AmazonAuthManager {
             } else {
                 UUID.randomUUID().toString().also { generated ->
                     json.put("profile_scope_id", generated)
-                    replaceFileAtomically(file) { output ->
-                        output.write(json.toString().toByteArray(Charsets.UTF_8))
+                    AccountScopeInvalidations.runLifecycleChange(GameSource.AMAZON) {
+                        replaceFileAtomically(file) { output ->
+                            output.write(json.toString().toByteArray(Charsets.UTF_8))
+                        }
+                        credentialGeneration++
                     }
-                    credentialGeneration++
-                    AccountScopeInvalidations.notifyChanged(GameSource.AMAZON)
                 }
             }
         }.onFailure { error ->
@@ -311,37 +329,52 @@ object AmazonAuthManager {
             put("profile_scope_id", credentials.profileScopeId)
         }
 
-        replaceFileAtomically(file) { output ->
-            output.write(json.toString().toByteArray(Charsets.UTF_8))
+        val accountChanged = priorProfileScopeId != credentials.profileScopeId
+        AccountScopeInvalidations.runLifecycleChange(
+            source = GameSource.AMAZON,
+            shouldAdvance = accountChanged,
+        ) {
+            replaceFileAtomically(file) { output ->
+                output.write(json.toString().toByteArray(Charsets.UTF_8))
+            }
+            if (clearPendingAuthentication) clearPendingStateLocked()
+            if (accountChanged || clearPendingAuthentication) {
+                credentialGeneration++
+            }
+            Timber.d("[Amazon] Credentials saved")
+            true
         }
-        if (clearPendingAuthentication) clearPendingStateLocked()
-        if (priorProfileScopeId != credentials.profileScopeId || clearPendingAuthentication) {
-            credentialGeneration++
-        }
-        if (priorProfileScopeId != credentials.profileScopeId) {
-            AccountScopeInvalidations.notifyChanged(GameSource.AMAZON)
-        }
-        Timber.d("[Amazon] Credentials saved")
-        true
     }
 
     internal fun loadCredentials(context: Context): AmazonCredentials? =
         synchronized(credentialLifecycleLock) {
-            val profileScopeId = getOrCreateProfileScopeIdLocked(context) ?: return@synchronized null
-            runCatching {
-                val json = JSONObject(File(getCredentialsFilePath(context)).readText())
-                AmazonCredentials(
-                    accessToken = json.getString("access_token"),
-                    refreshToken = json.getString("refresh_token"),
-                    deviceSerial = json.getString("device_serial"),
-                    clientId = json.getString("client_id"),
-                    expiresAt = json.getLong("expires_at"),
-                    profileScopeId = profileScopeId,
-                )
-            }.onFailure { error ->
-                Timber.e("[Amazon] Failed to load credentials: ${error.javaClass.simpleName}")
-            }.getOrNull()
+            loadCredentialsLocked(context)
         }
+
+    private fun loadCredentialState(context: Context): LoadedCredentialState =
+        synchronized(credentialLifecycleLock) {
+            LoadedCredentialState(
+                credentials = loadCredentialsLocked(context),
+                generation = credentialGeneration,
+            )
+        }
+
+    private fun loadCredentialsLocked(context: Context): AmazonCredentials? {
+        val profileScopeId = getOrCreateProfileScopeIdLocked(context) ?: return null
+        return runCatching {
+            val json = JSONObject(File(getCredentialsFilePath(context)).readText())
+            AmazonCredentials(
+                accessToken = json.getString("access_token"),
+                refreshToken = json.getString("refresh_token"),
+                deviceSerial = json.getString("device_serial"),
+                clientId = json.getString("client_id"),
+                expiresAt = json.getLong("expires_at"),
+                profileScopeId = profileScopeId,
+            )
+        }.onFailure { error ->
+            Timber.e("[Amazon] Failed to load credentials: ${error.javaClass.simpleName}")
+        }.getOrNull()
+    }
 
     internal fun replaceFileAtomically(
         file: File,
@@ -369,6 +402,11 @@ object AmazonAuthManager {
             temporaryFile.delete()
         }
     }
+
+    private data class LoadedCredentialState(
+        val credentials: AmazonCredentials?,
+        val generation: Long,
+    )
 
     private data class PendingAuthentication(
         val generation: Long,

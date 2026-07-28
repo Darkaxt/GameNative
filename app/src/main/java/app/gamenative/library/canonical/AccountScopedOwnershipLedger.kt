@@ -27,6 +27,7 @@ private class OwnedCopySyncException(failure: OwnedCopySyncFailure) :
 class AccountScopedOwnershipLedger @Inject constructor(
     private val accountScopeProvider: AccountScopeProvider,
     private val ownedCopyLedgerDao: OwnedCopyLedgerDao,
+    private val accountLifecycleState: AccountLifecycleState = AccountScopeInvalidations,
 ) {
     suspend fun <T> runCompleteSnapshot(
         source: GameSource,
@@ -34,7 +35,7 @@ class AccountScopedOwnershipLedger @Inject constructor(
     ): Result<T> {
         val capturedScope = currentScopeOrNull(source)
             ?: return failure(OwnedCopySyncFailure.ACCOUNT_SCOPE_UNAVAILABLE)
-        val capturedGeneration = AccountScopeInvalidations.generation(source)
+        val capturedGeneration = accountLifecycleState.generation(source)
 
         val snapshot = try {
             materialize()
@@ -44,29 +45,38 @@ class AccountScopedOwnershipLedger @Inject constructor(
             return failure(OwnedCopySyncFailure.MATERIALIZATION_FAILED)
         }
 
-        val currentScope = currentScopeOrNull(source)
-        if (
-            currentScope != capturedScope ||
-            AccountScopeInvalidations.generation(source) != capturedGeneration
-        ) {
+        if (!isLifecycleCurrent(source, capturedScope, capturedGeneration)) {
             return failure(OwnedCopySyncFailure.ACCOUNT_SCOPE_CHANGED)
         }
 
         return try {
-            ownedCopyLedgerDao.replaceCompletedSnapshot(
+            val committed = ownedCopyLedgerDao.replaceCompletedSnapshot(
                 accountScope = capturedScope.value,
                 source = source,
                 stableSourceIds = snapshot.stableSourceIds,
                 completedAt = System.currentTimeMillis(),
                 resolvedSourceIds = snapshot.resolvedSourceIds,
+                lifecycleGeneration = capturedGeneration,
             )
-            Result.success(snapshot.value)
+            val isStillCurrent = isLifecycleCurrent(source, capturedScope, capturedGeneration)
+            if (committed && isStillCurrent) {
+                Result.success(snapshot.value)
+            } else {
+                failure(OwnedCopySyncFailure.ACCOUNT_SCOPE_CHANGED)
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
             failure(OwnedCopySyncFailure.LEDGER_COMMIT_FAILED)
         }
     }
+
+    private suspend fun isLifecycleCurrent(
+        source: GameSource,
+        accountScope: AccountScope,
+        lifecycleGeneration: Long,
+    ): Boolean = currentScopeOrNull(source) == accountScope &&
+        accountLifecycleState.generation(source) == lifecycleGeneration
 
     private suspend fun currentScopeOrNull(source: GameSource): AccountScope? = try {
         accountScopeProvider.current(source)

@@ -5,6 +5,7 @@ import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
+import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
 import javax.inject.Inject
@@ -19,6 +20,7 @@ class GogOwnedCopySourceAdapter @Inject constructor(
     private val gogGameDao: GOGGameDao,
     private val accountScopeProvider: AccountScopeProvider,
     private val ownedCopyLedgerDao: OwnedCopyLedgerDao,
+    private val accountLifecycleState: AccountLifecycleState = AccountScopeInvalidations,
 ) : OwnedCopySourceAdapter {
     override val source: GameSource = GameSource.GOG
 
@@ -36,11 +38,14 @@ class GogOwnedCopySourceAdapter @Inject constructor(
         } catch (error: Exception) {
             return sourceReadFailed(source, null, error)
         } ?: return missingAccountScope(source)
-        val accountGeneration = AccountScopeInvalidations.generation(source)
+        val accountGeneration = accountLifecycleState.generation(source)
 
         return try {
-            val ledger = ownedCopyLedgerDao.getCompletedSnapshot(accountScope.value, source)
-                ?: return presenceLedgerNotReady(source, accountScope)
+            val ledger = ownedCopyLedgerDao.getCompletedSnapshotForLifecycle(
+                accountScope = accountScope.value,
+                source = source,
+                lifecycleGeneration = accountGeneration,
+            ) ?: return presenceLedgerNotReady(source, accountScope)
             val rowsById = if (ledger.stableSourceIds.isEmpty()) {
                 emptyMap()
             } else {
@@ -65,7 +70,14 @@ class GogOwnedCopySourceAdapter @Inject constructor(
                     genreKeys = sourceQualifiedKeys("gog", game.genres),
                 )
             }
-            if (!accountScopeProvider.isAccountScopeUnchanged(source, accountScope, accountGeneration)) {
+            if (
+                !accountScopeProvider.isAccountScopeUnchanged(
+                    source,
+                    accountScope,
+                    accountGeneration,
+                    accountLifecycleState,
+                )
+            ) {
                 accountScopeChanged(source)
             } else {
                 sourceBatch(
@@ -85,11 +97,27 @@ class GogOwnedCopySourceAdapter @Inject constructor(
     override suspend fun resolve(key: OwnedCopyKey): SourceOwnedCopyReference? {
         if (key.source != source) return null
         val currentScope = accountScopeProvider.current(source) ?: return null
-        val accountGeneration = AccountScopeInvalidations.generation(source)
+        val accountGeneration = accountLifecycleState.generation(source)
         if (key.accountScope != currentScope) return null
-        if (!ownedCopyLedgerDao.isPresent(currentScope.value, source, key.stableSourceId)) return null
+        if (
+            !ownedCopyLedgerDao.isPresentForLifecycle(
+                accountScope = currentScope.value,
+                source = source,
+                stableSourceId = key.stableSourceId,
+                lifecycleGeneration = accountGeneration,
+            )
+        ) {
+            return null
+        }
         val game = gogGameDao.getById(key.stableSourceId)?.takeUnless { it.exclude } ?: return null
-        if (!accountScopeProvider.isAccountScopeUnchanged(source, currentScope, accountGeneration)) {
+        if (
+            !accountScopeProvider.isAccountScopeUnchanged(
+                source,
+                currentScope,
+                accountGeneration,
+                accountLifecycleState,
+            )
+        ) {
             return null
         }
         return SourceOwnedCopyReference.Gog(key, game.id)

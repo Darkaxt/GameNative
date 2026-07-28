@@ -2,6 +2,7 @@ package app.gamenative.di
 
 import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.data.canonical.CanonicalIdGenerator
+import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
 import app.gamenative.library.canonical.CanonicalDiagnostics
@@ -17,6 +18,7 @@ import app.gamenative.library.canonical.DefaultAccountScopeProvider
 import app.gamenative.library.canonical.FeatureCanonicalEventRecorder
 import app.gamenative.library.canonical.PrefManagerCanonicalProjectionGate
 import app.gamenative.library.canonical.RoomCanonicalMutationRepository
+import app.gamenative.library.canonical.SharedPreferencesAccountLifecycleState
 import app.gamenative.library.canonical.SystemCanonicalProjectionClock
 import app.gamenative.library.canonical.TrustedSteamMappingProvider
 import app.gamenative.library.canonical.source.AmazonOwnedCopySourceAdapter
@@ -40,6 +42,12 @@ abstract class CanonicalLibraryModule {
     @Binds
     @Singleton
     abstract fun bindAccountScopeProvider(implementation: DefaultAccountScopeProvider): AccountScopeProvider
+
+    @Binds
+    @Singleton
+    abstract fun bindAccountLifecycleState(
+        implementation: SharedPreferencesAccountLifecycleState,
+    ): AccountLifecycleState
 
     @Binds
     @Singleton

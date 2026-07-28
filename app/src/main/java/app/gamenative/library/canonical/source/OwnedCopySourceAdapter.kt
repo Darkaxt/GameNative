@@ -5,6 +5,7 @@ import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
 import kotlin.reflect.KClass
@@ -95,8 +96,9 @@ internal suspend fun AccountScopeProvider.isAccountScopeUnchanged(
     source: GameSource,
     accountScope: AccountScope,
     generation: Long,
+    lifecycleState: AccountLifecycleState = AccountScopeInvalidations,
 ): Boolean = current(source) == accountScope &&
-    AccountScopeInvalidations.generation(source) == generation
+    lifecycleState.generation(source) == generation
 
 internal fun missingAccountScope(source: GameSource): SourceProjectionBatch = unavailableBatch(
     source = source,

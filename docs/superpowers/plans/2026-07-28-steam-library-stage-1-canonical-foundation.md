@@ -957,6 +957,12 @@ Legacy GOG, Epic, and Amazon rows are not account-scoped and can survive logout 
 
 Migration/schema parity and deterministic offline tests must cover account switching (including A→B→A), the same ID in two scopes, account-scoped Amazon action resolution, complete empty, a missing materialized row, failed sync/replacement preservation, pre-commit scope/lifecycle recheck, and credential invalidation.
 
+#### Post-validation lifecycle remediation (2026-07-28)
+
+The original instruction above assumed schema 26 was still unreleased. By the Stage 1 cross-check, schema 26 had already been committed, pushed, migration-tested, installed, and used for live diagnostics. Rewriting its migration would make existing branch installations diverge from the exported schema, so the remediation must preserve migration history and use an explicit v26→v27 migration instead.
+
+The cross-check found that a process-local lifecycle generation does not close account A→B→A or process-restart reuse. Version 27 therefore adds `owned_copy_sync.lifecycle_generation INTEGER NOT NULL DEFAULT -1`; migrated headers fail closed until a fresh successful source sync binds them to the current non-negative generation. A private non-secret preference file persists only monotonic per-source generation counters. Credential replacement or removal synchronously reserves the next generation before mutating identity, adapters and presence reads require exact generation equality, and stale writers cannot replace a newer-generation snapshot. Account-lifecycle unavailability clears only cached `store_match.is_present` state for the affected scope/source, while an ordinary source read failure preserves the last usable ownership projection. Steam license readiness remains a separate Stage 1 gate because its ownership transaction must publish readiness only after commit.
+
 - [ ] **Step 1: Write adapter contract tests with fake DAOs/account scopes**
 
 Test every source's exact stable key and resolution boundary:

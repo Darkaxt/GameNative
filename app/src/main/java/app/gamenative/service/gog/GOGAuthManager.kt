@@ -152,19 +152,20 @@ object GOGAuthManager {
                 })
             }
 
-            val credentialsSaved = withContext(Dispatchers.IO) {
-                writeCredentialFileIfCurrent(
-                    file = authFile,
-                    expectedGeneration = operationGeneration,
-                    contents = authData.toString(2),
-                )
+            val credentialsSaved = AccountScopeInvalidations.runLifecycleChange(GameSource.GOG) {
+                withContext(Dispatchers.IO) {
+                    writeCredentialFileIfCurrent(
+                        file = authFile,
+                        expectedGeneration = operationGeneration,
+                        contents = authData.toString(2),
+                    )
+                }
             }
             if (!credentialsSaved) {
                 return Result.failure(
                     IOException("GOG credential lifecycle changed during authentication"),
                 )
             }
-            AccountScopeInvalidations.notifyChanged(GameSource.GOG)
             Timber.tag("GOG").i("GOG authentication successful")
 
             Result.success(credentials)
@@ -374,7 +375,17 @@ object GOGAuthManager {
      * Clear stored credentials (logout)
      */
     fun clearStoredCredentials(context: Context): Boolean {
-        val cleared = synchronized(credentialLifecycleLock) {
+        val expectedGeneration = captureCredentialGeneration()
+        return clearStoredCredentialsIfCurrent(context, expectedGeneration) != false
+    }
+
+    internal fun clearStoredCredentialsIfCurrent(
+        context: Context,
+        expectedGeneration: Long,
+    ): Boolean? = synchronized(credentialLifecycleLock) {
+        if (credentialGeneration != expectedGeneration) return@synchronized null
+
+        AccountScopeInvalidations.runLifecycleChange(GameSource.GOG) {
             credentialGeneration++
             try {
                 val authFile = File(getAuthConfigPath(context))
@@ -388,8 +399,6 @@ object GOGAuthManager {
                 false
             }
         }
-        if (cleared) AccountScopeInvalidations.notifyChanged(GameSource.GOG)
-        return cleared
     }
 
     /**
@@ -471,7 +480,7 @@ object GOGAuthManager {
         }
     }
 
-    private fun captureCredentialGeneration(): Long = synchronized(credentialLifecycleLock) {
+    internal fun captureCredentialGeneration(): Long = synchronized(credentialLifecycleLock) {
         credentialGeneration
     }
 

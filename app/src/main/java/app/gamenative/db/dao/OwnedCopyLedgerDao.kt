@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.Flow
 
 data class CompletedOwnedCopySnapshot(
     val completedAt: Long,
+    val lifecycleGeneration: Long,
     val stableSourceIds: List<String>,
 )
 
@@ -24,6 +25,17 @@ interface OwnedCopyLedgerDao {
             "WHERE account_scope = :accountScope AND source = :source LIMIT 1",
     )
     suspend fun getCompletedHeader(accountScope: String, source: GameSource): OwnedCopySyncEntity?
+
+    @Query(
+        "SELECT * FROM owned_copy_sync " +
+            "WHERE account_scope = :accountScope AND source = :source " +
+            "AND lifecycle_generation = :lifecycleGeneration LIMIT 1",
+    )
+    suspend fun getCompletedHeaderForLifecycle(
+        accountScope: String,
+        source: GameSource,
+        lifecycleGeneration: Long,
+    ): OwnedCopySyncEntity?
 
     @Query(
         "SELECT stable_source_id FROM owned_copy_presence " +
@@ -42,10 +54,53 @@ interface OwnedCopyLedgerDao {
     ): OwnedCopyPresenceEntity?
 
     @Query(
+        """
+        SELECT presence.*
+        FROM owned_copy_presence AS presence
+        INNER JOIN owned_copy_sync AS sync
+            ON sync.account_scope = presence.account_scope
+            AND sync.source = presence.source
+        WHERE presence.account_scope = :accountScope
+            AND presence.source = :source
+            AND presence.stable_source_id = :stableSourceId
+            AND sync.lifecycle_generation = :lifecycleGeneration
+        LIMIT 1
+        """,
+    )
+    suspend fun getPresenceForLifecycle(
+        accountScope: String,
+        source: GameSource,
+        stableSourceId: String,
+        lifecycleGeneration: Long,
+    ): OwnedCopyPresenceEntity?
+
+    @Query(
         "SELECT EXISTS(SELECT 1 FROM owned_copy_presence " +
             "WHERE account_scope = :accountScope AND source = :source AND stable_source_id = :stableSourceId)",
     )
     suspend fun isPresent(accountScope: String, source: GameSource, stableSourceId: String): Boolean
+
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1
+            FROM owned_copy_presence AS presence
+            INNER JOIN owned_copy_sync AS sync
+                ON sync.account_scope = presence.account_scope
+                AND sync.source = presence.source
+            WHERE presence.account_scope = :accountScope
+                AND presence.source = :source
+                AND presence.stable_source_id = :stableSourceId
+                AND sync.lifecycle_generation = :lifecycleGeneration
+        )
+        """,
+    )
+    suspend fun isPresentForLifecycle(
+        accountScope: String,
+        source: GameSource,
+        stableSourceId: String,
+        lifecycleGeneration: Long,
+    ): Boolean
 
     @Query("SELECT * FROM owned_copy_sync WHERE source = :source ORDER BY account_scope")
     fun observeSourceHeaders(source: GameSource): Flow<List<OwnedCopySyncEntity>>
@@ -62,10 +117,21 @@ interface OwnedCopyLedgerDao {
     @Transaction
     suspend fun getCompletedSnapshot(accountScope: String, source: GameSource): CompletedOwnedCopySnapshot? {
         val header = getCompletedHeader(accountScope, source) ?: return null
-        return CompletedOwnedCopySnapshot(
-            completedAt = header.completedAt,
-            stableSourceIds = getCompletedStableSourceIds(accountScope, source),
-        )
+        return header.toSnapshot(getCompletedStableSourceIds(accountScope, source))
+    }
+
+    @Transaction
+    suspend fun getCompletedSnapshotForLifecycle(
+        accountScope: String,
+        source: GameSource,
+        lifecycleGeneration: Long,
+    ): CompletedOwnedCopySnapshot? {
+        val header = getCompletedHeaderForLifecycle(
+            accountScope = accountScope,
+            source = source,
+            lifecycleGeneration = lifecycleGeneration,
+        ) ?: return null
+        return header.toSnapshot(getCompletedStableSourceIds(accountScope, source))
     }
 
     @Transaction
@@ -74,13 +140,20 @@ interface OwnedCopyLedgerDao {
         source: GameSource,
         stableSourceIds: Collection<String>,
         completedAt: Long,
+        lifecycleGeneration: Long,
         resolvedSourceIds: Map<String, String> = emptyMap(),
-    ) {
+    ): Boolean {
         AccountScope.parse(accountScope)
+        require(lifecycleGeneration >= 0)
         require(stableSourceIds.all { it.isNotBlank() && it == it.trim() })
         val normalizedIds = stableSourceIds.distinct().sorted()
         require(resolvedSourceIds.keys.all(normalizedIds::contains))
         require(resolvedSourceIds.values.all { it.isNotBlank() && it == it.trim() })
+
+        val existingHeader = getCompletedHeader(accountScope, source)
+        if (existingHeader != null && existingHeader.lifecycleGeneration > lifecycleGeneration) {
+            return false
+        }
 
         deletePresence(accountScope, source)
         upsertCompletedHeader(
@@ -88,6 +161,7 @@ interface OwnedCopyLedgerDao {
                 accountScope = accountScope,
                 source = source,
                 completedAt = completedAt,
+                lifecycleGeneration = lifecycleGeneration,
             ),
         )
         insertPresenceRows(
@@ -100,5 +174,14 @@ interface OwnedCopyLedgerDao {
                 )
             },
         )
+        return true
     }
+
+    private fun OwnedCopySyncEntity.toSnapshot(
+        stableSourceIds: List<String>,
+    ): CompletedOwnedCopySnapshot = CompletedOwnedCopySnapshot(
+        completedAt = completedAt,
+        lifecycleGeneration = lifecycleGeneration,
+        stableSourceIds = stableSourceIds,
+    )
 }

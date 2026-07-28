@@ -54,6 +54,27 @@ interface StoreMatchDao {
     @Query(
         """
         UPDATE store_match
+        SET is_present = 0
+        WHERE source = :source
+          AND is_present = 1
+        """,
+    )
+    suspend fun markAbsentForSource(source: GameSource)
+
+    @Query(
+        """
+        UPDATE store_match
+        SET is_present = 0
+        WHERE source = :source
+          AND account_scope != :accountScope
+          AND is_present = 1
+        """,
+    )
+    suspend fun markOtherAccountsAbsent(accountScope: String, source: GameSource)
+
+    @Query(
+        """
+        UPDATE store_match
         SET canonical_id = :toCanonicalId
         WHERE canonical_id = :fromCanonicalId
         """,

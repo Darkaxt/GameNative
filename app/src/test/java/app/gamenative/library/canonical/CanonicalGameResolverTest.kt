@@ -927,6 +927,14 @@ class CanonicalGameResolverTest {
             source: GameSource,
         ): Unit = error("Resolver must not update presence")
 
+        override suspend fun markAbsentForSource(source: GameSource): Unit =
+            error("Resolver must not update presence")
+
+        override suspend fun markOtherAccountsAbsent(
+            accountScope: String,
+            source: GameSource,
+        ): Unit = error("Resolver must not update presence")
+
         override suspend fun repoint(fromCanonicalId: String, toCanonicalId: String): Unit =
             error("Resolver must not repoint store matches")
 

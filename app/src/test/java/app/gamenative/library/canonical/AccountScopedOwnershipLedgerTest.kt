@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -21,6 +22,7 @@ import org.robolectric.annotation.Config
 @Config(manifest = Config.NONE, application = android.app.Application::class)
 class AccountScopedOwnershipLedgerTest {
     private lateinit var database: PluviaDatabase
+    private lateinit var lifecycleState: InMemoryAccountLifecycleState
     private val scopeA = AccountScope.parse("a".repeat(64))
     private val scopeB = AccountScope.parse("b".repeat(64))
 
@@ -30,6 +32,7 @@ class AccountScopedOwnershipLedgerTest {
         database = Room.inMemoryDatabaseBuilder(context, PluviaDatabase::class.java)
             .allowMainThreadQueries()
             .build()
+        lifecycleState = InMemoryAccountLifecycleState()
     }
 
     @After
@@ -40,8 +43,8 @@ class AccountScopedOwnershipLedgerTest {
     @Test
     fun materializationFailureLeavesPriorLedgerAndSanitizesFailure() = runTest {
         val dao = database.ownedCopyLedgerDao()
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L)
-        val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L, 0L)
+        val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao, lifecycleState)
 
         val result: Result<Int> = ledger.runCompleteSnapshot(GameSource.GOG) {
             error("private account id, title, path, URL, token, payload, and user text")
@@ -56,9 +59,9 @@ class AccountScopedOwnershipLedgerTest {
     @Test
     fun accountSwitchBeforeCommitLeavesPriorLedger() = runTest {
         val dao = database.ownedCopyLedgerDao()
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.EPIC, listOf("old"), 1L)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.EPIC, listOf("old"), 1L, 0L)
         val scopes = SequenceScopeProvider(listOf(scopeA, scopeB))
-        val ledger = AccountScopedOwnershipLedger(scopes, dao)
+        val ledger = AccountScopedOwnershipLedger(scopes, dao, lifecycleState)
 
         val result = ledger.runCompleteSnapshot(GameSource.EPIC) {
             MaterializedOwnedCopySnapshot(value = 3, stableSourceIds = listOf("new"))
@@ -73,12 +76,12 @@ class AccountScopedOwnershipLedgerTest {
     @Test
     fun accountLifecycleAbaChangeBeforeCommitLeavesPriorLedger() = runTest {
         val dao = database.ownedCopyLedgerDao()
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L)
-        val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L, 0L)
+        val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao, lifecycleState)
 
         val result = ledger.runCompleteSnapshot(GameSource.GOG) {
-            AccountScopeInvalidations.notifyChanged(GameSource.GOG)
-            AccountScopeInvalidations.notifyChanged(GameSource.GOG)
+            lifecycleState.advanceGeneration(GameSource.GOG)
+            lifecycleState.advanceGeneration(GameSource.GOG)
             MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("wrong-account"))
         }
 
@@ -88,9 +91,43 @@ class AccountScopedOwnershipLedgerTest {
     }
 
     @Test
+    fun completedAccountALedgerIsNotReusableAfterAccountBAndReturnToA() = runTest {
+        val dao = database.ownedCopyLedgerDao()
+        val scopes = MutableScopeProvider(scopeA)
+        val ledger = AccountScopedOwnershipLedger(scopes, dao, lifecycleState)
+
+        assertEquals(
+            1,
+            ledger.runCompleteSnapshot(GameSource.GOG) {
+                MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("owned-a"))
+            }.getOrThrow(),
+        )
+        assertEquals(
+            0L,
+            dao.getCompletedSnapshotForLifecycle(scopeA.value, GameSource.GOG, 0L)
+                ?.lifecycleGeneration,
+        )
+
+        lifecycleState.advanceGeneration(GameSource.GOG)
+        scopes.value = scopeB
+        ledger.runCompleteSnapshot(GameSource.GOG) {
+            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("owned-b"))
+        }.getOrThrow()
+
+        lifecycleState.advanceGeneration(GameSource.GOG)
+        scopes.value = scopeA
+
+        assertNull(dao.getCompletedSnapshotForLifecycle(scopeA.value, GameSource.GOG, 2L))
+        assertEquals(
+            listOf("owned-a"),
+            dao.getCompletedSnapshot(scopeA.value, GameSource.GOG)?.stableSourceIds,
+        )
+    }
+
+    @Test
     fun verifiedEmptyTraversalCommitsCompletedEmptySnapshot() = runTest {
         val dao = database.ownedCopyLedgerDao()
-        val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao)
+        val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao, lifecycleState)
 
         val result = ledger.runCompleteSnapshot(GameSource.AMAZON) {
             MaterializedOwnedCopySnapshot(value = 0, stableSourceIds = emptyList())
@@ -102,6 +139,12 @@ class AccountScopedOwnershipLedgerTest {
 
     private fun fixedScopes(scope: AccountScope): AccountScopeProvider = object : AccountScopeProvider {
         override suspend fun current(source: GameSource): AccountScope = scope
+    }
+
+    private class MutableScopeProvider(
+        var value: AccountScope,
+    ) : AccountScopeProvider {
+        override suspend fun current(source: GameSource): AccountScope = value
     }
 
     private class SequenceScopeProvider(scopes: List<AccountScope?>) : AccountScopeProvider {

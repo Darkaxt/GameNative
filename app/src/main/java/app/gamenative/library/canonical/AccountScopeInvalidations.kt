@@ -1,15 +1,20 @@
 package app.gamenative.library.canonical
 
 import app.gamenative.data.GameSource
-import java.util.concurrent.atomic.AtomicLongArray
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 
-object AccountScopeInvalidations {
-    private val generations = AtomicLongArray(GameSource.entries.size)
+internal class AccountLifecycleChange(
+    val source: GameSource,
+)
+
+object AccountScopeInvalidations : AccountLifecycleState {
+    @Volatile
+    private var lifecycleState: AccountLifecycleState = InMemoryAccountLifecycleState()
+
     private val changes = MutableSharedFlow<GameSource>(
         extraBufferCapacity = 8,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -19,10 +24,40 @@ object AccountScopeInvalidations {
         .filter { it == source }
         .map { Unit }
 
-    fun generation(source: GameSource): Long = generations.get(source.ordinal)
+    override fun generation(source: GameSource): Long = lifecycleState.generation(source)
+
+    override fun advanceGeneration(source: GameSource): Long =
+        lifecycleState.advanceGeneration(source)
+
+    internal fun install(state: AccountLifecycleState) {
+        lifecycleState = state
+    }
+
+    internal fun beginChange(source: GameSource): AccountLifecycleChange {
+        advanceGeneration(source)
+        return AccountLifecycleChange(source)
+    }
+
+    internal fun publishChange(change: AccountLifecycleChange) {
+        changes.tryEmit(change.source)
+    }
+
+    internal inline fun <T> runLifecycleChange(
+        source: GameSource,
+        shouldAdvance: Boolean = true,
+        block: () -> T,
+    ): T {
+        if (!shouldAdvance) return block()
+
+        val change = beginChange(source)
+        return try {
+            block()
+        } finally {
+            publishChange(change)
+        }
+    }
 
     fun notifyChanged(source: GameSource) {
-        generations.incrementAndGet(source.ordinal)
-        changes.tryEmit(source)
+        publishChange(beginChange(source))
     }
 }

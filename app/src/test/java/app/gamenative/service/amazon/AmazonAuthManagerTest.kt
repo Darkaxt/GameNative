@@ -6,9 +6,13 @@ import androidx.test.core.app.ApplicationProvider
 import app.gamenative.data.AmazonCredentials
 import app.gamenative.data.GameSource
 import app.gamenative.library.canonical.AccountScopeInvalidations
+import io.mockk.coEvery
+import io.mockk.mockkObject
+import io.mockk.unmockkObject
 import java.io.File
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -170,6 +174,75 @@ class AmazonAuthManagerTest {
 
         assertFalse(saved)
         assertFalse(credentialsFile().exists())
+    }
+
+    @Test
+    fun staleClearCannotDeleteReplacementCredentials() {
+        val first = credentials(UUID.randomUUID().toString())
+        val replacement = credentials(UUID.randomUUID().toString()).copy(
+            accessToken = "replacement-access-token",
+        )
+        AmazonAuthManager.saveCredentials(context, first)
+        val staleGeneration = AmazonAuthManager.captureCredentialGeneration()
+        AmazonAuthManager.saveCredentials(context, replacement)
+
+        val cleared = AmazonAuthManager.clearStoredCredentialsIfCurrent(
+            context = context,
+            expectedGeneration = staleGeneration,
+        )
+
+        assertNull(cleared)
+        assertEquals(replacement, AmazonAuthManager.loadCredentials(context))
+    }
+
+    @Test
+    fun staleRefreshCannotOverwriteReplacementCredentials() = runTest {
+        val first = credentials(UUID.randomUUID().toString()).copy(
+            refreshToken = "first-refresh-token",
+            clientId = "first-client-id",
+            expiresAt = 0L,
+        )
+        val replacement = credentials(UUID.randomUUID().toString()).copy(
+            accessToken = "replacement-access-token",
+            refreshToken = "replacement-refresh-token",
+            clientId = "replacement-client-id",
+            expiresAt = Long.MAX_VALUE,
+        )
+        AmazonAuthManager.saveCredentials(context, first)
+
+        val refreshStarted = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        mockkObject(AmazonAuthClient)
+        try {
+            coEvery {
+                AmazonAuthClient.refreshAccessToken(
+                    refreshToken = first.refreshToken,
+                    clientId = first.clientId,
+                )
+            } coAnswers {
+                refreshStarted.complete(Unit)
+                releaseRefresh.await()
+                Result.success(
+                    AmazonAuthResponse(
+                        accessToken = "stale-access-token",
+                        refreshToken = "stale-refresh-token",
+                        expiresIn = 3_600,
+                        tokenType = "bearer",
+                    ),
+                )
+            }
+
+            val staleRefresh = async { AmazonAuthManager.getStoredCredentials(context) }
+            refreshStarted.await()
+            AmazonAuthManager.saveCredentials(context, replacement)
+            releaseRefresh.complete(Unit)
+
+            assertTrue(staleRefresh.await().isFailure)
+            assertEquals(replacement, AmazonAuthManager.loadCredentials(context))
+        } finally {
+            releaseRefresh.complete(Unit)
+            unmockkObject(AmazonAuthClient)
+        }
     }
 
     @Test
