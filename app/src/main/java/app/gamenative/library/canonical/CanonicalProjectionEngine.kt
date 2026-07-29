@@ -5,6 +5,7 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalGameEntity
 import app.gamenative.data.canonical.CanonicalGameFeatureCrossRef
 import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
+import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.CanonicalGameTagCrossRef
 import app.gamenative.data.canonical.ClassificationState
 import app.gamenative.data.canonical.MatchConfidence
@@ -56,7 +57,9 @@ class CanonicalProjectionEngine @Inject constructor(
 ) : CanonicalProjectionRunner {
     private val canonicalGameDao = db.canonicalGameDao()
     private val storeMatchDao = db.storeMatchDao()
+    private val preferenceDao = db.canonicalPreferenceDao()
     private val facetDao = db.canonicalFacetDao()
+    private val snapshotDao = db.gameDetailSnapshotDao()
 
     override suspend fun rebuild(
         batches: List<SourceProjectionBatch>,
@@ -127,6 +130,12 @@ class CanonicalProjectionEngine @Inject constructor(
                     val resolution = resolver.resolve(copy, nowEpochMs)
                     validateResolution(copy, resolution)
                     val match = preserveUserDecision(copy, storedMatch, resolution)
+                    val previousStandaloneCanonicalId = storedMatch
+                        ?.canonicalId
+                        ?.takeIf { canonicalId ->
+                            canonicalId != match.canonicalId &&
+                                storeMatchDao.countAllReferences(canonicalId) == 1
+                        }
                     val state = projectionStates[match.canonicalId] ?: CanonicalProjectionState(
                         original = canonicalGameDao.get(match.canonicalId),
                     ).also { newState ->
@@ -134,6 +143,13 @@ class CanonicalProjectionEngine @Inject constructor(
                     }
                     persistCanonical(resolution)
                     storeMatchDao.upsert(match.copy(isPresent = true))
+                    if (previousStandaloneCanonicalId != null) {
+                        mergeStandaloneDependents(
+                            fromCanonicalId = previousStandaloneCanonicalId,
+                            toCanonicalId = match.canonicalId,
+                            nowEpochMs = nowEpochMs,
+                        )
+                    }
 
                     matchCounts.increment(MatchBucket(match.matchMethod, match.confidence))
                     state.copies += copy
@@ -274,6 +290,96 @@ class CanonicalProjectionEngine @Inject constructor(
         }
         if (stored != resolution.canonical) {
             canonicalGameDao.update(resolution.canonical)
+        }
+    }
+
+    private suspend fun mergeStandaloneDependents(
+        fromCanonicalId: String,
+        toCanonicalId: String,
+        nowEpochMs: Long,
+    ) {
+        check(storeMatchDao.countAllReferences(fromCanonicalId) == 0) {
+            "Cannot remove a canonical game that still owns copies"
+        }
+        mergeStandaloneFacets(fromCanonicalId, toCanonicalId)
+        mergeStandaloneSnapshots(fromCanonicalId, toCanonicalId)
+        mergeStandalonePreference(fromCanonicalId, toCanonicalId, nowEpochMs)
+        canonicalGameDao.delete(fromCanonicalId)
+    }
+
+    private suspend fun mergeStandaloneFacets(
+        fromCanonicalId: String,
+        toCanonicalId: String,
+    ) {
+        facetDao.upsertGenres(
+            facetDao.getGenres(fromCanonicalId).map { crossRef ->
+                crossRef.copy(canonicalId = toCanonicalId)
+            },
+        )
+        facetDao.upsertTags(
+            facetDao.getTags(fromCanonicalId).map { crossRef ->
+                crossRef.copy(canonicalId = toCanonicalId)
+            },
+        )
+        facetDao.upsertFeatures(
+            facetDao.getFeatures(fromCanonicalId).map { crossRef ->
+                crossRef.copy(canonicalId = toCanonicalId)
+            },
+        )
+    }
+
+    private suspend fun mergeStandaloneSnapshots(
+        fromCanonicalId: String,
+        toCanonicalId: String,
+    ) {
+        val targetKeys = snapshotDao.getByCanonicalId(toCanonicalId)
+            .map { snapshot -> snapshot.locale to snapshot.country }
+            .toMutableSet()
+        snapshotDao.getByCanonicalId(fromCanonicalId).forEach { snapshot ->
+            if (targetKeys.add(snapshot.locale to snapshot.country)) {
+                snapshotDao.upsert(snapshot.copy(canonicalId = toCanonicalId))
+            }
+        }
+    }
+
+    private suspend fun mergeStandalonePreference(
+        fromCanonicalId: String,
+        toCanonicalId: String,
+        nowEpochMs: Long,
+    ) {
+        val target = preferenceDao.get(toCanonicalId)
+        val source = preferenceDao.get(fromCanonicalId)
+        if (target == null && source == null) return
+
+        val preferredCopy = target?.preferredCopyKeyOrNull() ?: source?.preferredCopyKeyOrNull()
+        val titleOverride = target?.titleOverride ?: source?.titleOverride
+        val artworkOverride = target?.artworkOverrideJson ?: source?.artworkOverrideJson
+        if (
+            target == null &&
+            preferredCopy == null &&
+            titleOverride == null &&
+            artworkOverride == null
+        ) {
+            return
+        }
+
+        val merged = CanonicalGamePreferenceEntity(
+            canonicalId = toCanonicalId,
+            preferredAccountScope = preferredCopy?.accountScope?.value,
+            preferredSource = preferredCopy?.source,
+            preferredStableSourceId = preferredCopy?.stableSourceId,
+            titleOverride = titleOverride,
+            artworkOverrideJson = artworkOverride,
+            updatedAt = nowEpochMs,
+        )
+        val unchanged = target != null &&
+            target.preferredAccountScope == merged.preferredAccountScope &&
+            target.preferredSource == merged.preferredSource &&
+            target.preferredStableSourceId == merged.preferredStableSourceId &&
+            target.titleOverride == merged.titleOverride &&
+            target.artworkOverrideJson == merged.artworkOverrideJson
+        if (!unchanged) {
+            preferenceDao.upsert(merged)
         }
     }
 

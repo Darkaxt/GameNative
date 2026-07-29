@@ -7,8 +7,10 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.CanonicalIdGenerator
 import app.gamenative.data.canonical.ClassificationState
+import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -22,6 +24,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -155,6 +158,146 @@ class CanonicalProjectionEngineTest {
         assertEquals(firstMatches, db.storeMatchDao().getAll())
         assertEquals(firstGenres, db.canonicalFacetDao().getGenres(firstCanonicals.single().canonicalId))
         assertEquals(firstTags, db.canonicalFacetDao().getTags(firstCanonicals.single().canonicalId))
+    }
+
+    @Test
+    fun `automatic reassignment transfers dependents and removes standalone orphan`() = runBlocking {
+        val gog = copy(
+            source = GameSource.GOG,
+            stableSourceId = "gog-10",
+            displayName = "Control",
+            developer = "Remedy Entertainment",
+            releaseYear = 2019,
+            genreKeys = setOf("gog:adventure"),
+        )
+        engine.rebuild(
+            batches = listOf(batch(GameSource.GOG, copies = listOf(gog))),
+            nowEpochMs = 100,
+        )
+        val standaloneId = db.canonicalGameDao().getAll().single().canonicalId
+        db.canonicalPreferenceDao().upsert(
+            CanonicalGamePreferenceEntity(
+                canonicalId = standaloneId,
+                preferredAccountScope = gog.key.accountScope.value,
+                preferredSource = gog.key.source,
+                preferredStableSourceId = gog.key.stableSourceId,
+                titleOverride = "Preferred title",
+                artworkOverrideJson = "{}",
+                updatedAt = 110,
+            ),
+        )
+        db.gameDetailSnapshotDao().upsert(
+            GameDetailSnapshotEntity(
+                canonicalId = standaloneId,
+                locale = "en",
+                country = "US",
+                payloadJson = "{}",
+                provenanceJson = "{}",
+                fetchedAt = 120,
+                sourceRevision = "revision",
+            ),
+        )
+
+        val steam = copy(
+            source = GameSource.STEAM,
+            stableSourceId = "10",
+            displayName = "Control",
+            developer = "Remedy Entertainment",
+            releaseYear = 2019,
+            directSteamAppId = 10,
+            genreKeys = setOf("steam:action"),
+        )
+        val result = engine.rebuild(
+            batches = listOf(
+                batch(GameSource.GOG, copies = listOf(gog)),
+                batch(
+                    source = GameSource.STEAM,
+                    completeness = SnapshotCompleteness.PARTIAL,
+                    copies = listOf(steam),
+                    reason = SnapshotReason.MISSING_MATERIALIZED_ROW,
+                ),
+            ),
+            nowEpochMs = 200,
+        )
+
+        val canonical = db.canonicalGameDao().getAll().single()
+        assertEquals(10, canonical.steamAppId)
+        assertEquals(1, result.canonicalCount)
+        assertNull(db.canonicalGameDao().get(standaloneId))
+        assertEquals(
+            listOf(canonical.canonicalId),
+            db.storeMatchDao().getAll().map { it.canonicalId }.distinct(),
+        )
+        assertEquals(
+            listOf("gog:adventure", "steam:action"),
+            db.canonicalFacetDao().getGenres(canonical.canonicalId).map { it.genreKey },
+        )
+        val preference = db.canonicalPreferenceDao().get(canonical.canonicalId)
+        assertEquals("Preferred title", preference?.titleOverride)
+        assertEquals(gog.key, preference?.preferredCopyKeyOrNull())
+        val snapshot = db.gameDetailSnapshotDao().get(canonical.canonicalId, "en", "US")
+        assertEquals("revision", snapshot?.sourceRevision)
+        assertTrue(db.canonicalGameDao().findByTitleKey("control").all {
+            it.canonicalId == canonical.canonicalId
+        })
+    }
+
+    @Test
+    fun `automatic reassignment preserves a canonical that still owns another copy`() = runBlocking {
+        val first = copy(
+            source = GameSource.GOG,
+            stableSourceId = "a",
+            displayName = "Original Game",
+            developer = "Shared Studio",
+            releaseYear = 2020,
+        )
+        val second = first.copy(
+            key = first.key.copy(stableSourceId = "b"),
+        )
+        engine.rebuild(
+            batches = listOf(batch(GameSource.GOG, copies = listOf(first, second))),
+            nowEpochMs = 100,
+        )
+        val sharedCanonicalId = db.canonicalGameDao().getAll().single().canonicalId
+        db.canonicalPreferenceDao().upsert(
+            CanonicalGamePreferenceEntity(
+                canonicalId = sharedCanonicalId,
+                preferredAccountScope = second.key.accountScope.value,
+                preferredSource = second.key.source,
+                preferredStableSourceId = second.key.stableSourceId,
+                titleOverride = "Keep with shared canonical",
+                artworkOverrideJson = null,
+                updatedAt = 110,
+            ),
+        )
+
+        val changedFirst = first.copy(displayName = "New Game")
+        val steam = copy(
+            source = GameSource.STEAM,
+            stableSourceId = "10",
+            displayName = "New Game",
+            developer = "Shared Studio",
+            releaseYear = 2020,
+            directSteamAppId = 10,
+        )
+        engine.rebuild(
+            batches = listOf(
+                batch(GameSource.GOG, copies = listOf(changedFirst, second)),
+                batch(GameSource.STEAM, copies = listOf(steam)),
+            ),
+            nowEpochMs = 200,
+        )
+
+        val matches = db.storeMatchDao().getAll().associateBy { it.stableSourceId }
+        val steamCanonicalId = requireNotNull(matches["10"]).canonicalId
+        assertEquals(steamCanonicalId, requireNotNull(matches["a"]).canonicalId)
+        assertEquals(sharedCanonicalId, requireNotNull(matches["b"]).canonicalId)
+        assertEquals(2, db.canonicalGameDao().getAll().size)
+        assertEquals(
+            "Keep with shared canonical",
+            db.canonicalPreferenceDao().get(sharedCanonicalId)?.titleOverride,
+        )
+        assertNull(db.canonicalPreferenceDao().get(steamCanonicalId))
     }
 
     @Test
