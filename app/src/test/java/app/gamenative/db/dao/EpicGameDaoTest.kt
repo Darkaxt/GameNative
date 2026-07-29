@@ -3,6 +3,7 @@ package app.gamenative.db.dao
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import app.gamenative.data.AmazonGame
 import app.gamenative.data.EpicGame
 import app.gamenative.db.PluviaDatabase
 import kotlinx.coroutines.test.runTest
@@ -72,6 +73,28 @@ class EpicGameDaoTest {
             games.map { it.namespace to it.catalogId }.toSet(),
             dao.getAllForCanonicalProjection().map { it.namespace to it.catalogId }.toSet(),
         )
+    }
+
+    @Test
+    fun providerIdentityQueriesPreferInstalledThenSmallestLocalId() = runTest {
+        dao.insertAll(
+            listOf(
+                EpicGame(id = 1, namespace = "ns", catalogId = "catalog", isInstalled = false),
+                EpicGame(id = 7, namespace = "ns", catalogId = "catalog", isInstalled = true),
+                EpicGame(id = 5, namespace = "ns", catalogId = "catalog", isInstalled = true),
+            ),
+        )
+        assertEquals(5, dao.getByProviderIdentity("ns", "catalog")?.id)
+
+        val amazonDao = database.amazonGameDao()
+        amazonDao.insertAll(
+            listOf(
+                AmazonGame(appId = 1, productId = "product", isInstalled = false),
+                AmazonGame(appId = 3, productId = "product", isInstalled = true),
+                AmazonGame(appId = 2, productId = "product", isInstalled = true),
+            ),
+        )
+        assertEquals(2, amazonDao.getByProductId("product")?.appId)
     }
 
     @Test

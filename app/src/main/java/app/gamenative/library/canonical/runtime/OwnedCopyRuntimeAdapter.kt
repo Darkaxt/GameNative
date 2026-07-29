@@ -12,7 +12,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.retryWhen
@@ -46,20 +48,21 @@ class OwnedCopyRuntimeRegistry @Inject constructor(
     }
 
     fun invalidations(): Flow<Unit> = merge(
-        playHistoryDao.getAll().map { Unit },
+        resilientInvalidations(source = null) {
+            playHistoryDao.getAll().map { Unit }
+        },
         volatileInvalidations.map { Unit },
         *RUNTIME_SOURCE_ORDER.map { source ->
-            bySource.getValue(source).invalidations().retryWhen { error, attempt ->
-                if (error is CancellationException) return@retryWhen false
-                diagnostics.invalidationFailed(source, error::class)
-                delay((1_000L shl attempt.coerceAtMost(6).toInt()).coerceAtMost(60_000L))
-                true
+            resilientInvalidations(source) {
+                bySource.getValue(source).invalidations()
             }
         }.toTypedArray(),
     )
 
     suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult =
-        bySource.getValue(key.source).resolve(key)
+        bySource.getValue(key.source).resolve(key).also { result ->
+            result.requireIdentity(key)
+        }
 
     suspend fun resolveAll(
         source: GameSource,
@@ -68,7 +71,20 @@ class OwnedCopyRuntimeRegistry @Inject constructor(
         require(keys.all { it.source == source })
         return bySource.getValue(source).resolveAll(keys).also { results ->
             check(results.keys == keys) { "Runtime adapter returned an incomplete key set" }
+            results.forEach { (key, result) -> result.requireIdentity(key) }
         }
+    }
+
+    private fun resilientInvalidations(
+        source: GameSource?,
+        factory: () -> Flow<Unit>,
+    ): Flow<Unit> = flow {
+        emitAll(factory())
+    }.retryWhen { error, attempt ->
+        if (error is CancellationException || error !is Exception) return@retryWhen false
+        source?.let { diagnostics.invalidationFailed(it, error::class) }
+        delay((1_000L shl attempt.coerceAtMost(6).toInt()).coerceAtMost(60_000L))
+        true
     }
 
     private companion object {
@@ -150,14 +166,31 @@ internal fun sourceAppId(source: GameSource, id: Any): String = "${source.name}_
 internal fun Set<OwnedCopyKey>.hiddenResults(): Map<OwnedCopyKey, OwnedCopyRuntimeResult> =
     associateWith { OwnedCopyRuntimeResult.Hidden }
 
+internal fun OwnedCopyRuntimeResult.requireIdentity(requestedKey: OwnedCopyKey) {
+    when (this) {
+        is OwnedCopyRuntimeResult.Available -> {
+            check(copy.key == requestedKey) { "Runtime result copy key differs from requested key" }
+            check(copy.reference.key == requestedKey) {
+                "Runtime result reference key differs from requested key"
+            }
+        }
+        is OwnedCopyRuntimeResult.Unavailable ->
+            check(key == requestedKey) { "Unavailable runtime key differs from requested key" }
+        OwnedCopyRuntimeResult.Hidden -> Unit
+    }
+}
+
 internal suspend inline fun currentAccountProof(
     crossinline check: suspend () -> Boolean,
 ): Boolean = try {
     check()
 } catch (error: CancellationException) {
     throw error
-} catch (_: Throwable) {
+} catch (_: Exception) {
     false
 }
+
+internal fun latestPositiveTimestamp(provider: Long?, local: Long?): Long? =
+    listOfNotNull(provider?.positiveOrNull(), local?.positiveOrNull()).maxOrNull()
 
 internal fun Long.positiveOrNull(): Long? = takeIf { it > 0L }

@@ -8,7 +8,9 @@ import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.data.canonical.OwnedCopyPresenceEntity
 import app.gamenative.db.dao.AmazonGameDao
+import app.gamenative.db.dao.CompletedOwnedCopySnapshot
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.library.canonical.AccountLifecycleState
@@ -16,37 +18,98 @@ import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.AmazonOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
+import app.gamenative.library.canonical.source.preferredAmazonRows
 import app.gamenative.service.amazon.AmazonArtwork
 import app.gamenative.service.amazon.AmazonService
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 @Singleton
-class AmazonOwnedCopyRuntimeState @Inject constructor(
+class AmazonOwnedCopyRuntimeGateway @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
-    internal suspend fun read(games: List<AmazonGame>): Map<Int, OwnedCopyVolatileState> {
-        if (games.isEmpty()) return emptyMap()
-        val activeDownloads = AmazonService.getActiveDownloads()
-        val partialDownloads = AmazonService.getPartialDownloads(context).toSet()
-        return games.associate { game ->
-            val downloading = activeDownloads[game.productId]?.isActive() == true
-            game.appId to OwnedCopyVolatileState(
-                installPath = game.installPath.takeIf(String::isNotBlank),
-                installedSizeBytes = game.installSize.positiveOrNull(),
-                branchOrVersion = game.versionId.takeIf(String::isNotBlank),
-                isInstalled = game.isInstalled,
-                isDownloading = downloading,
-                hasPartialDownload = downloading || game.productId in partialDownloads,
-                updateAvailable = game.isInstalled && AmazonService.isUpdatePendingByAppId(game.appId),
-                isShared = false,
-                playtimeMinutes = game.playTimeMinutes.positiveOrNull(),
-            )
-        }
+    internal suspend fun activeDownloadProductIds(): Set<String> =
+        AmazonService.getActiveDownloads()
+            .filterValues { it.isActive() }
+            .keys
+
+    internal suspend fun partialDownloadProductIds(): Set<String> =
+        AmazonService.getPartialDownloads(context).toSet()
+
+    internal suspend fun updatePending(productId: String): Boolean =
+        AmazonService.isUpdatePending(productId)
+}
+
+@Singleton
+class AmazonOwnedCopyRuntimeState @Inject constructor(
+    private val gateway: AmazonOwnedCopyRuntimeGateway,
+) {
+    private val updateCache = ConcurrentHashMap<AmazonUpdateCacheKey, Boolean>()
+
+    internal suspend fun readPoint(
+        game: AmazonGame,
+        accountScope: AccountScope,
+        generation: Long,
+    ): OwnedCopyVolatileState {
+        val activeDownloads = gateway.activeDownloadProductIds()
+        val partialDownloads = gateway.partialDownloadProductIds() + activeDownloads
+        val updateAvailable = game.isInstalled && gateway.updatePending(game.productId)
+        updateCache[AmazonUpdateCacheKey(accountScope, generation, game.productId)] = updateAvailable
+        return stateFor(game, activeDownloads, partialDownloads, updateAvailable)
     }
+
+    internal suspend fun readBatch(
+        games: List<AmazonGame>,
+        accountScope: AccountScope,
+        generation: Long,
+    ): Map<Int, OwnedCopyVolatileState> {
+        if (games.isEmpty()) return emptyMap()
+        val activeDownloads = gateway.activeDownloadProductIds()
+        val partialDownloads = gateway.partialDownloadProductIds() + activeDownloads
+        val updateSnapshot = updateCache.toMap()
+        return games.mapNotNull { game ->
+            try {
+                val cacheKey = AmazonUpdateCacheKey(accountScope, generation, game.productId)
+                game.appId to stateFor(
+                    game,
+                    activeDownloads,
+                    partialDownloads,
+                    updateSnapshot[cacheKey] == true,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            }
+        }.toMap()
+    }
+
+    private data class AmazonUpdateCacheKey(
+        val accountScope: AccountScope,
+        val generation: Long,
+        val productId: String,
+    )
+
+    private fun stateFor(
+        game: AmazonGame,
+        activeDownloads: Set<String>,
+        partialDownloads: Set<String>,
+        updateAvailable: Boolean,
+    ): OwnedCopyVolatileState = OwnedCopyVolatileState(
+        installPath = game.installPath.takeIf(String::isNotBlank),
+        installedSizeBytes = game.installSize.positiveOrNull(),
+        branchOrVersion = game.versionId.takeIf(String::isNotBlank),
+        isInstalled = game.isInstalled,
+        isDownloading = game.productId in activeDownloads,
+        hasPartialDownload = game.productId in partialDownloads,
+        updateAvailable = updateAvailable,
+        isShared = false,
+        playtimeMinutes = game.playTimeMinutes.positiveOrNull(),
+    )
 }
 
 @Singleton
@@ -66,44 +129,74 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
     override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult {
         if (key.source != source) return OwnedCopyRuntimeResult.Hidden
         var ownershipProved = false
+        var provedScope: AccountScope? = null
+        var provedGeneration: Long? = null
+        var provedResolvedSourceId: String? = null
         try {
             val generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
                 ?: return OwnedCopyRuntimeResult.Hidden
+            provedScope = accountScope
+            provedGeneration = generation
             if (key.accountScope != accountScope) return OwnedCopyRuntimeResult.Hidden
             if (accountLifecycleState.readyGeneration(source) != generation) {
                 return OwnedCopyRuntimeResult.Hidden
             }
-            val entitlementId = currentEntitlement(key, accountScope, generation)
+            val presence = currentPresence(key, accountScope, generation)
                 ?: return OwnedCopyRuntimeResult.Hidden
             ownershipProved = true
+            provedResolvedSourceId = presence.resolvedSourceId
+            val entitlementId = presence.resolvedSourceId?.takeIf(String::isNotBlank)
+                ?: return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    presence.resolvedSourceId,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
             val reference = sourceAdapter.resolve(key) as? SourceOwnedCopyReference.Amazon
             if (
                 reference == null || reference.productId != key.stableSourceId ||
                 reference.entitlementId != entitlementId
             ) {
-                return if (isCurrentReference(key, accountScope, generation, entitlementId)) {
-                    unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
-                } else {
-                    OwnedCopyRuntimeResult.Hidden
-                }
+                return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    entitlementId,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
             }
             val game = amazonGameDao.getByAppId(reference.localRowId)
             if (game == null || game.appId != reference.localRowId || game.productId != reference.productId) {
-                return unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
+                return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    entitlementId,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
             }
-            val sourceState = runtimeState.read(listOf(game))[game.appId]
-                ?: return unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
-            playHistoryDao.pointLastPlayed(sourceAppId(source, game.appId))
-            if (!isCurrentReference(key, accountScope, generation, entitlementId)) {
+            val sourceState = runtimeState.readPoint(game, accountScope, generation)
+            val localLastPlayed = playHistoryDao.pointLastPlayed(sourceAppId(source, game.appId))
+            if (!hasFreshProof(key, accountScope, generation, entitlementId)) {
                 return OwnedCopyRuntimeResult.Hidden
             }
-            return available(key, reference, game, sourceState)
+            return available(key, reference, game, sourceState, localLastPlayed)
         } catch (error: CancellationException) {
             throw error
-        } catch (error: Throwable) {
-            return if (ownershipProved) {
-                unavailable(key, CopyUnavailableReason.SOURCE_READ_FAILED, error)
+        } catch (error: Exception) {
+            val scope = provedScope
+            val generation = provedGeneration
+            return if (ownershipProved && scope != null && generation != null) {
+                unavailableIfFresh(
+                    key,
+                    scope,
+                    generation,
+                    provedResolvedSourceId,
+                    CopyUnavailableReason.SOURCE_READ_FAILED,
+                    error,
+                )
             } else {
                 OwnedCopyRuntimeResult.Hidden
             }
@@ -115,9 +208,10 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
     ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> {
         if (keys.isEmpty()) return emptyMap()
         var provedScope: AccountScope? = null
-        var ownedIds: Set<String> = emptySet()
+        var generation: Long? = null
+        var initialLedger: CompletedOwnedCopySnapshot? = null
         return try {
-            val generation = accountLifecycleState.generation(source)
+            generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
                 ?: return keys.hiddenResults()
             provedScope = accountScope
@@ -132,7 +226,8 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 source = source,
                 lifecycleGeneration = generation,
             ) ?: return keys.hiddenResults()
-            ownedIds = ledger.stableSourceIds.toSet()
+            initialLedger = ledger
+            val ownedIds = ledger.stableSourceIds.toSet()
             if (
                 keys.none {
                     it.source == source && it.accountScope == accountScope &&
@@ -142,15 +237,16 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 return keys.hiddenResults()
             }
             val rows = amazonGameDao.getAllAsList()
-            val rowsByProduct = rows.associateBy(AmazonGame::productId)
+            val rowsByProduct = preferredAmazonRows(rows)
             val requestedRows = keys.asSequence()
                 .filter { it.source == source && it.accountScope == accountScope }
                 .filter { it.stableSourceId in ownedIds }
                 .mapNotNull { rowsByProduct[it.stableSourceId] }
                 .distinctBy(AmazonGame::appId)
                 .toList()
-            val states = runtimeState.read(requestedRows)
-            playHistoryDao.batchLastPlayed()
+            val states = runtimeState.readBatch(requestedRows, accountScope, generation)
+            val history = playHistoryDao.batchLastPlayed()
+            val finalLedger = finalLedger(accountScope, generation) ?: return keys.hiddenResults()
             if (!isCurrent(accountScope, generation)) return keys.hiddenResults()
             keys.associateWith { key ->
                 val entitlementId = ledger.resolvedSourceIds[key.stableSourceId]
@@ -159,7 +255,8 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 when {
                     key.source != source || key.accountScope != accountScope ->
                         OwnedCopyRuntimeResult.Hidden
-                    key.stableSourceId !in ownedIds -> OwnedCopyRuntimeResult.Hidden
+                    !referenceIsCurrent(key.stableSourceId, ledger, finalLedger) ->
+                        OwnedCopyRuntimeResult.Hidden
                     entitlementId.isNullOrBlank() || game == null || sourceState == null ->
                         unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
                     else -> available(
@@ -172,16 +269,22 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                         ),
                         game = game,
                         sourceState = sourceState,
+                        localLastPlayed = history[sourceAppId(source, game.appId)],
                     )
                 }
             }
         } catch (error: CancellationException) {
             throw error
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
+            val scope = provedScope ?: return keys.hiddenResults()
+            val currentGeneration = generation ?: return keys.hiddenResults()
+            val ledger = initialLedger ?: return keys.hiddenResults()
+            val finalLedger = finalLedger(scope, currentGeneration) ?: return keys.hiddenResults()
+            if (!isCurrent(scope, currentGeneration)) return keys.hiddenResults()
             keys.associateWith { key ->
                 if (
-                    key.source == source && key.accountScope == provedScope &&
-                    key.stableSourceId in ownedIds
+                    key.source == source && key.accountScope == scope &&
+                    referenceIsCurrent(key.stableSourceId, ledger, finalLedger)
                 ) {
                     unavailable(key, CopyUnavailableReason.SOURCE_READ_FAILED, error)
                 } else {
@@ -191,24 +294,67 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
         }
     }
 
-    private suspend fun currentEntitlement(
+    private suspend fun currentPresence(
         key: OwnedCopyKey,
         accountScope: AccountScope,
         generation: Long,
-    ): String? = ownedCopyLedgerDao.getPresenceForLifecycle(
+    ): OwnedCopyPresenceEntity? = ownedCopyLedgerDao.getPresenceForLifecycle(
         accountScope = accountScope.value,
         source = source,
         stableSourceId = key.stableSourceId,
         lifecycleGeneration = generation,
-    )?.resolvedSourceId?.takeIf(String::isNotBlank)
+    )
 
-    private suspend fun isCurrentReference(
+    private suspend fun hasFreshProof(
         key: OwnedCopyKey,
         accountScope: AccountScope,
         generation: Long,
-        entitlementId: String,
-    ): Boolean = isCurrent(accountScope, generation) &&
-        currentEntitlement(key, accountScope, generation) == entitlementId
+        resolvedSourceId: String?,
+    ): Boolean = currentAccountProof {
+        accountScopeProvider.current(source) == accountScope &&
+            accountLifecycleState.generation(source) == generation &&
+            accountLifecycleState.readyGeneration(source) == generation &&
+            currentPresence(key, accountScope, generation)
+                ?.let { it.resolvedSourceId == resolvedSourceId } == true
+    }
+
+    private suspend fun unavailableIfFresh(
+        key: OwnedCopyKey,
+        accountScope: AccountScope,
+        generation: Long,
+        resolvedSourceId: String?,
+        reason: CopyUnavailableReason,
+        error: Exception? = null,
+    ): OwnedCopyRuntimeResult = if (
+        hasFreshProof(key, accountScope, generation, resolvedSourceId)
+    ) {
+        unavailable(key, reason, error)
+    } else {
+        OwnedCopyRuntimeResult.Hidden
+    }
+
+    private suspend fun finalLedger(
+        accountScope: AccountScope,
+        generation: Long,
+    ): CompletedOwnedCopySnapshot? = try {
+        ownedCopyLedgerDao.getCompletedSnapshotForLifecycle(
+            accountScope = accountScope.value,
+            source = source,
+            lifecycleGeneration = generation,
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun referenceIsCurrent(
+        stableSourceId: String,
+        initial: CompletedOwnedCopySnapshot,
+        final: CompletedOwnedCopySnapshot,
+    ): Boolean = stableSourceId in initial.stableSourceIds &&
+        stableSourceId in final.stableSourceIds &&
+        initial.resolvedSourceIds[stableSourceId] == final.resolvedSourceIds[stableSourceId]
 
     private suspend fun isCurrent(accountScope: AccountScope, generation: Long): Boolean =
         currentAccountProof {
@@ -222,6 +368,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
         reference: SourceOwnedCopyReference.Amazon,
         game: AmazonGame,
         sourceState: OwnedCopyVolatileState,
+        localLastPlayed: Long?,
     ): OwnedCopyRuntimeResult.Available {
         val layoutHero = AmazonArtwork.layoutHeroFromProductJson(game.productJson)
             .ifEmpty { game.heroUrl.ifEmpty { game.artUrl } }
@@ -264,7 +411,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 hasPartialDownload = sourceState.hasPartialDownload,
                 updateAvailable = sourceState.updateAvailable,
                 isShared = false,
-                lastPlayedEpochMs = game.lastPlayed.positiveOrNull(),
+                lastPlayedEpochMs = latestPositiveTimestamp(game.lastPlayed, localLastPlayed),
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, libraryItemPresent = true, sourceState),
             ),

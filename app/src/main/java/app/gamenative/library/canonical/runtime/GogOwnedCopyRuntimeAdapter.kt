@@ -6,6 +6,7 @@ import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.db.dao.CompletedOwnedCopySnapshot
 import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
@@ -61,10 +62,14 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
     override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult {
         if (key.source != source) return OwnedCopyRuntimeResult.Hidden
         var ownershipProved = false
+        var provedScope: AccountScope? = null
+        var provedGeneration: Long? = null
         try {
             val generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
                 ?: return OwnedCopyRuntimeResult.Hidden
+            provedScope = accountScope
+            provedGeneration = generation
             if (key.accountScope != accountScope) return OwnedCopyRuntimeResult.Hidden
             if (accountLifecycleState.readyGeneration(source) != generation) {
                 return OwnedCopyRuntimeResult.Hidden
@@ -73,26 +78,43 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
             ownershipProved = true
             val reference = sourceAdapter.resolve(key) as? SourceOwnedCopyReference.Gog
             if (reference == null || reference.gameId != key.stableSourceId) {
-                return if (isCurrentAndOwned(key, accountScope, generation)) {
-                    unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
-                } else {
-                    OwnedCopyRuntimeResult.Hidden
-                }
+                return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
             }
             val game = gogGameDao.getById(reference.gameId)?.takeUnless(GOGGame::exclude)
-                ?: return unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
+                ?: return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
             val sourceState = runtimeState.read(listOf(game))[game.id]
-                ?: return unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
-            playHistoryDao.pointLastPlayed(sourceAppId(source, game.id))
-            if (!isCurrentAndOwned(key, accountScope, generation)) {
+                ?: return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
+            val localLastPlayed = playHistoryDao.pointLastPlayed(sourceAppId(source, game.id))
+            if (!hasFreshProof(key, accountScope, generation)) {
                 return OwnedCopyRuntimeResult.Hidden
             }
-            return available(key, reference, game, sourceState)
+            return available(key, reference, game, sourceState, localLastPlayed)
         } catch (error: CancellationException) {
             throw error
-        } catch (error: Throwable) {
-            return if (ownershipProved) {
-                unavailable(key, CopyUnavailableReason.SOURCE_READ_FAILED, error)
+        } catch (error: Exception) {
+            return if (ownershipProved && provedScope != null && provedGeneration != null) {
+                unavailableIfFresh(
+                    key,
+                    provedScope,
+                    provedGeneration,
+                    CopyUnavailableReason.SOURCE_READ_FAILED,
+                    error,
+                )
             } else {
                 OwnedCopyRuntimeResult.Hidden
             }
@@ -104,9 +126,10 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
     ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> {
         if (keys.isEmpty()) return emptyMap()
         var accountScope: AccountScope? = null
+        var generation: Long? = null
         var ownedIds: Set<String> = emptySet()
         return try {
-            val generation = accountLifecycleState.generation(source)
+            generation = accountLifecycleState.generation(source)
             accountScope = accountScopeProvider.current(source)
                 ?: return keys.hiddenResults()
             if (accountLifecycleState.readyGeneration(source) != generation) {
@@ -138,7 +161,9 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                 .distinctBy(GOGGame::id)
                 .toList()
             val states = runtimeState.read(requestedRows)
-            playHistoryDao.batchLastPlayed()
+            val history = playHistoryDao.batchLastPlayed()
+            val finalLedger = finalLedger(accountScope, generation) ?: return keys.hiddenResults()
+            val finalOwnedIds = finalLedger.stableSourceIds.toSet()
             if (!isCurrent(accountScope, generation)) return keys.hiddenResults()
             keys.associateWith { key ->
                 val game = rowsById[key.stableSourceId]
@@ -146,7 +171,8 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                 when {
                     key.source != source || key.accountScope != accountScope ->
                         OwnedCopyRuntimeResult.Hidden
-                    key.stableSourceId !in ownedIds -> OwnedCopyRuntimeResult.Hidden
+                    key.stableSourceId !in ownedIds || key.stableSourceId !in finalOwnedIds ->
+                        OwnedCopyRuntimeResult.Hidden
                     game == null || sourceState == null ->
                         unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
                     else -> available(
@@ -154,16 +180,22 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                         SourceOwnedCopyReference.Gog(key, game.id),
                         game,
                         sourceState,
+                        history[sourceAppId(source, game.id)],
                     )
                 }
             }
         } catch (error: CancellationException) {
             throw error
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
+            val scope = accountScope ?: return keys.hiddenResults()
+            val currentGeneration = generation ?: return keys.hiddenResults()
+            val finalLedger = finalLedger(scope, currentGeneration) ?: return keys.hiddenResults()
+            if (!isCurrent(scope, currentGeneration)) return keys.hiddenResults()
+            val finalOwnedIds = finalLedger.stableSourceIds.toSet()
             keys.associateWith { key ->
                 if (
-                    key.source == source && key.accountScope == accountScope &&
-                    key.stableSourceId in ownedIds
+                    key.source == source && key.accountScope == scope &&
+                    key.stableSourceId in ownedIds && key.stableSourceId in finalOwnedIds
                 ) {
                     unavailable(key, CopyUnavailableReason.SOURCE_READ_FAILED, error)
                 } else {
@@ -184,11 +216,43 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
         lifecycleGeneration = generation,
     )
 
-    private suspend fun isCurrentAndOwned(
+    private suspend fun hasFreshProof(
         key: OwnedCopyKey,
         accountScope: AccountScope,
         generation: Long,
-    ): Boolean = isCurrent(accountScope, generation) && isOwned(key, accountScope, generation)
+    ): Boolean = currentAccountProof {
+        accountScopeProvider.current(source) == accountScope &&
+            accountLifecycleState.generation(source) == generation &&
+            accountLifecycleState.readyGeneration(source) == generation &&
+            isOwned(key, accountScope, generation)
+    }
+
+    private suspend fun unavailableIfFresh(
+        key: OwnedCopyKey,
+        accountScope: AccountScope,
+        generation: Long,
+        reason: CopyUnavailableReason,
+        error: Exception? = null,
+    ): OwnedCopyRuntimeResult = if (hasFreshProof(key, accountScope, generation)) {
+        unavailable(key, reason, error)
+    } else {
+        OwnedCopyRuntimeResult.Hidden
+    }
+
+    private suspend fun finalLedger(
+        accountScope: AccountScope,
+        generation: Long,
+    ): CompletedOwnedCopySnapshot? = try {
+        ownedCopyLedgerDao.getCompletedSnapshotForLifecycle(
+            accountScope = accountScope.value,
+            source = source,
+            lifecycleGeneration = generation,
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
+    }
 
     private suspend fun isCurrent(accountScope: AccountScope, generation: Long): Boolean =
         currentAccountProof {
@@ -202,6 +266,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
         reference: SourceOwnedCopyReference.Gog,
         game: GOGGame,
         sourceState: OwnedCopyVolatileState,
+        localLastPlayed: Long?,
     ): OwnedCopyRuntimeResult.Available {
         val bridgeId = game.id.toIntOrNull()?.takeIf { id -> id > 0 && id.toString() == game.id }
         val item = bridgeId?.let { id ->
@@ -248,7 +313,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                 hasPartialDownload = sourceState.hasPartialDownload,
                 updateAvailable = sourceState.updateAvailable,
                 isShared = false,
-                lastPlayedEpochMs = game.lastPlayed.positiveOrNull(),
+                lastPlayedEpochMs = latestPositiveTimestamp(game.lastPlayed, localLastPlayed),
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, item != null, sourceState),
             ),

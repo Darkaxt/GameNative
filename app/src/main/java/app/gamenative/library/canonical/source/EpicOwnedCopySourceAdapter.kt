@@ -51,11 +51,7 @@ class EpicOwnedCopySourceAdapter @Inject constructor(
             val rowsById = if (ledger.stableSourceIds.isEmpty()) {
                 emptyMap()
             } else {
-                epicGameDao.getAllForCanonicalProjection().mapNotNull { game ->
-                    runCatching {
-                        EpicStableSourceId.encode(game.namespace, game.catalogId) to game
-                    }.getOrNull()
-                }.toMap()
+                preferredEpicRows(epicGameDao.getAllForCanonicalProjection())
             }
             var missingRow = false
             val copies = ledger.stableSourceIds.mapNotNull { stableSourceId ->

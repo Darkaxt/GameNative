@@ -50,10 +50,7 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
             val rowsById = if (ledger.stableSourceIds.isEmpty()) {
                 emptyMap()
             } else {
-                amazonGameDao.getAllAsList()
-                    .asSequence()
-                    .filter { it.productId.isNotBlank() }
-                    .associateBy { it.productId }
+                preferredAmazonRows(amazonGameDao.getAllAsList())
             }
             var missingRow = false
             val copies = ledger.stableSourceIds.mapNotNull { stableSourceId ->

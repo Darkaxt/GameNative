@@ -151,13 +151,23 @@ object GameMetadataManager {
     internal fun getAppIdReadOnly(folder: File): Int? {
         val metadataFile = File(folder, FILE_NAME)
         if (!metadataFile.exists() || !metadataFile.isFile) return null
-        return runCatching {
-            val content = metadataFile.readText().trim()
-            if (content.isEmpty()) return@runCatching null
-            runCatching {
+        return parseAppIdReadOnly(metadataFile::readText)
+    }
+
+    internal fun parseAppIdReadOnly(readText: () -> String): Int? = try {
+        val content = readText().trim()
+        if (content.isEmpty()) {
+            null
+        } else {
+            val jsonAppId = try {
                 JSONObject(content).optInt("appId", -1).takeIf { it > 0 }
-            }.getOrNull() ?: content.toIntOrNull()?.takeIf { it > 0 }
-        }.getOrNull()
+            } catch (_: Exception) {
+                null
+            }
+            jsonAppId ?: content.toIntOrNull()?.takeIf { it > 0 }
+        }
+    } catch (_: Exception) {
+        null
     }
 
     /**

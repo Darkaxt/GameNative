@@ -382,6 +382,46 @@ class OwnedCopySourceAdapterTest {
     }
 
     @Test
+    fun epicAndAmazonSnapshotsShareInstalledThenSmallestIdDuplicatePrecedence() = runTest {
+        val epicStableId = EpicStableSourceId.encode("ns", "catalog")
+        val epicRows = listOf(
+            EpicGame(id = 1, namespace = "ns", catalogId = "catalog", title = "Uninstalled", isInstalled = false),
+            EpicGame(id = 7, namespace = "ns", catalogId = "catalog", title = "Installed Seven", isInstalled = true),
+            EpicGame(id = 5, namespace = "ns", catalogId = "catalog", title = "Installed Five", isInstalled = true),
+        )
+        val epicDao = mockk<EpicGameDao>()
+        coEvery { epicDao.getAllForCanonicalProjection() } returns epicRows
+        coEvery { epicDao.getByProviderIdentity("ns", "catalog") } returns epicRows.last()
+        val epic = EpicOwnedCopySourceAdapter(
+            epicDao,
+            scopes(GameSource.EPIC),
+            completedLedger(GameSource.EPIC, epicStableId),
+        )
+
+        val epicCopy = epic.snapshot().copies.single()
+        assertEquals("Installed Five", epicCopy.displayName)
+        assertEquals(5, (epic.resolve(epicCopy.key) as SourceOwnedCopyReference.Epic).localRowId)
+
+        val amazonRows = listOf(
+            AmazonGame(appId = 1, productId = "product-id", title = "Uninstalled", isInstalled = false),
+            AmazonGame(appId = 3, productId = "product-id", title = "Installed Three", isInstalled = true),
+            AmazonGame(appId = 2, productId = "product-id", title = "Installed Two", isInstalled = true),
+        )
+        val amazonDao = mockk<AmazonGameDao>()
+        coEvery { amazonDao.getAllAsList() } returns amazonRows
+        coEvery { amazonDao.getByProductId("product-id") } returns amazonRows.last()
+        val amazon = AmazonOwnedCopySourceAdapter(
+            amazonDao,
+            scopes(GameSource.AMAZON),
+            completedLedger(GameSource.AMAZON, "product-id"),
+        )
+
+        val amazonCopy = amazon.snapshot().copies.single()
+        assertEquals("Installed Two", amazonCopy.displayName)
+        assertEquals(2, (amazon.resolve(amazonCopy.key) as SourceOwnedCopyReference.Amazon).localRowId)
+    }
+
+    @Test
     fun customSnapshotIsPartialAndDoesNotCreateOrRewriteMetadata() = runTest {
         val valid = File(testRoot, "Valid Game").apply { mkdirs() }
         val metadata = File(valid, ".gamenative")
@@ -406,6 +446,24 @@ class OwnedCopySourceAdapterTest {
             SourceOwnedCopyReference.Custom(batch.copies.single().key, 42),
             adapter.resolve(batch.copies.single().key),
         )
+    }
+
+    @Test
+    fun customDuplicatePersistedIdsFailClosedForSnapshotAndResolve() = runTest {
+        val first = File(testRoot, "First Duplicate").apply { mkdirs() }
+        val second = File(testRoot, "Second Duplicate").apply { mkdirs() }
+        File(first, ".gamenative").writeText(JSONObject().put("appId", 42).toString())
+        File(second, ".gamenative").writeText(JSONObject().put("appId", 42).toString())
+        setCustomFolders(linkedSetOf(first.path, second.path))
+        val adapter = CustomOwnedCopySourceAdapter(scopes(GameSource.CUSTOM_GAME))
+        val key = OwnedCopyKey(scope, GameSource.CUSTOM_GAME, "42")
+
+        val batch = adapter.snapshot()
+
+        assertEquals(SnapshotCompleteness.PARTIAL, batch.completeness)
+        assertEquals(SnapshotReason.MISSING_STABLE_ID, batch.reason)
+        assertTrue(batch.copies.isEmpty())
+        assertNull(adapter.resolve(key))
     }
 
     @Test

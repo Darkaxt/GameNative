@@ -50,7 +50,10 @@ interface EpicGameDao {
     @Query("SELECT * FROM epic_games WHERE catalog_id = :catalogId")
     suspend fun getByCatalogId(catalogId: String): EpicGame?
 
-    @Query("SELECT * FROM epic_games WHERE namespace = :namespace AND catalog_id = :catalogId LIMIT 1")
+    @Query(
+        "SELECT * FROM epic_games WHERE namespace = :namespace AND catalog_id = :catalogId " +
+            "ORDER BY is_installed DESC, id ASC LIMIT 1",
+    )
     suspend fun getByProviderIdentity(namespace: String, catalogId: String): EpicGame?
 
     @Query("SELECT * FROM epic_games WHERE app_name = :appName")

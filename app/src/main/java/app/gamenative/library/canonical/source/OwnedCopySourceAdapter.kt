@@ -1,9 +1,12 @@
 package app.gamenative.library.canonical.source
 
+import app.gamenative.data.AmazonGame
+import app.gamenative.data.EpicGame
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalNormalization
+import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
@@ -168,6 +171,29 @@ internal fun sourceQualifiedKeys(provider: String, values: List<String>): Set<St
     .filter(String::isNotEmpty)
     .map { "$provider:$it" }
     .toSortedSet()
+
+internal fun preferredEpicRows(games: Iterable<EpicGame>): Map<String, EpicGame> {
+    val rows = linkedMapOf<String, EpicGame>()
+    games.sortedWith(compareByDescending<EpicGame>(EpicGame::isInstalled).thenBy(EpicGame::id))
+        .forEach { game ->
+            val stableId = try {
+                EpicStableSourceId.encode(game.namespace, game.catalogId)
+            } catch (_: IllegalArgumentException) {
+                return@forEach
+            }
+            rows.putIfAbsent(stableId, game)
+        }
+    return rows
+}
+
+internal fun preferredAmazonRows(games: Iterable<AmazonGame>): Map<String, AmazonGame> {
+    val rows = linkedMapOf<String, AmazonGame>()
+    games.asSequence()
+        .filter { it.productId.isNotBlank() }
+        .sortedWith(compareByDescending<AmazonGame>(AmazonGame::isInstalled).thenBy(AmazonGame::appId))
+        .forEach { game -> rows.putIfAbsent(game.productId, game) }
+    return rows
+}
 
 private fun unavailableBatch(
     source: GameSource,

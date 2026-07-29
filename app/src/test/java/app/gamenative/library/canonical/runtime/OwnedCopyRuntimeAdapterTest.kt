@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.gamenative.PrefManager
 import app.gamenative.data.AmazonGame
+import app.gamenative.data.AppInfo
 import app.gamenative.data.EpicGame
 import app.gamenative.data.GOGGame
 import app.gamenative.data.GameSource
@@ -40,11 +41,14 @@ import app.gamenative.library.canonical.source.GogOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
 import app.gamenative.service.amazon.AmazonArtwork
+import app.gamenative.utils.GameMetadataManager
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -57,6 +61,8 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -130,7 +136,8 @@ class OwnedCopyRuntimeAdapterTest {
         )
         coEvery { dao.findOwnedApp(42, any(), any()) } returns app
         coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns listOf(app)
-        coEvery { runtimeState.read(listOf(app)) } returns mapOf(42 to currentState)
+        coEvery { runtimeState.readPoint(app, scope, 0L) } returns currentState
+        coEvery { runtimeState.readBatch(listOf(app), scope, 0L) } returns mapOf(42 to currentState)
         val adapter = SteamOwnedCopyRuntimeAdapter(
             steamAppDao = dao,
             accountScopeProvider = scopes(GameSource.STEAM),
@@ -174,7 +181,7 @@ class OwnedCopyRuntimeAdapterTest {
         )
         coVerify(exactly = 1) { history.get("STEAM_42") }
         verify(exactly = 1) { history.getAll() }
-        coVerify(exactly = 1) { dao._getAllOwnedAppsPaged(any(), any()) }
+        coVerify(exactly = 2) { dao._getAllOwnedAppsPaged(any(), any()) }
     }
 
     @Test
@@ -239,7 +246,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(game.verticalCoverUrl, point.capsuleImageUrl)
         assertEquals(game.imageUrl, point.headerImageUrl)
         assertEquals(game.imageUrl, point.heroImageUrl)
-        assertEquals(game.lastPlayed, point.lastPlayedEpochMs)
+        assertEquals(999L, point.lastPlayedEpochMs)
         assertEquals(game.playTime, point.playtimeMinutes)
         assertEquals(
             setOf(
@@ -254,7 +261,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertFalse(OwnedCopyOperation.UPDATE in point.capabilities)
         coVerify(exactly = 1) { history.get("GOG_12345") }
         verify(exactly = 1) { history.getAll() }
-        coVerify(exactly = 1) { ledger.getCompletedSnapshotForLifecycle(scope.value, GameSource.GOG, 0L) }
+        coVerify(exactly = 2) { ledger.getCompletedSnapshotForLifecycle(scope.value, GameSource.GOG, 0L) }
         coVerify(exactly = 1) { dao.getAllAsList() }
     }
 
@@ -328,7 +335,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(game.artCover, point.capsuleImageUrl)
         assertEquals(game.artPortrait, point.headerImageUrl)
         assertEquals(game.artPortrait, point.heroImageUrl)
-        assertEquals(game.lastPlayed, point.lastPlayedEpochMs)
+        assertEquals(999L, point.lastPlayedEpochMs)
         assertEquals(game.playTime, point.playtimeMinutes)
         assertEquals(
             setOf(
@@ -387,16 +394,16 @@ class OwnedCopyRuntimeAdapterTest {
         coEvery { dao.getByAppId(88) } returns game
         coEvery { dao.getByProductId("product-id") } returns game
         coEvery { dao.getAllAsList() } returns listOf(game)
-        coEvery { runtimeState.read(listOf(game)) } returns mapOf(
-            88 to state(
-                installPath = game.installPath,
-                installedSizeBytes = game.installSize,
-                branchOrVersion = game.versionId,
-                isInstalled = true,
-                updateAvailable = true,
-                playtimeMinutes = game.playTimeMinutes,
-            ),
+        val currentState = state(
+            installPath = game.installPath,
+            installedSizeBytes = game.installSize,
+            branchOrVersion = game.versionId,
+            isInstalled = true,
+            updateAvailable = true,
+            playtimeMinutes = game.playTimeMinutes,
         )
+        coEvery { runtimeState.readPoint(game, scope, 0L) } returns currentState
+        coEvery { runtimeState.readBatch(listOf(game), scope, 0L) } returns mapOf(88 to currentState)
         val adapter = AmazonOwnedCopyRuntimeAdapter(
             amazonGameDao = dao,
             accountScopeProvider = scopes(GameSource.AMAZON),
@@ -422,7 +429,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(AmazonArtwork.layoutHeroFromProductJson(productJson), point.headerImageUrl)
         assertEquals(AmazonArtwork.layoutHeroFromProductJson(productJson), point.heroImageUrl)
         assertEquals(AmazonArtwork.GRID_HERO_ZOOM_SCALE, point.gridHeroImageScale)
-        assertEquals(game.lastPlayed, point.lastPlayedEpochMs)
+        assertEquals(999L, point.lastPlayedEpochMs)
         assertEquals(game.playTimeMinutes, point.playtimeMinutes)
         assertEquals(
             setOf(
@@ -484,7 +491,7 @@ class OwnedCopyRuntimeAdapterTest {
         )
         coVerify(exactly = 1) { history.get("CUSTOM_GAME_99") }
         verify(exactly = 1) { history.getAll() }
-        coVerify(exactly = 2) { runtimeState.read(setOf(99)) }
+        coVerify(exactly = 4) { runtimeState.read(setOf(99)) }
     }
 
     @Test
@@ -855,11 +862,13 @@ class OwnedCopyRuntimeAdapterTest {
             SourceOwnedCopyReference.Custom(key, 5),
         )
         val runtimeState = mockk<CustomOwnedCopyRuntimeState>()
-        coEvery { runtimeState.read(setOf(5)) } throws SensitiveFailure()
+        coEvery { runtimeState.read(setOf(5)) } returns mapOf(5 to customRow(5))
+        val history = mockk<LibraryPlayHistoryDao>()
+        coEvery { history.get("CUSTOM_GAME_5") } throws SensitiveFailure()
         val adapter = CustomOwnedCopyRuntimeAdapter(
             scopes(GameSource.CUSTOM_GAME),
             source,
-            mockk(relaxed = true),
+            history,
             runtimeState,
         )
 
@@ -1026,11 +1035,8 @@ class OwnedCopyRuntimeAdapterTest {
             mockk(relaxed = true),
             mockk(relaxed = true),
         )
-        assertUnavailable(
-            steam.resolve(steamKey),
-            steamKey,
-            CopyUnavailableReason.SOURCE_ROW_CHANGED,
-        )
+        assertSame(OwnedCopyRuntimeResult.Hidden, steam.resolve(steamKey))
+        coVerify(exactly = 2) { steamDao.findOwnedApp(42, any(), any()) }
 
         val stableId = EpicStableSourceId.encode("ns", "catalog")
         val epicKey = key(GameSource.EPIC, stableId)
@@ -1107,7 +1113,7 @@ class OwnedCopyRuntimeAdapterTest {
         val dao = mockk<SteamAppDao>()
         coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns listOf(app)
         val failedState = mockk<SteamOwnedCopyRuntimeState>()
-        coEvery { failedState.read(listOf(app)) } throws SensitiveFailure()
+        coEvery { failedState.readBatch(listOf(app), scope, 0L) } throws SensitiveFailure()
         val failed = SteamOwnedCopyRuntimeAdapter(
             dao,
             scopes(GameSource.STEAM),
@@ -1125,7 +1131,7 @@ class OwnedCopyRuntimeAdapterTest {
         )
 
         val cancelledState = mockk<SteamOwnedCopyRuntimeState>()
-        coEvery { cancelledState.read(listOf(app)) } throws CancellationException("stop")
+        coEvery { cancelledState.readBatch(listOf(app), scope, 0L) } throws CancellationException("stop")
         val cancelled = SteamOwnedCopyRuntimeAdapter(
             dao,
             scopes(GameSource.STEAM),
@@ -1147,7 +1153,7 @@ class OwnedCopyRuntimeAdapterTest {
         coEvery { steamDao._getAllOwnedAppsPaged(any(), any()) } returns steamRows
         val steamHistory = batchHistory()
         val steamState = mockk<SteamOwnedCopyRuntimeState>()
-        coEvery { steamState.read(steamRows) } returns steamRows.associate { it.id to state() }
+        coEvery { steamState.readBatch(steamRows, scope, 0L) } returns steamRows.associate { it.id to state() }
         val steamScopes = CountingScopeProvider(scope)
         val steam = SteamOwnedCopyRuntimeAdapter(
             steamDao,
@@ -1158,7 +1164,7 @@ class OwnedCopyRuntimeAdapterTest {
             steamState,
         )
         assertEquals(steamKeys, steam.resolveAll(steamKeys).keys)
-        coVerify(exactly = 1) { steamDao._getAllOwnedAppsPaged(any(), any()) }
+        coVerify(exactly = 2) { steamDao._getAllOwnedAppsPaged(any(), any()) }
         verify(exactly = 1) { steamHistory.getAll() }
         assertEquals(2, steamScopes.calls)
 
@@ -1182,7 +1188,7 @@ class OwnedCopyRuntimeAdapterTest {
         )
         assertEquals(gogKeys, gog.resolveAll(gogKeys).keys)
         coVerify(exactly = 1) { gogDao.getAllAsList() }
-        coVerify(exactly = 1) { gogLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.GOG, 0L) }
+        coVerify(exactly = 2) { gogLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.GOG, 0L) }
         coVerify(exactly = 0) { gogLedger.isPresentForLifecycle(any(), any(), any(), any()) }
         verify(exactly = 1) { gogHistory.getAll() }
         assertEquals(2, gogScopes.calls)
@@ -1210,7 +1216,7 @@ class OwnedCopyRuntimeAdapterTest {
         )
         assertEquals(epicKeys, epic.resolveAll(epicKeys).keys)
         coVerify(exactly = 1) { epicDao.getAllForCanonicalProjection() }
-        coVerify(exactly = 1) { epicLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.EPIC, 0L) }
+        coVerify(exactly = 2) { epicLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.EPIC, 0L) }
         verify(exactly = 1) { epicHistory.getAll() }
         assertEquals(2, epicScopes.calls)
 
@@ -1224,7 +1230,7 @@ class OwnedCopyRuntimeAdapterTest {
         val amazonLedger = ledger(GameSource.AMAZON, mapOf("1" to "entitlement-1", "2" to "entitlement-2"))
         val amazonHistory = batchHistory()
         val amazonState = mockk<AmazonOwnedCopyRuntimeState>()
-        coEvery { amazonState.read(amazonRows) } returns amazonRows.associate { it.appId to state() }
+        coEvery { amazonState.readBatch(amazonRows, scope, 0L) } returns amazonRows.associate { it.appId to state() }
         val amazonScopes = CountingScopeProvider(scope)
         val amazon = AmazonOwnedCopyRuntimeAdapter(
             amazonDao,
@@ -1242,7 +1248,7 @@ class OwnedCopyRuntimeAdapterTest {
             assertEquals("entitlement-${copyKey.stableSourceId}", (runtime.reference as SourceOwnedCopyReference.Amazon).entitlementId)
         }
         coVerify(exactly = 1) { amazonDao.getAllAsList() }
-        coVerify(exactly = 1) { amazonLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.AMAZON, 0L) }
+        coVerify(exactly = 2) { amazonLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.AMAZON, 0L) }
         coVerify(exactly = 0) { amazonLedger.getPresenceForLifecycle(any(), any(), any(), any()) }
         verify(exactly = 1) { amazonHistory.getAll() }
         assertEquals(2, amazonScopes.calls)
@@ -1262,7 +1268,7 @@ class OwnedCopyRuntimeAdapterTest {
             customState,
         )
         assertEquals(customKeys, custom.resolveAll(customKeys).keys)
-        coVerify(exactly = 1) { customState.read(setOf(1, 2)) }
+        coVerify(exactly = 2) { customState.read(setOf(1, 2)) }
         verify(exactly = 1) { customHistory.getAll() }
         assertEquals(2, customScopes.calls)
     }
@@ -1302,6 +1308,325 @@ class OwnedCopyRuntimeAdapterTest {
             assertEquals(mapOf("product" to "entitlement"), ledger?.resolvedSourceIds)
         } finally {
             database.close()
+        }
+    }
+
+    @Test
+    fun pointFailuresReproveCurrentAccountAndExactOwnershipBeforeUnavailable() = runTest {
+        val steamKey = key(GameSource.STEAM, "42")
+        val steamApp = SteamApp(id = 42, name = "Owned")
+        val steamDao = mockk<SteamAppDao>()
+        coEvery { steamDao.findOwnedApp(42, any(), any()) } returns steamApp
+        val steamState = mockk<SteamOwnedCopyRuntimeState>()
+        coEvery { steamState.readPoint(steamApp, scope, 0L) } throws SensitiveFailure()
+        val switchedSteam = SteamOwnedCopyRuntimeAdapter(
+            steamDao,
+            SequencedScopeProvider(listOf(scope, otherScope)),
+            readyLifecycle(GameSource.STEAM),
+            sourceAdapter(steamKey, SourceOwnedCopyReference.Steam(steamKey, 42)),
+            mockk(relaxed = true),
+            steamState,
+        )
+        assertSame(OwnedCopyRuntimeResult.Hidden, switchedSteam.resolve(steamKey))
+
+        val nestedKey = key(GameSource.GOG, "nested")
+        val nestedSource = mockk<GogOwnedCopySourceAdapter>()
+        every { nestedSource.invalidations() } returns emptyFlow()
+        coEvery { nestedSource.resolve(nestedKey) } throws SensitiveFailure()
+        val nestedFailureAfterSwitch = GogOwnedCopyRuntimeAdapter(
+            mockk(relaxed = true),
+            SequencedScopeProvider(listOf(scope, otherScope)),
+            ledger(GameSource.GOG, mapOf("nested" to null)),
+            readyLifecycle(GameSource.GOG),
+            nestedSource,
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+        )
+        assertSame(OwnedCopyRuntimeResult.Hidden, nestedFailureAfterSwitch.resolve(nestedKey))
+
+        val gogKey = key(GameSource.GOG, "123")
+        val gogDao = mockk<GOGGameDao>()
+        coEvery { gogDao.getById("123") } returns null
+        val gogLedger = mockk<OwnedCopyLedgerDao>()
+        coEvery {
+            gogLedger.isPresentForLifecycle(scope.value, GameSource.GOG, "123", 0L)
+        } returnsMany listOf(true, false)
+        val lostGog = GogOwnedCopyRuntimeAdapter(
+            gogDao,
+            scopes(GameSource.GOG),
+            gogLedger,
+            readyLifecycle(GameSource.GOG),
+            sourceAdapter(gogKey, SourceOwnedCopyReference.Gog(gogKey, "123")),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+        )
+        assertSame(OwnedCopyRuntimeResult.Hidden, lostGog.resolve(gogKey))
+        coVerify(exactly = 2) {
+            gogLedger.isPresentForLifecycle(scope.value, GameSource.GOG, "123", 0L)
+        }
+    }
+
+    @Test
+    fun amazonBlankResolvedEntitlementIsUnavailableOnlyWhilePresenceRemainsCurrent() = runTest {
+        val key = key(GameSource.AMAZON, "product")
+        val presence = OwnedCopyPresenceEntity(
+            accountScope = scope.value,
+            source = GameSource.AMAZON,
+            stableSourceId = "product",
+            resolvedSourceId = null,
+        )
+        val ledger = mockk<OwnedCopyLedgerDao>()
+        coEvery {
+            ledger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, "product", 0L)
+        } returns presence
+        val adapter = AmazonOwnedCopyRuntimeAdapter(
+            mockk(relaxed = true),
+            scopes(GameSource.AMAZON),
+            ledger,
+            readyLifecycle(GameSource.AMAZON),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+        )
+
+        assertUnavailable(
+            adapter.resolve(key),
+            key,
+            CopyUnavailableReason.SOURCE_ROW_CHANGED,
+        )
+        coVerify(exactly = 2) {
+            ledger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, "product", 0L)
+        }
+
+        val removedLedger = mockk<OwnedCopyLedgerDao>()
+        coEvery {
+            removedLedger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, "product", 0L)
+        } returnsMany listOf(presence, null)
+        val removed = AmazonOwnedCopyRuntimeAdapter(
+            mockk(relaxed = true),
+            scopes(GameSource.AMAZON),
+            removedLedger,
+            readyLifecycle(GameSource.AMAZON),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+        )
+        assertSame(OwnedCopyRuntimeResult.Hidden, removed.resolve(key))
+
+        val batchLedger = ledger(GameSource.AMAZON, mapOf("product" to null))
+        val batchDao = mockk<AmazonGameDao>()
+        coEvery { batchDao.getAllAsList() } returns emptyList()
+        val batchState = mockk<AmazonOwnedCopyRuntimeState>()
+        coEvery { batchState.readBatch(emptyList(), scope, 0L) } returns emptyMap()
+        val batchAdapter = AmazonOwnedCopyRuntimeAdapter(
+            batchDao,
+            scopes(GameSource.AMAZON),
+            batchLedger,
+            readyLifecycle(GameSource.AMAZON),
+            mockk(relaxed = true),
+            batchHistory(),
+            batchState,
+        )
+        assertUnavailable(
+            batchAdapter.resolveAll(setOf(key)).getValue(key),
+            key,
+            CopyUnavailableReason.SOURCE_ROW_CHANGED,
+        )
+    }
+
+    @Test
+    fun batchFinalProofHidesSameGenerationLossAndAmazonEntitlementRotation() = runTest {
+        val gogKey = key(GameSource.GOG, "123")
+        val gogGame = GOGGame(id = "123", title = "GOG")
+        val gogLedger = mockk<OwnedCopyLedgerDao>()
+        coEvery {
+            gogLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.GOG, 0L)
+        } returnsMany listOf(
+            completedSnapshot(mapOf("123" to null)),
+            completedSnapshot(emptyMap()),
+        )
+        val gogDao = mockk<GOGGameDao>()
+        coEvery { gogDao.getAllAsList() } returns listOf(gogGame)
+        val gogState = mockk<GogOwnedCopyRuntimeState>()
+        coEvery { gogState.read(listOf(gogGame)) } returns mapOf("123" to state())
+        val gog = GogOwnedCopyRuntimeAdapter(
+            gogDao,
+            scopes(GameSource.GOG),
+            gogLedger,
+            readyLifecycle(GameSource.GOG),
+            mockk(relaxed = true),
+            batchHistory(),
+            gogState,
+        )
+        assertSame(OwnedCopyRuntimeResult.Hidden, gog.resolveAll(setOf(gogKey)).getValue(gogKey))
+
+        val amazonKey = key(GameSource.AMAZON, "product")
+        val amazonGame = AmazonGame(appId = 7, productId = "product", title = "Amazon")
+        val amazonLedger = mockk<OwnedCopyLedgerDao>()
+        coEvery {
+            amazonLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.AMAZON, 0L)
+        } returnsMany listOf(
+            completedSnapshot(mapOf("product" to "entitlement-a")),
+            completedSnapshot(mapOf("product" to "entitlement-b")),
+        )
+        val amazonDao = mockk<AmazonGameDao>()
+        coEvery { amazonDao.getAllAsList() } returns listOf(amazonGame)
+        val amazonState = mockk<AmazonOwnedCopyRuntimeState>()
+        coEvery { amazonState.readBatch(listOf(amazonGame), scope, 0L) } returns mapOf(7 to state())
+        val amazon = AmazonOwnedCopyRuntimeAdapter(
+            amazonDao,
+            scopes(GameSource.AMAZON),
+            amazonLedger,
+            readyLifecycle(GameSource.AMAZON),
+            mockk(relaxed = true),
+            batchHistory(),
+            amazonState,
+        )
+        assertSame(
+            OwnedCopyRuntimeResult.Hidden,
+            amazon.resolveAll(setOf(amazonKey)).getValue(amazonKey),
+        )
+    }
+
+    @Test
+    fun customFinalProofHidesPersistedRowRemoval() = runTest {
+        val key = key(GameSource.CUSTOM_GAME, "5")
+        val runtimeState = mockk<CustomOwnedCopyRuntimeState>()
+        coEvery { runtimeState.read(setOf(5)) } returnsMany listOf(
+            mapOf(5 to customRow(5)),
+            emptyMap(),
+        )
+        val adapter = CustomOwnedCopyRuntimeAdapter(
+            scopes(GameSource.CUSTOM_GAME),
+            mockk(relaxed = true),
+            batchHistory(),
+            runtimeState,
+        )
+
+        assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolveAll(setOf(key)).getValue(key))
+        coVerify(exactly = 2) { runtimeState.read(setOf(5)) }
+    }
+
+    @Test
+    fun providerAndLocalHistoryUseNewestPositiveTimestampInPointAndBatch() = runTest {
+        val key = key(GameSource.GOG, "123")
+        val game = GOGGame(id = "123", title = "GOG", lastPlayed = 50L)
+        val dao = mockk<GOGGameDao>()
+        coEvery { dao.getById("123") } returns game
+        coEvery { dao.getAllAsList() } returns listOf(game)
+        val runtimeState = mockk<GogOwnedCopyRuntimeState>()
+        coEvery { runtimeState.read(listOf(game)) } returns mapOf("123" to state())
+        val adapter = GogOwnedCopyRuntimeAdapter(
+            dao,
+            scopes(GameSource.GOG),
+            ledger(GameSource.GOG, mapOf("123" to null)),
+            readyLifecycle(GameSource.GOG),
+            sourceAdapter(key, SourceOwnedCopyReference.Gog(key, "123")),
+            historyDao("GOG_123", 500L),
+            runtimeState,
+        )
+
+        assertEquals(500L, available(adapter.resolve(key)).lastPlayedEpochMs)
+        assertEquals(500L, available(adapter.resolveAll(setOf(key)).getValue(key)).lastPlayedEpochMs)
+    }
+
+    @Test
+    fun registryRejectsWrongEmbeddedResultKeysAndReferences() = runTest {
+        val requested = key(GameSource.STEAM, "1")
+        val wrong = key(GameSource.STEAM, "2")
+        val history = mockk<LibraryPlayHistoryDao>()
+        every { history.getAll() } returns emptyFlow()
+
+        fun registryFor(adapter: OwnedCopyRuntimeAdapter): OwnedCopyRuntimeRegistry {
+            val adapters = GameSource.entries.map { source ->
+                if (source == GameSource.STEAM) adapter else fakeAdapter(source)
+            }.toSet()
+            return OwnedCopyRuntimeRegistry(adapters, history, mockk(relaxed = true))
+        }
+
+        val wrongPoint = fakeAdapter(
+            source = GameSource.STEAM,
+            resolve = { runtimeResult(wrong, wrong) },
+        )
+        assertSuspendThrows(IllegalStateException::class.java) {
+            registryFor(wrongPoint).resolve(requested)
+        }
+
+        val wrongCopy = fakeAdapter(GameSource.STEAM) { keys ->
+            keys.associateWith { runtimeResult(wrong, wrong) }
+        }
+        assertSuspendThrows(IllegalStateException::class.java) {
+            registryFor(wrongCopy).resolveAll(GameSource.STEAM, setOf(requested))
+        }
+
+        val wrongReference = fakeAdapter(GameSource.STEAM) { keys ->
+            keys.associateWith { runtimeResult(requested, wrong) }
+        }
+        assertSuspendThrows(IllegalStateException::class.java) {
+            registryFor(wrongReference).resolveAll(GameSource.STEAM, setOf(requested))
+        }
+
+        val wrongUnavailable = fakeAdapter(GameSource.STEAM) { keys ->
+            keys.associateWith {
+                OwnedCopyRuntimeResult.Unavailable(wrong, CopyUnavailableReason.SOURCE_ROW_CHANGED)
+            }
+        }
+        assertSuspendThrows(IllegalStateException::class.java) {
+            registryFor(wrongUnavailable).resolveAll(GameSource.STEAM, setOf(requested))
+        }
+    }
+
+    @Test
+    fun supportedUninstalledAndMarkerOnlyPartialStatesExposeRequiredCapabilities() {
+        assertTrue(
+            OwnedCopyOperation.INSTALL in capabilities(
+                GameSource.GOG,
+                libraryItemPresent = true,
+                state(),
+            ),
+        )
+        val partial = capabilities(
+            GameSource.AMAZON,
+            libraryItemPresent = true,
+            state(hasPartialDownload = true),
+        )
+        assertTrue(OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD in partial)
+        assertTrue(OwnedCopyOperation.CANCEL_DOWNLOAD in partial)
+        assertTrue(OwnedCopyOperation.UNINSTALL in partial)
+    }
+
+    @Test
+    fun fatalErrorsPropagateThroughRuntimeAndInvalidationBoundaries() = runTest {
+        val key = key(GameSource.GOG, "123")
+        val source = mockk<GogOwnedCopySourceAdapter>()
+        every { source.invalidations() } returns emptyFlow()
+        coEvery { source.resolve(key) } throws LinkageError("fatal")
+        val adapter = GogOwnedCopyRuntimeAdapter(
+            mockk(relaxed = true),
+            scopes(GameSource.GOG),
+            ledger(GameSource.GOG, mapOf("123" to null)),
+            readyLifecycle(GameSource.GOG),
+            source,
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+        )
+        assertSuspendThrows(LinkageError::class.java) { adapter.resolve(key) }
+
+        val fatalAdapter = object : OwnedCopyRuntimeAdapter {
+            override val source = GameSource.STEAM
+            override fun invalidations(): Flow<Unit> = throw OutOfMemoryError("fatal")
+            override suspend fun resolve(key: OwnedCopyKey) = OwnedCopyRuntimeResult.Hidden
+            override suspend fun resolveAll(keys: Set<OwnedCopyKey>) = keys.hiddenResults()
+        }
+        val adapters = GameSource.entries.map { sourceType ->
+            if (sourceType == GameSource.STEAM) fatalAdapter else fakeAdapter(sourceType)
+        }.toSet()
+        val history = mockk<LibraryPlayHistoryDao>()
+        every { history.getAll() } returns emptyFlow()
+        val registry = OwnedCopyRuntimeRegistry(adapters, history, mockk(relaxed = true))
+        assertSuspendThrows(OutOfMemoryError::class.java) { registry.invalidations().first() }
+        assertThrows(OutOfMemoryError::class.java) {
+            GameMetadataManager.parseAppIdReadOnly { throw OutOfMemoryError("fatal") }
         }
     }
 
@@ -1411,6 +1736,52 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
+    fun registryRetriesSynchronousSourceAndHistoryFactoriesWhileManualEventsContinue() = runTest {
+        val sourceAttempts = AtomicInteger()
+        val sourceEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+        val retryingAdapter = object : OwnedCopyRuntimeAdapter {
+            override val source = GameSource.STEAM
+            override fun invalidations(): Flow<Unit> {
+                if (sourceAttempts.getAndIncrement() == 0) throw SensitiveFailure()
+                return sourceEvents
+            }
+            override suspend fun resolve(key: OwnedCopyKey) = OwnedCopyRuntimeResult.Hidden
+            override suspend fun resolveAll(keys: Set<OwnedCopyKey>) = keys.hiddenResults()
+        }
+        val adapters = GameSource.entries.map { source ->
+            if (source == GameSource.STEAM) retryingAdapter else fakeAdapter(source)
+        }.toSet()
+        val historyAttempts = AtomicInteger()
+        val historyEvents = MutableSharedFlow<List<LibraryPlayHistory>>(extraBufferCapacity = 1)
+        val history = mockk<LibraryPlayHistoryDao>()
+        every { history.getAll() } answers {
+            if (historyAttempts.getAndIncrement() == 0) throw SensitiveFailure()
+            historyEvents
+        }
+        val diagnostics = mockk<CanonicalDiagnosticSink>(relaxed = true)
+        val registry = OwnedCopyRuntimeRegistry(adapters, history, diagnostics)
+        val events = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            registry.invalidations().take(3).toList()
+        }
+        runCurrent()
+
+        registry.notifyVolatileStateChanged(GameSource.AMAZON)
+        runCurrent()
+        assertFalse(events.isCompleted)
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(2, sourceAttempts.get())
+        assertEquals(2, historyAttempts.get())
+        sourceEvents.emit(Unit)
+        historyEvents.emit(emptyList())
+
+        assertEquals(3, events.await().size)
+        verify(exactly = 1) {
+            diagnostics.invalidationFailed(GameSource.STEAM, SensitiveFailure::class)
+        }
+    }
+
+    @Test
     fun registryInvalidationPreservesCollectorCancellationWithoutRetry() = runTest {
         val attempts = AtomicInteger()
         val cancellable = fakeAdapter(
@@ -1436,6 +1807,286 @@ class OwnedCopyRuntimeAdapterTest {
         assertTrue(collector.isCancelled)
         assertEquals(1, attempts.get())
         verify(exactly = 0) { diagnostics.invalidationFailed(any(), any()) }
+    }
+
+    @Test
+    fun steamBatchStateSnapshotsEachProductionFacetOnceWithoutLiveUpdateProbes() = runTest {
+        val apps = listOf(
+            SteamApp(id = 1, name = "Installed"),
+            SteamApp(id = 2, name = "Partial"),
+        )
+        val installed = AppInfo(id = 1, isDownloaded = true, branch = "beta")
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
+        coEvery { gateway.activeDownloadIds() } returns setOf(2)
+        coEvery { gateway.partialDownloadIds() } returns setOf(2)
+        coEvery { gateway.installedApps() } returns mapOf(1 to installed)
+        coEvery { gateway.licensedDepotIds(apps) } returns emptyMap()
+        coEvery {
+            gateway.installPaths(apps, mapOf(1 to installed), setOf(2))
+        } returns mapOf(1 to "/installed", 2 to "/partial")
+        val runtimeState = SteamOwnedCopyRuntimeState(gateway)
+
+        val states = runtimeState.readBatch(apps, scope, 0L)
+
+        assertTrue(states.getValue(1).isInstalled)
+        assertEquals("beta", states.getValue(1).branchOrVersion)
+        assertTrue(states.getValue(2).isDownloading)
+        assertTrue(states.getValue(2).hasPartialDownload)
+        assertFalse(states.getValue(1).updateAvailable)
+        coVerify(exactly = 1) { gateway.activeDownloadIds() }
+        coVerify(exactly = 1) { gateway.partialDownloadIds() }
+        coVerify(exactly = 1) { gateway.installedApps() }
+        coVerify(exactly = 1) { gateway.licensedDepotIds(apps) }
+        coVerify(exactly = 1) { gateway.installPaths(apps, mapOf(1 to installed), setOf(2)) }
+        coVerify(exactly = 0) { gateway.updatePending(any(), any()) }
+    }
+
+    @Test
+    fun steamPointStateSeedsTheCachedBatchUpdateSnapshot() = runTest {
+        val app = SteamApp(id = 1, name = "Installed")
+        val installed = AppInfo(id = 1, isDownloaded = true)
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
+        coEvery { gateway.activeDownloadIds() } returns emptySet()
+        coEvery { gateway.partialDownloadIds() } returns emptySet()
+        coEvery { gateway.installedApps() } returns mapOf(1 to installed)
+        coEvery { gateway.licensedDepotIds(listOf(app)) } returns emptyMap()
+        coEvery {
+            gateway.installPaths(listOf(app), mapOf(1 to installed), emptySet())
+        } returns mapOf(1 to "/installed")
+        coEvery { gateway.updatePending(1, "public") } returns true
+        val runtimeState = SteamOwnedCopyRuntimeState(gateway)
+
+        assertTrue(runtimeState.readPoint(app, scope, 0L).updateAvailable)
+        assertTrue(runtimeState.readBatch(listOf(app), scope, 0L).getValue(1).updateAvailable)
+        assertFalse(runtimeState.readBatch(listOf(app), otherScope, 0L).getValue(1).updateAvailable)
+
+        coVerify(exactly = 1) { gateway.updatePending(1, "public") }
+    }
+
+    @Test
+    fun amazonBatchStateSnapshotsDownloadsOnceWithoutLiveUpdateProbes() = runTest {
+        val games = listOf(
+            AmazonGame(appId = 1, productId = "installed", isInstalled = true),
+            AmazonGame(appId = 2, productId = "partial"),
+        )
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
+        coEvery { gateway.activeDownloadProductIds() } returns setOf("partial")
+        coEvery { gateway.partialDownloadProductIds() } returns setOf("partial")
+        val runtimeState = AmazonOwnedCopyRuntimeState(gateway)
+
+        val states = runtimeState.readBatch(games, scope, 0L)
+
+        assertTrue(states.getValue(1).isInstalled)
+        assertTrue(states.getValue(2).isDownloading)
+        assertTrue(states.getValue(2).hasPartialDownload)
+        assertFalse(states.getValue(1).updateAvailable)
+        coVerify(exactly = 1) { gateway.activeDownloadProductIds() }
+        coVerify(exactly = 1) { gateway.partialDownloadProductIds() }
+        coVerify(exactly = 0) { gateway.updatePending(any()) }
+    }
+
+    @Test
+    fun amazonPointStateSeedsTheCachedBatchUpdateSnapshot() = runTest {
+        val game = AmazonGame(appId = 1, productId = "product", isInstalled = true)
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
+        coEvery { gateway.activeDownloadProductIds() } returns emptySet()
+        coEvery { gateway.partialDownloadProductIds() } returns emptySet()
+        coEvery { gateway.updatePending("product") } returns true
+        val runtimeState = AmazonOwnedCopyRuntimeState(gateway)
+
+        assertTrue(runtimeState.readPoint(game, scope, 0L).updateAvailable)
+        assertTrue(runtimeState.readBatch(listOf(game), scope, 0L).getValue(1).updateAvailable)
+        assertFalse(runtimeState.readBatch(listOf(game), otherScope, 0L).getValue(1).updateAvailable)
+
+        coVerify(exactly = 1) { gateway.updatePending("product") }
+    }
+
+    @Test
+    fun oneMissingBatchStateDoesNotDisableSiblingRuntimeCopies() = runTest {
+        val keys = setOf(key(GameSource.STEAM, "1"), key(GameSource.STEAM, "2"))
+        val rows = listOf(SteamApp(id = 1, name = "Available"), SteamApp(id = 2, name = "Failed"))
+        val dao = mockk<SteamAppDao>()
+        coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns rows
+        val runtimeState = mockk<SteamOwnedCopyRuntimeState>()
+        coEvery { runtimeState.readBatch(rows, scope, 0L) } returns mapOf(1 to state())
+        val adapter = SteamOwnedCopyRuntimeAdapter(
+            dao,
+            scopes(GameSource.STEAM),
+            readyLifecycle(GameSource.STEAM),
+            mockk(relaxed = true),
+            batchHistory(),
+            runtimeState,
+        )
+
+        val results = adapter.resolveAll(keys)
+
+        available(results.getValue(key(GameSource.STEAM, "1")))
+        assertUnavailable(
+            results.getValue(key(GameSource.STEAM, "2")),
+            key(GameSource.STEAM, "2"),
+            CopyUnavailableReason.SOURCE_ROW_CHANGED,
+        )
+    }
+
+    @Test
+    fun epicAndAmazonPointAndBatchShareDeterministicDuplicateRowPrecedence() = runTest {
+        val epicStableId = EpicStableSourceId.encode("namespace", "catalog")
+        val epicKey = key(GameSource.EPIC, epicStableId)
+        val epicRows = listOf(
+            EpicGame(id = 1, namespace = "namespace", catalogId = "catalog", isInstalled = false),
+            EpicGame(id = 7, namespace = "namespace", catalogId = "catalog", isInstalled = true),
+            EpicGame(id = 5, namespace = "namespace", catalogId = "catalog", isInstalled = true),
+        )
+        val preferredEpic = epicRows.last()
+        val epicDao = mockk<EpicGameDao>()
+        coEvery { epicDao.getByProviderIdentity("namespace", "catalog") } returns preferredEpic
+        coEvery { epicDao.getById(5) } returns preferredEpic
+        coEvery { epicDao.getAllForCanonicalProjection() } returns epicRows
+        every { epicDao.getAll() } returns emptyFlow()
+        val epicLedger = ledger(GameSource.EPIC, mapOf(epicStableId to null))
+        val epicSource = EpicOwnedCopySourceAdapter(
+            epicDao,
+            scopes(GameSource.EPIC),
+            epicLedger,
+            readyLifecycle(GameSource.EPIC),
+        )
+        val epicState = mockk<EpicOwnedCopyRuntimeState>()
+        coEvery { epicState.read(listOf(preferredEpic)) } returns mapOf(5 to state())
+        val epicAdapter = EpicOwnedCopyRuntimeAdapter(
+            epicDao,
+            scopes(GameSource.EPIC),
+            epicLedger,
+            readyLifecycle(GameSource.EPIC),
+            epicSource,
+            historyDao("EPIC_5", 1L),
+            epicState,
+        )
+
+        val epicPoint = available(epicAdapter.resolve(epicKey))
+        val epicBatch = available(epicAdapter.resolveAll(setOf(epicKey)).getValue(epicKey))
+        assertEquals(5, (epicPoint.reference as SourceOwnedCopyReference.Epic).localRowId)
+        assertEquals(epicPoint, epicBatch)
+
+        val amazonKey = key(GameSource.AMAZON, "product")
+        val amazonRows = listOf(
+            AmazonGame(appId = 1, productId = "product", isInstalled = false),
+            AmazonGame(appId = 3, productId = "product", isInstalled = true),
+            AmazonGame(appId = 2, productId = "product", isInstalled = true),
+        )
+        val preferredAmazon = amazonRows.last()
+        val amazonDao = mockk<AmazonGameDao>()
+        coEvery { amazonDao.getByProductId("product") } returns preferredAmazon
+        coEvery { amazonDao.getByAppId(2) } returns preferredAmazon
+        coEvery { amazonDao.getAllAsList() } returns amazonRows
+        every { amazonDao.getAll() } returns emptyFlow()
+        val amazonLedger = ledger(GameSource.AMAZON, mapOf("product" to "entitlement"))
+        val amazonSource = AmazonOwnedCopySourceAdapter(
+            amazonDao,
+            scopes(GameSource.AMAZON),
+            amazonLedger,
+            readyLifecycle(GameSource.AMAZON),
+        )
+        val amazonState = mockk<AmazonOwnedCopyRuntimeState>()
+        coEvery { amazonState.readPoint(preferredAmazon, scope, 0L) } returns state()
+        coEvery { amazonState.readBatch(listOf(preferredAmazon), scope, 0L) } returns mapOf(2 to state())
+        val amazonAdapter = AmazonOwnedCopyRuntimeAdapter(
+            amazonDao,
+            scopes(GameSource.AMAZON),
+            amazonLedger,
+            readyLifecycle(GameSource.AMAZON),
+            amazonSource,
+            historyDao("AMAZON_2", 1L),
+            amazonState,
+        )
+
+        val amazonPoint = available(amazonAdapter.resolve(amazonKey))
+        val amazonBatch = available(amazonAdapter.resolveAll(setOf(amazonKey)).getValue(amazonKey))
+        assertEquals(2, (amazonPoint.reference as SourceOwnedCopyReference.Amazon).localRowId)
+        assertEquals(amazonPoint, amazonBatch)
+    }
+
+    @Test
+    fun customProductionStateUsesOneIoConfinedReadOnlyPersistedIdScan() = runTest {
+        val scanner = mockk<CustomOwnedCopyRuntimeScanner>()
+        val row = customRow(7)
+        var scanThread: String? = null
+        every { scanner.scan(setOf(7)) } answers {
+            scanThread = Thread.currentThread().name
+            mapOf(7 to row)
+        }
+        val callerThread = Thread.currentThread().name
+        val runtimeState = CustomOwnedCopyRuntimeState(scanner)
+
+        assertEquals(mapOf(7 to row), runtimeState.read(setOf(7)))
+
+        verify(exactly = 1) { scanner.scan(setOf(7)) }
+        assertFalse(scanThread == callerThread)
+    }
+
+    @Test
+    fun customProductionScannerFailsClosedOnDuplicateOrMissingPersistedIdsWithoutWrites() = runTest {
+        val root = Files.createTempDirectory("custom-runtime").toFile()
+        try {
+            val unique = File(root, "Unique").apply { mkdirs() }
+            val duplicateA = File(root, "Duplicate A").apply { mkdirs() }
+            val duplicateB = File(root, "Duplicate B").apply { mkdirs() }
+            val missing = File(root, "Missing").apply { mkdirs() }
+            File(unique, ".gamenative").writeText("{\"appId\":7}")
+            File(duplicateA, ".gamenative").writeText("{\"appId\":8}")
+            File(duplicateB, ".gamenative").writeText("{\"appId\":8}")
+            File(unique, "steamgriddb_logo.png").writeText("logo")
+            File(unique, "coverv.png").writeText("capsule")
+            File(unique, "coverh.jpg").writeText("hero")
+            File(unique, "nested").apply { mkdirs() }
+            File(unique, "nested/payload.bin").writeBytes(ByteArray(32))
+            PrefManager.customGameManualFolders = setOf(
+                unique.path,
+                duplicateA.path,
+                duplicateB.path,
+                missing.path,
+            )
+            val before = root.walkTopDown().map { it.relativeTo(root).path }.toSet()
+            val metadataBefore = File(unique, ".gamenative").readText()
+            val runtimeState = CustomOwnedCopyRuntimeState(CustomOwnedCopyRuntimeScanner())
+
+            val rows = runtimeState.read(setOf(7, 8, 9))
+
+            assertEquals(setOf(7), rows.keys)
+            val row = rows.getValue(7)
+            assertEquals("Unique", row.nativeTitle)
+            assertNull(row.installedSizeBytes)
+            assertTrue(row.iconUrl.endsWith("steamgriddb_logo.png"))
+            assertTrue(row.capsuleImageUrl.endsWith("coverv.png"))
+            assertTrue(row.heroImageUrl.endsWith("coverh.jpg"))
+            assertEquals(row.heroImageUrl, row.headerImageUrl)
+            assertEquals(before, root.walkTopDown().map { it.relativeTo(root).path }.toSet())
+            assertEquals(metadataBefore, File(unique, ".gamenative").readText())
+            assertFalse(File(unique, ".extracted.ico").exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun customMetadataDeletionHidesBothPointAndBatchWithProductionState() = runTest {
+        val root = Files.createTempDirectory("custom-runtime-deletion").toFile()
+        try {
+            val folder = File(root, "Deleted metadata").apply { mkdirs() }
+            PrefManager.customGameManualFolders = setOf(folder.path)
+            val runtimeState = CustomOwnedCopyRuntimeState(CustomOwnedCopyRuntimeScanner())
+            val key = key(GameSource.CUSTOM_GAME, "7")
+            val adapter = CustomOwnedCopyRuntimeAdapter(
+                scopes(GameSource.CUSTOM_GAME),
+                mockk(relaxed = true),
+                batchHistory(),
+                runtimeState,
+            )
+
+            assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolve(key))
+            assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolveAll(setOf(key)).getValue(key))
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     private fun steamReadyAdapterForWrongSource(): SteamOwnedCopyRuntimeAdapter =
@@ -1615,16 +2266,62 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(expected.playtimeMinutes, runtime.playtimeMinutes)
     }
 
+    private fun completedSnapshot(entries: Map<String, String?>): CompletedOwnedCopySnapshot =
+        CompletedOwnedCopySnapshot(
+            completedAt = 1L,
+            lifecycleGeneration = 0L,
+            stableSourceIds = entries.keys.sorted(),
+            resolvedSourceIds = entries.mapNotNull { (stableId, resolvedId) ->
+                resolvedId?.let { stableId to it }
+            }.toMap(),
+        )
+
+    private fun runtimeResult(
+        copyKey: OwnedCopyKey,
+        referenceKey: OwnedCopyKey,
+    ): OwnedCopyRuntimeResult.Available = OwnedCopyRuntimeResult.Available(
+        OwnedCopyRuntime(
+            key = copyKey,
+            reference = SourceOwnedCopyReference.Steam(referenceKey, 1),
+            libraryItem = null,
+            nativeTitle = "Runtime",
+            aliases = emptySet(),
+            developerKey = "",
+            releaseYear = null,
+            appType = CanonicalAppType.GAME,
+            genreKeys = emptySet(),
+            tagIds = emptySet(),
+            featureKeys = emptySet(),
+            iconUrl = "",
+            capsuleImageUrl = "",
+            headerImageUrl = "",
+            heroImageUrl = "",
+            gridHeroImageScale = 1f,
+            installPath = null,
+            installedSizeBytes = null,
+            branchOrVersion = null,
+            isInstalled = false,
+            isDownloading = false,
+            hasPartialDownload = false,
+            updateAvailable = false,
+            isShared = false,
+            lastPlayedEpochMs = null,
+            playtimeMinutes = null,
+            capabilities = emptySet(),
+        ),
+    )
+
     private fun fakeAdapter(
         source: GameSource,
         invalidations: Flow<Unit> = emptyFlow(),
+        resolve: (OwnedCopyKey) -> OwnedCopyRuntimeResult = { OwnedCopyRuntimeResult.Hidden },
         resolveAll: (Set<OwnedCopyKey>) -> Map<OwnedCopyKey, OwnedCopyRuntimeResult> = { keys ->
             keys.associateWith { OwnedCopyRuntimeResult.Hidden }
         },
     ): OwnedCopyRuntimeAdapter = object : OwnedCopyRuntimeAdapter {
         override val source: GameSource = source
         override fun invalidations(): Flow<Unit> = invalidations
-        override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult = OwnedCopyRuntimeResult.Hidden
+        override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult = resolve(key)
         override suspend fun resolveAll(keys: Set<OwnedCopyKey>): Map<OwnedCopyKey, OwnedCopyRuntimeResult> =
             resolveAll(keys)
     }

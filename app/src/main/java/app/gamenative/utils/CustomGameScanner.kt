@@ -527,8 +527,7 @@ object CustomGameScanner {
      */
     internal fun scanForCanonicalProjection(): CustomGameProjectionScan {
         var partial = false
-        val seenIds = mutableSetOf<Int>()
-        val entries = buildList {
+        val candidates = buildList {
             for (path in PrefManager.customGameManualFolders) {
                 val folder = File(path)
                 if (!folder.exists() || !folder.isDirectory) {
@@ -537,15 +536,22 @@ object CustomGameScanner {
                 }
 
                 val appId = GameMetadataManager.getAppIdReadOnly(folder)
-                if (appId == null || !seenIds.add(appId)) {
+                if (appId == null) {
                     partial = true
                     continue
                 }
-
                 add(CustomGameProjectionEntry(appId = appId, displayName = folder.name))
             }
         }
-        return CustomGameProjectionScan(entries = entries, partial = partial)
+        val duplicateIds = candidates.groupingBy(CustomGameProjectionEntry::appId)
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+        if (duplicateIds.isNotEmpty()) partial = true
+        return CustomGameProjectionScan(
+            entries = candidates.filterNot { it.appId in duplicateIds },
+            partial = partial,
+        )
     }
 
     internal fun hasPersistedCanonicalAppId(appId: Int): Boolean =

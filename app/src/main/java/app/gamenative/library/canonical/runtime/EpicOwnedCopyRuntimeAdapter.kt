@@ -7,6 +7,7 @@ import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.db.dao.CompletedOwnedCopySnapshot
 import app.gamenative.db.dao.EpicGameDao
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
@@ -15,6 +16,7 @@ import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.EpicOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
+import app.gamenative.library.canonical.source.preferredEpicRows
 import app.gamenative.library.canonical.source.sourceQualifiedKeys
 import app.gamenative.service.epic.EpicService
 import javax.inject.Inject
@@ -62,10 +64,14 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
     override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult {
         if (key.source != source) return OwnedCopyRuntimeResult.Hidden
         var ownershipProved = false
+        var provedScope: AccountScope? = null
+        var provedGeneration: Long? = null
         try {
             val generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
                 ?: return OwnedCopyRuntimeResult.Hidden
+            provedScope = accountScope
+            provedGeneration = generation
             if (key.accountScope != accountScope) return OwnedCopyRuntimeResult.Hidden
             if (accountLifecycleState.readyGeneration(source) != generation) {
                 return OwnedCopyRuntimeResult.Hidden
@@ -76,29 +82,48 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
             if (reference == null) {
                 val excluded = providerRow(key)?.let(::isExcluded) == true
                 if (excluded) return OwnedCopyRuntimeResult.Hidden
-                return if (isCurrentAndOwned(key, accountScope, generation)) {
-                    unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
-                } else {
-                    OwnedCopyRuntimeResult.Hidden
-                }
+                return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
             }
             val game = epicGameDao.getById(reference.localRowId)
             if (game == null || !reference.matches(game)) {
-                return unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
+                return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
             }
             if (isExcluded(game)) return OwnedCopyRuntimeResult.Hidden
             val sourceState = runtimeState.read(listOf(game))[game.id]
-                ?: return unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
-            playHistoryDao.pointLastPlayed(sourceAppId(source, game.id))
-            if (!isCurrentAndOwned(key, accountScope, generation)) {
+                ?: return unavailableIfFresh(
+                    key,
+                    accountScope,
+                    generation,
+                    CopyUnavailableReason.SOURCE_ROW_CHANGED,
+                )
+            val localLastPlayed = playHistoryDao.pointLastPlayed(sourceAppId(source, game.id))
+            if (!hasFreshProof(key, accountScope, generation)) {
                 return OwnedCopyRuntimeResult.Hidden
             }
-            return available(key, reference, game, sourceState)
+            return available(key, reference, game, sourceState, localLastPlayed)
         } catch (error: CancellationException) {
             throw error
-        } catch (error: Throwable) {
-            return if (ownershipProved) {
-                unavailable(key, CopyUnavailableReason.SOURCE_READ_FAILED, error)
+        } catch (error: Exception) {
+            val scope = provedScope
+            val generation = provedGeneration
+            return if (ownershipProved && scope != null && generation != null) {
+                unavailableIfFresh(
+                    key,
+                    scope,
+                    generation,
+                    CopyUnavailableReason.SOURCE_READ_FAILED,
+                    error,
+                )
             } else {
                 OwnedCopyRuntimeResult.Hidden
             }
@@ -110,9 +135,10 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
     ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> {
         if (keys.isEmpty()) return emptyMap()
         var provedScope: AccountScope? = null
+        var generation: Long? = null
         var ownedIds: Set<String> = emptySet()
         return try {
-            val generation = accountLifecycleState.generation(source)
+            generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
                 ?: return keys.hiddenResults()
             provedScope = accountScope
@@ -137,9 +163,7 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
                 return keys.hiddenResults()
             }
             val rows = epicGameDao.getAllForCanonicalProjection()
-            val rowsByStableId = rows.mapNotNull { game ->
-                runCatching { EpicStableSourceId.encode(game.namespace, game.catalogId) to game }.getOrNull()
-            }.toMap()
+            val rowsByStableId = preferredEpicRows(rows)
             val requestedRows = keys.asSequence()
                 .filter { it.source == source && it.accountScope == accountScope }
                 .filter { it.stableSourceId in ownedIds }
@@ -148,7 +172,9 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
                 .distinctBy(EpicGame::id)
                 .toList()
             val states = runtimeState.read(requestedRows)
-            playHistoryDao.batchLastPlayed()
+            val history = playHistoryDao.batchLastPlayed()
+            val finalLedger = finalLedger(accountScope, generation) ?: return keys.hiddenResults()
+            val finalOwnedIds = finalLedger.stableSourceIds.toSet()
             if (!isCurrent(accountScope, generation)) return keys.hiddenResults()
             keys.associateWith { key ->
                 val game = rowsByStableId[key.stableSourceId]
@@ -156,7 +182,8 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
                 when {
                     key.source != source || key.accountScope != accountScope ->
                         OwnedCopyRuntimeResult.Hidden
-                    key.stableSourceId !in ownedIds -> OwnedCopyRuntimeResult.Hidden
+                    key.stableSourceId !in ownedIds || key.stableSourceId !in finalOwnedIds ->
+                        OwnedCopyRuntimeResult.Hidden
                     game?.let(::isExcluded) == true -> OwnedCopyRuntimeResult.Hidden
                     game == null || sourceState == null ->
                         unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
@@ -170,16 +197,22 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
                         ),
                         game = game,
                         sourceState = sourceState,
+                        localLastPlayed = history[sourceAppId(source, game.id)],
                     )
                 }
             }
         } catch (error: CancellationException) {
             throw error
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
+            val scope = provedScope ?: return keys.hiddenResults()
+            val currentGeneration = generation ?: return keys.hiddenResults()
+            val finalLedger = finalLedger(scope, currentGeneration) ?: return keys.hiddenResults()
+            if (!isCurrent(scope, currentGeneration)) return keys.hiddenResults()
+            val finalOwnedIds = finalLedger.stableSourceIds.toSet()
             keys.associateWith { key ->
                 if (
-                    key.source == source && key.accountScope == provedScope &&
-                    key.stableSourceId in ownedIds
+                    key.source == source && key.accountScope == scope &&
+                    key.stableSourceId in ownedIds && key.stableSourceId in finalOwnedIds
                 ) {
                     unavailable(key, CopyUnavailableReason.SOURCE_READ_FAILED, error)
                 } else {
@@ -190,8 +223,11 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
     }
 
     private suspend fun providerRow(key: OwnedCopyKey): EpicGame? {
-        val identity = runCatching { EpicStableSourceId.decode(key.stableSourceId) }.getOrNull()
-            ?: return null
+        val identity = try {
+            EpicStableSourceId.decode(key.stableSourceId)
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
         return epicGameDao.getByProviderIdentity(identity.first, identity.second)
     }
 
@@ -206,11 +242,43 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
         lifecycleGeneration = generation,
     )
 
-    private suspend fun isCurrentAndOwned(
+    private suspend fun hasFreshProof(
         key: OwnedCopyKey,
         accountScope: AccountScope,
         generation: Long,
-    ): Boolean = isCurrent(accountScope, generation) && isOwned(key, accountScope, generation)
+    ): Boolean = currentAccountProof {
+        accountScopeProvider.current(source) == accountScope &&
+            accountLifecycleState.generation(source) == generation &&
+            accountLifecycleState.readyGeneration(source) == generation &&
+            isOwned(key, accountScope, generation)
+    }
+
+    private suspend fun unavailableIfFresh(
+        key: OwnedCopyKey,
+        accountScope: AccountScope,
+        generation: Long,
+        reason: CopyUnavailableReason,
+        error: Exception? = null,
+    ): OwnedCopyRuntimeResult = if (hasFreshProof(key, accountScope, generation)) {
+        unavailable(key, reason, error)
+    } else {
+        OwnedCopyRuntimeResult.Hidden
+    }
+
+    private suspend fun finalLedger(
+        accountScope: AccountScope,
+        generation: Long,
+    ): CompletedOwnedCopySnapshot? = try {
+        ownedCopyLedgerDao.getCompletedSnapshotForLifecycle(
+            accountScope = accountScope.value,
+            source = source,
+            lifecycleGeneration = generation,
+        )
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
+    }
 
     private suspend fun isCurrent(accountScope: AccountScope, generation: Long): Boolean =
         currentAccountProof {
@@ -224,6 +292,7 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
         reference: SourceOwnedCopyReference.Epic,
         game: EpicGame,
         sourceState: OwnedCopyVolatileState,
+        localLastPlayed: Long?,
     ): OwnedCopyRuntimeResult.Available {
         val item = LibraryItem(
             appId = sourceAppId(source, game.id),
@@ -263,7 +332,7 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
                 hasPartialDownload = sourceState.hasPartialDownload,
                 updateAvailable = false,
                 isShared = false,
-                lastPlayedEpochMs = game.lastPlayed.positiveOrNull(),
+                lastPlayedEpochMs = latestPositiveTimestamp(game.lastPlayed, localLastPlayed),
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, libraryItemPresent = true, sourceState),
             ),
