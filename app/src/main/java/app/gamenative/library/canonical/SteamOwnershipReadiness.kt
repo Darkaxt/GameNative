@@ -3,29 +3,24 @@ package app.gamenative.library.canonical
 import app.gamenative.data.GameSource
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 @Singleton
 class SteamOwnershipReadiness @Inject constructor(
     private val lifecycleState: AccountLifecycleState,
 ) {
-    private val mutex = Mutex()
-
     fun currentGeneration(): Long = lifecycleState.generation(GameSource.STEAM)
 
     fun isReady(generation: Long): Boolean =
         lifecycleState.readyGeneration(GameSource.STEAM) == generation
 
-    fun transitionAccount(block: () -> Unit): Long = runWithLock {
+    fun transitionAccount(block: () -> Unit): Long = AccountLifecycleSerialization.blocking {
         advanceAndPublish(block)
     }
 
     fun clearAccount(
         hasAccountIdentity: Boolean,
         block: () -> Unit,
-    ): Long = runWithLock {
+    ): Long = AccountLifecycleSerialization.blocking {
         val lifecycleAlreadyClear =
             !hasAccountIdentity && lifecycleState.readyGeneration(GameSource.STEAM) == null
         if (lifecycleAlreadyClear) {
@@ -52,15 +47,11 @@ class SteamOwnershipReadiness @Inject constructor(
         clear: suspend () -> Unit,
     ): Boolean = withCurrentGeneration(expectedGeneration, clear)
 
-    private fun <T> runWithLock(block: () -> T): T = runBlocking {
-        mutex.withLock { block() }
-    }
-
     private suspend fun withCurrentGeneration(
         expectedGeneration: Long,
         block: suspend () -> Unit,
-    ): Boolean = mutex.withLock {
-        if (currentGeneration() != expectedGeneration) return@withLock false
+    ): Boolean = AccountLifecycleSerialization.suspending {
+        if (currentGeneration() != expectedGeneration) return@suspending false
         block()
         true
     }

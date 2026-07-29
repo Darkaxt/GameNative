@@ -20,9 +20,13 @@ import app.gamenative.library.canonical.source.OwnedCopyProjection
 import app.gamenative.library.canonical.source.SnapshotCompleteness
 import app.gamenative.library.canonical.source.SnapshotReason
 import app.gamenative.library.canonical.source.SourceProjectionBatch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -37,6 +41,7 @@ class CanonicalProjectionEngineTest {
 
     private lateinit var db: PluviaDatabase
     private lateinit var idGenerator: SequentialCanonicalIdGenerator
+    private lateinit var lifecycleState: InMemoryAccountLifecycleState
     private lateinit var engine: CanonicalProjectionEngine
 
     private val primaryScope = AccountScope("1".repeat(64))
@@ -49,6 +54,7 @@ class CanonicalProjectionEngineTest {
             .allowMainThreadQueries()
             .build()
         idGenerator = SequentialCanonicalIdGenerator()
+        lifecycleState = InMemoryAccountLifecycleState()
         engine = newEngine(realResolver())
     }
 
@@ -469,7 +475,7 @@ class CanonicalProjectionEngineTest {
             ),
             300,
         )
-        assertTrue(!db.storeMatchDao().getAll().single().isPresent)
+        assertFalse(db.storeMatchDao().getAll().single().isPresent)
 
         engine.rebuild(listOf(batch(GameSource.GOG, copies = listOf(owned))), 400)
         engine.rebuild(
@@ -477,6 +483,7 @@ class CanonicalProjectionEngineTest {
                 SourceProjectionBatch(
                     source = GameSource.GOG,
                     accountScope = null,
+                    lifecycleGeneration = lifecycleState.generation(GameSource.GOG),
                     completeness = SnapshotCompleteness.UNAVAILABLE,
                     copies = emptyList(),
                     reason = SnapshotReason.MISSING_ACCOUNT_SCOPE,
@@ -484,7 +491,7 @@ class CanonicalProjectionEngineTest {
             ),
             500,
         )
-        assertTrue(!db.storeMatchDao().getAll().single().isPresent)
+        assertFalse(db.storeMatchDao().getAll().single().isPresent)
     }
 
     @Test
@@ -506,6 +513,80 @@ class CanonicalProjectionEngineTest {
             listOf("gog:role-playing", "gog:strategy"),
             db.canonicalFacetDao().getGenres(canonical.canonicalId).map { it.genreKey },
         )
+    }
+
+    @Test
+    fun `stale lifecycle batch is rejected before database mutation`() = runBlocking {
+        val owned = copy(
+            source = GameSource.GOG,
+            stableSourceId = "owned",
+            displayName = "Owned Game",
+            developer = "Studio",
+            releaseYear = 2020,
+        )
+        val staleBatch = batch(GameSource.GOG, copies = listOf(owned))
+        lifecycleState.advanceGeneration(GameSource.GOG)
+
+        val failure = runCatching {
+            engine.rebuild(listOf(staleBatch), nowEpochMs = 100)
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalStateException)
+        assertEquals(
+            "ACCOUNT_LIFECYCLE_CHANGED_DURING_PROJECTION",
+            failure?.message,
+        )
+        assertTrue(db.canonicalGameDao().getAll().isEmpty())
+        assertTrue(db.storeMatchDao().getAll().isEmpty())
+    }
+
+    @Test
+    fun `account transition waits for a started projection transaction`() = runBlocking {
+        val delegate = realResolver()
+        val resolverStarted = CompletableDeferred<Unit>()
+        val releaseResolver = CompletableDeferred<Unit>()
+        val blockingResolver = object : CanonicalResolver {
+            override suspend fun resolve(
+                copy: OwnedCopyProjection,
+                nowEpochMs: Long,
+            ): CanonicalResolution {
+                resolverStarted.complete(Unit)
+                releaseResolver.await()
+                return delegate.resolve(copy, nowEpochMs)
+            }
+        }
+        val blockingEngine = newEngine(blockingResolver)
+        val owned = copy(
+            source = GameSource.GOG,
+            stableSourceId = "owned",
+            displayName = "Owned Game",
+            developer = "Studio",
+            releaseYear = 2020,
+        )
+        val projection = async {
+            blockingEngine.rebuild(
+                listOf(batch(GameSource.GOG, copies = listOf(owned))),
+                nowEpochMs = 100,
+            )
+        }
+        resolverStarted.await()
+        val transitionStarted = CompletableDeferred<Unit>()
+        val transition = async(Dispatchers.Default) {
+            transitionStarted.complete(Unit)
+            AccountLifecycleSerialization.blocking {
+                lifecycleState.advanceGeneration(GameSource.GOG)
+            }
+        }
+        transitionStarted.await()
+
+        assertFalse(transition.isCompleted)
+        assertEquals(0L, lifecycleState.generation(GameSource.GOG))
+        releaseResolver.complete(Unit)
+
+        projection.await()
+        assertEquals(1L, transition.await())
+        assertEquals(1L, lifecycleState.generation(GameSource.GOG))
+        assertEquals(1, db.storeMatchDao().getAll().size)
     }
 
     @Test
@@ -663,6 +744,7 @@ class CanonicalProjectionEngineTest {
         CanonicalProjectionEngine(
             db = db,
             resolver = resolver,
+            accountLifecycleState = lifecycleState,
         )
 
     private fun realResolver(): CanonicalResolver = CanonicalGameResolver(
@@ -681,6 +763,11 @@ class CanonicalProjectionEngineTest {
     ): SourceProjectionBatch = SourceProjectionBatch(
         source = source,
         accountScope = accountScope,
+        lifecycleGeneration = if (source == GameSource.CUSTOM_GAME) {
+            null
+        } else {
+            lifecycleState.generation(source)
+        },
         completeness = completeness,
         copies = copies,
         reason = reason,

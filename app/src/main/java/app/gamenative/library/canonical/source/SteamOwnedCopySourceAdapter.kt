@@ -28,16 +28,16 @@ class SteamOwnedCopySourceAdapter @Inject constructor(
     )
 
     override suspend fun snapshot(): SourceProjectionBatch {
+        val accountGeneration = accountLifecycleState.generation(source)
         val accountScope = try {
             accountScopeProvider.current(source)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            return sourceReadFailed(source, null, error)
-        } ?: return missingAccountScope(source)
-        val accountGeneration = accountLifecycleState.generation(source)
+            return sourceReadFailed(source, null, error, accountGeneration)
+        } ?: return missingAccountScope(source, accountGeneration)
         if (accountLifecycleState.readyGeneration(source) != accountGeneration) {
-            return presenceLedgerNotReady(source, accountScope)
+            return presenceLedgerNotReady(source, accountScope, accountGeneration)
         }
 
         return try {
@@ -78,14 +78,20 @@ class SteamOwnedCopySourceAdapter @Inject constructor(
                     accountLifecycleState,
                 )
             ) {
-                accountScopeChanged(source)
+                accountScopeChanged(source, accountGeneration)
             } else {
-                sourceBatch(source, accountScope, copies, partialReason)
+                sourceBatch(
+                    source = source,
+                    accountScope = accountScope,
+                    copies = copies,
+                    partialReason = partialReason,
+                    lifecycleGeneration = accountGeneration,
+                )
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            sourceReadFailed(source, accountScope, error)
+            sourceReadFailed(source, accountScope, error, accountGeneration)
         }
     }
 

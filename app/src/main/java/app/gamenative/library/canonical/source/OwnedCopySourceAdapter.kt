@@ -43,6 +43,7 @@ data class OwnedCopyProjection(
 data class SourceProjectionBatch(
     val source: GameSource,
     val accountScope: AccountScope?,
+    val lifecycleGeneration: Long? = null,
     val completeness: SnapshotCompleteness,
     val copies: List<OwnedCopyProjection>,
     val reason: SnapshotReason? = null,
@@ -100,22 +101,32 @@ internal suspend fun AccountScopeProvider.isAccountScopeUnchanged(
 ): Boolean = current(source) == accountScope &&
     lifecycleState.generation(source) == generation
 
-internal fun missingAccountScope(source: GameSource): SourceProjectionBatch = unavailableBatch(
+internal fun missingAccountScope(
+    source: GameSource,
+    lifecycleGeneration: Long? = null,
+): SourceProjectionBatch = unavailableBatch(
     source = source,
+    lifecycleGeneration = lifecycleGeneration,
     reason = SnapshotReason.MISSING_ACCOUNT_SCOPE,
 )
 
 internal fun presenceLedgerNotReady(
     source: GameSource,
     accountScope: AccountScope,
+    lifecycleGeneration: Long,
 ): SourceProjectionBatch = unavailableBatch(
     source = source,
     accountScope = accountScope,
+    lifecycleGeneration = lifecycleGeneration,
     reason = SnapshotReason.PRESENCE_LEDGER_NOT_READY,
 )
 
-internal fun accountScopeChanged(source: GameSource): SourceProjectionBatch = unavailableBatch(
+internal fun accountScopeChanged(
+    source: GameSource,
+    lifecycleGeneration: Long? = null,
+): SourceProjectionBatch = unavailableBatch(
     source = source,
+    lifecycleGeneration = lifecycleGeneration,
     reason = SnapshotReason.ACCOUNT_SCOPE_CHANGED,
 )
 
@@ -123,9 +134,11 @@ internal fun sourceReadFailed(
     source: GameSource,
     accountScope: AccountScope?,
     error: Exception,
+    lifecycleGeneration: Long? = null,
 ): SourceProjectionBatch = unavailableBatch(
     source = source,
     accountScope = accountScope,
+    lifecycleGeneration = lifecycleGeneration,
     reason = SnapshotReason.SOURCE_READ_FAILED,
     errorClass = error::class,
 )
@@ -135,9 +148,11 @@ internal fun sourceBatch(
     accountScope: AccountScope,
     copies: List<OwnedCopyProjection>,
     partialReason: SnapshotReason?,
+    lifecycleGeneration: Long? = null,
 ): SourceProjectionBatch = SourceProjectionBatch(
     source = source,
     accountScope = accountScope,
+    lifecycleGeneration = lifecycleGeneration,
     completeness = if (partialReason == null) {
         SnapshotCompleteness.COMPLETE
     } else {
@@ -158,10 +173,12 @@ private fun unavailableBatch(
     source: GameSource,
     reason: SnapshotReason,
     accountScope: AccountScope? = null,
+    lifecycleGeneration: Long? = null,
     errorClass: KClass<out Throwable>? = null,
 ): SourceProjectionBatch = SourceProjectionBatch(
     source = source,
     accountScope = accountScope,
+    lifecycleGeneration = lifecycleGeneration,
     completeness = SnapshotCompleteness.UNAVAILABLE,
     copies = emptyList(),
     reason = reason,

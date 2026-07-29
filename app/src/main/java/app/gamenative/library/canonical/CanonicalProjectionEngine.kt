@@ -54,6 +54,7 @@ interface CanonicalProjectionRunner {
 class CanonicalProjectionEngine @Inject constructor(
     private val db: PluviaDatabase,
     private val resolver: CanonicalResolver,
+    private val accountLifecycleState: AccountLifecycleState = AccountScopeInvalidations,
 ) : CanonicalProjectionRunner {
     private val canonicalGameDao = db.canonicalGameDao()
     private val storeMatchDao = db.storeMatchDao()
@@ -83,7 +84,7 @@ class CanonicalProjectionEngine @Inject constructor(
             batch.source to batch.completeness
         }
 
-        db.withTransaction {
+        withSerializedLifecycleTransaction(orderedBatches) {
             orderedBatches.forEach { batch ->
                 when {
                     batch.reason == SnapshotReason.MISSING_ACCOUNT_SCOPE -> {
@@ -234,6 +235,36 @@ class CanonicalProjectionEngine @Inject constructor(
                 }
                 require(keys.add(copy.key)) {
                     "Projection input contains a duplicate owned copy key"
+                }
+            }
+        }
+    }
+
+    private suspend fun <T> withSerializedLifecycleTransaction(
+        batches: List<SourceProjectionBatch>,
+        block: suspend () -> T,
+    ): T = AccountLifecycleSerialization.suspending {
+        validateLifecycleGenerations(batches)
+        db.withTransaction { block() }
+    }
+
+    private fun validateLifecycleGenerations(batches: List<SourceProjectionBatch>) {
+        batches.forEach { batch ->
+            if (batch.source == GameSource.CUSTOM_GAME) return@forEach
+
+            val generation = batch.lifecycleGeneration
+            val requiresLifecycleGeneration =
+                batch.accountScope != null ||
+                    batch.reason == SnapshotReason.MISSING_ACCOUNT_SCOPE
+            require(generation != null || !requiresLifecycleGeneration) {
+                "Account-scoped projection batch is missing its lifecycle generation"
+            }
+            if (generation != null) {
+                require(generation >= 0) {
+                    "Projection lifecycle generation must be non-negative"
+                }
+                check(accountLifecycleState.generation(batch.source) == generation) {
+                    "ACCOUNT_LIFECYCLE_CHANGED_DURING_PROJECTION"
                 }
             }
         }

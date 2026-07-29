@@ -1835,6 +1835,18 @@ git push fork HEAD
 
 If implementation corrections were required, commit each owning correction separately before this test commit and push each commit.
 
+#### Gate remediation: serialize lifecycle-sensitive projection commits
+
+The final Stage 1 gate found that an adapter could capture account scope and ownership for lifecycle generation N, then commit that stale batch after logout or an account switch advanced the source to generation N+1. Repair this without moving adapter collection into Room:
+
+1. Add `lifecycleGeneration` to `SourceProjectionBatch`. Steam, GOG, Epic, and Amazon adapters capture the generation before reading account scope and carry it through complete, partial, unavailable, missing-scope, and error batches. Custom games remain outside account lifecycle generation checks.
+2. Add one process-wide `AccountLifecycleSerialization` boundary. GOG, Epic, and Amazon credential lifecycle changes, Steam account transitions, Steam license replacement/readiness, Steam license cleanup, and canonical projection use this same serializer.
+3. In `CanonicalProjectionEngine`, acquire the serializer only after all adapter snapshots have been collected. While holding it, validate every account-sensitive batch against the current source generation and then run the complete Room projection transaction without releasing the serializer.
+4. Reject a missing generation on any account-scoped batch that can mutate ownership. Reject a stale generation with the fixed code `ACCOUNT_LIFECYCLE_CHANGED_DURING_PROJECTION` before opening the Room transaction.
+5. Add deterministic tests proving that a stale batch performs no database mutation and that a lifecycle transition started after projection enters its transaction waits until projection commits. Keep the 1,500-copy idempotence test generation-aware.
+
+Verify with focused Legacy and Modern tests for `CanonicalProjectionEngineTest`, `CanonicalProjectionScaleTest`, `OwnedCopySourceAdapterTest`, `SteamOwnershipReadinessTest`, `AccountLifecycleStateTest`, and the GOG/Epic/Amazon authentication managers. Compile both Android-test source sets without launching an emulator.
+
 ---
 
 ### Task 12: Cross-check Stage 1 against the approved design

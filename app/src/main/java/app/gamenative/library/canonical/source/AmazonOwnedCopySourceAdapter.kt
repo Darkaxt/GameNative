@@ -32,21 +32,21 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
     )
 
     override suspend fun snapshot(): SourceProjectionBatch {
+        val accountGeneration = accountLifecycleState.generation(source)
         val accountScope = try {
             accountScopeProvider.current(source)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            return sourceReadFailed(source, null, error)
-        } ?: return missingAccountScope(source)
-        val accountGeneration = accountLifecycleState.generation(source)
+            return sourceReadFailed(source, null, error, accountGeneration)
+        } ?: return missingAccountScope(source, accountGeneration)
 
         return try {
             val ledger = ownedCopyLedgerDao.getCompletedSnapshotForLifecycle(
                 accountScope = accountScope.value,
                 source = source,
                 lifecycleGeneration = accountGeneration,
-            ) ?: return presenceLedgerNotReady(source, accountScope)
+            ) ?: return presenceLedgerNotReady(source, accountScope, accountGeneration)
             val rowsById = if (ledger.stableSourceIds.isEmpty()) {
                 emptyMap()
             } else {
@@ -78,19 +78,20 @@ class AmazonOwnedCopySourceAdapter @Inject constructor(
                     accountLifecycleState,
                 )
             ) {
-                accountScopeChanged(source)
+                accountScopeChanged(source, accountGeneration)
             } else {
                 sourceBatch(
                     source = source,
                     accountScope = accountScope,
                     copies = copies,
                     partialReason = SnapshotReason.MISSING_MATERIALIZED_ROW.takeIf { missingRow },
+                    lifecycleGeneration = accountGeneration,
                 )
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            sourceReadFailed(source, accountScope, error)
+            sourceReadFailed(source, accountScope, error, accountGeneration)
         }
     }
 

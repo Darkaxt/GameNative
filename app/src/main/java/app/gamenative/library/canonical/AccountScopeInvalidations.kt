@@ -55,19 +55,23 @@ object AccountScopeInvalidations : AccountLifecycleState {
     internal inline fun <T> runLifecycleChange(
         source: GameSource,
         shouldAdvance: Boolean = true,
-        block: () -> T,
+        crossinline block: () -> T,
     ): T {
         if (!shouldAdvance) return block()
 
-        val change = beginChange(source)
-        return try {
-            block()
-        } finally {
-            publishChange(change)
+        return AccountLifecycleSerialization.blocking {
+            val change = beginChange(source)
+            try {
+                block()
+            } finally {
+                publishChange(change)
+            }
         }
     }
 
     fun notifyChanged(source: GameSource) {
-        publishChange(beginChange(source))
+        AccountLifecycleSerialization.blocking {
+            publishChange(beginChange(source))
+        }
     }
 }

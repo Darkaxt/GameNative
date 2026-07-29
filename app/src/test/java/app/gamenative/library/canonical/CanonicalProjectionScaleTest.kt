@@ -32,6 +32,7 @@ class CanonicalProjectionScaleTest {
 
     private lateinit var db: PluviaDatabase
     private lateinit var engine: CanonicalProjectionEngine
+    private lateinit var lifecycleState: AccountLifecycleState
 
     private val steamScope = AccountScope("1".repeat(64))
     private val gogScope = AccountScope("2".repeat(64))
@@ -43,6 +44,7 @@ class CanonicalProjectionScaleTest {
             .allowMainThreadQueries()
             .build()
         val idGenerator = SequentialCanonicalIdGenerator()
+        lifecycleState = InMemoryAccountLifecycleState()
         engine = CanonicalProjectionEngine(
             db = db,
             resolver = CanonicalGameResolver(
@@ -51,6 +53,7 @@ class CanonicalProjectionScaleTest {
                 trustedSteamMappingProviders = emptySet(),
                 idGenerator = idGenerator,
             ),
+            accountLifecycleState = lifecycleState,
         )
     }
 
@@ -158,6 +161,7 @@ class CanonicalProjectionScaleTest {
     ): SourceProjectionBatch = SourceProjectionBatch(
         source = source,
         accountScope = accountScope,
+        lifecycleGeneration = lifecycleState.generation(source),
         completeness = SnapshotCompleteness.COMPLETE,
         copies = copies,
     )
