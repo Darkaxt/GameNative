@@ -1,6 +1,6 @@
 # Steam-Normalized Library and Native Game Details
 
-**Status:** Approved design; staged implementation in progress (Stage 0 complete)
+**Status:** Approved design; staged implementation in progress (Stages 0–1 complete)
 
 **Date:** 2026-07-27
 
