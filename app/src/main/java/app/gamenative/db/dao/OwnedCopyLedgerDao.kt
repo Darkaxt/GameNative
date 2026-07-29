@@ -16,6 +16,7 @@ data class CompletedOwnedCopySnapshot(
     val completedAt: Long,
     val lifecycleGeneration: Long,
     val stableSourceIds: List<String>,
+    val resolvedSourceIds: Map<String, String> = emptyMap(),
 )
 
 @Dao
@@ -42,6 +43,15 @@ interface OwnedCopyLedgerDao {
             "WHERE account_scope = :accountScope AND source = :source ORDER BY stable_source_id",
     )
     suspend fun getCompletedStableSourceIds(accountScope: String, source: GameSource): List<String>
+
+    @Query(
+        "SELECT * FROM owned_copy_presence " +
+            "WHERE account_scope = :accountScope AND source = :source ORDER BY stable_source_id",
+    )
+    suspend fun getCompletedPresenceRows(
+        accountScope: String,
+        source: GameSource,
+    ): List<OwnedCopyPresenceEntity>
 
     @Query(
         "SELECT * FROM owned_copy_presence " +
@@ -117,7 +127,7 @@ interface OwnedCopyLedgerDao {
     @Transaction
     suspend fun getCompletedSnapshot(accountScope: String, source: GameSource): CompletedOwnedCopySnapshot? {
         val header = getCompletedHeader(accountScope, source) ?: return null
-        return header.toSnapshot(getCompletedStableSourceIds(accountScope, source))
+        return header.toSnapshot(getCompletedPresenceRows(accountScope, source))
     }
 
     @Transaction
@@ -131,7 +141,7 @@ interface OwnedCopyLedgerDao {
             source = source,
             lifecycleGeneration = lifecycleGeneration,
         ) ?: return null
-        return header.toSnapshot(getCompletedStableSourceIds(accountScope, source))
+        return header.toSnapshot(getCompletedPresenceRows(accountScope, source))
     }
 
     @Transaction
@@ -178,10 +188,13 @@ interface OwnedCopyLedgerDao {
     }
 
     private fun OwnedCopySyncEntity.toSnapshot(
-        stableSourceIds: List<String>,
+        presenceRows: List<OwnedCopyPresenceEntity>,
     ): CompletedOwnedCopySnapshot = CompletedOwnedCopySnapshot(
         completedAt = completedAt,
         lifecycleGeneration = lifecycleGeneration,
-        stableSourceIds = stableSourceIds,
+        stableSourceIds = presenceRows.map(OwnedCopyPresenceEntity::stableSourceId),
+        resolvedSourceIds = presenceRows.mapNotNull { presence ->
+            presence.resolvedSourceId?.let { presence.stableSourceId to it }
+        }.toMap(),
     )
 }

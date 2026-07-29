@@ -21,6 +21,12 @@ import app.gamenative.library.canonical.RoomCanonicalMutationRepository
 import app.gamenative.library.canonical.SharedPreferencesAccountLifecycleState
 import app.gamenative.library.canonical.SystemCanonicalProjectionClock
 import app.gamenative.library.canonical.TrustedSteamMappingProvider
+import app.gamenative.library.canonical.runtime.AmazonOwnedCopyRuntimeAdapter
+import app.gamenative.library.canonical.runtime.CustomOwnedCopyRuntimeAdapter
+import app.gamenative.library.canonical.runtime.EpicOwnedCopyRuntimeAdapter
+import app.gamenative.library.canonical.runtime.GogOwnedCopyRuntimeAdapter
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeAdapter
+import app.gamenative.library.canonical.runtime.SteamOwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.source.AmazonOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.CustomOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.EpicOwnedCopySourceAdapter
@@ -104,6 +110,36 @@ abstract class CanonicalLibraryModule {
     @Binds
     @IntoSet
     abstract fun bindCustomAdapter(implementation: CustomOwnedCopySourceAdapter): OwnedCopySourceAdapter
+
+    @Binds
+    @IntoSet
+    abstract fun bindSteamRuntimeAdapter(
+        implementation: SteamOwnedCopyRuntimeAdapter,
+    ): OwnedCopyRuntimeAdapter
+
+    @Binds
+    @IntoSet
+    abstract fun bindGogRuntimeAdapter(
+        implementation: GogOwnedCopyRuntimeAdapter,
+    ): OwnedCopyRuntimeAdapter
+
+    @Binds
+    @IntoSet
+    abstract fun bindEpicRuntimeAdapter(
+        implementation: EpicOwnedCopyRuntimeAdapter,
+    ): OwnedCopyRuntimeAdapter
+
+    @Binds
+    @IntoSet
+    abstract fun bindAmazonRuntimeAdapter(
+        implementation: AmazonOwnedCopyRuntimeAdapter,
+    ): OwnedCopyRuntimeAdapter
+
+    @Binds
+    @IntoSet
+    abstract fun bindCustomRuntimeAdapter(
+        implementation: CustomOwnedCopyRuntimeAdapter,
+    ): OwnedCopyRuntimeAdapter
 
     @Multibinds
     abstract fun trustedSteamMappingProviders(): Set<TrustedSteamMappingProvider>

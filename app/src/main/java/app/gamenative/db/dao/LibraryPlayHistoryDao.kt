@@ -13,6 +13,9 @@ interface LibraryPlayHistoryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: LibraryPlayHistory)
 
+    @Query("SELECT * FROM library_play_history WHERE app_id = :appId")
+    suspend fun get(appId: String): LibraryPlayHistory?
+
     @Query("SELECT * FROM library_play_history")
     fun getAll(): Flow<List<LibraryPlayHistory>>
 }
