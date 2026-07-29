@@ -37,6 +37,44 @@ class EpicGameDaoTest {
     }
 
     @Test
+    fun canonicalProjectionReadIncludesExcludedPhysicalRowsWithoutChangingLegacyRead() = runTest {
+        val games = listOf(
+            EpicGame(
+                id = 1,
+                namespace = "games",
+                catalogId = "normal",
+                title = "Normal",
+            ),
+            EpicGame(
+                id = 2,
+                namespace = "games",
+                catalogId = "dlc",
+                title = "DLC",
+                isDLC = true,
+            ),
+            EpicGame(
+                id = 3,
+                namespace = "ue",
+                catalogId = "marketplace",
+                title = "Unreal Marketplace",
+            ),
+            EpicGame(
+                id = 4,
+                namespace = "89efe5924d3d467c839449ab6ab52e7f",
+                catalogId = "engine",
+                title = "Unreal Engine",
+            ),
+        )
+        dao.insertAll(games)
+
+        assertEquals(listOf("Normal"), dao.getAllAsList().map { it.title })
+        assertEquals(
+            games.map { it.namespace to it.catalogId }.toSet(),
+            dao.getAllForCanonicalProjection().map { it.namespace to it.catalogId }.toSet(),
+        )
+    }
+
+    @Test
     fun upsertPreservesInstallStateOnlyForTheSameProviderIdentity() = runTest {
         dao.insert(
             EpicGame(

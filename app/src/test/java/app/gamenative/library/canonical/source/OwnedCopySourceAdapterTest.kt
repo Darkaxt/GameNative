@@ -215,7 +215,7 @@ class OwnedCopySourceAdapterTest {
                 type = AppType.game,
             ),
         )
-        coEvery { dao.getAllAsList() } returns games
+        coEvery { dao.getAllForCanonicalProjection() } returns games
         coEvery { dao.getByProviderIdentity(namespace, catalogId) } returns games[1]
         every { dao.getAll() } returns flowOf(games, games)
         val adapter = EpicOwnedCopySourceAdapter(
@@ -286,7 +286,7 @@ class OwnedCopySourceAdapterTest {
         val stableIds = games.associateWith { game ->
             EpicStableSourceId.encode(game.namespace, game.catalogId)
         }
-        coEvery { dao.getAllAsList() } returns games
+        coEvery { dao.getAllForCanonicalProjection() } returns games
         coEvery { dao.getByProviderIdentity(any(), any()) } answers {
             val namespace = invocation.args[0] as String
             val catalogId = invocation.args[1] as String
@@ -310,6 +310,34 @@ class OwnedCopySourceAdapterTest {
             val excludedKey = OwnedCopyKey(scope, GameSource.EPIC, stableIds.getValue(game))
             assertNull(adapter.resolve(excludedKey))
         }
+    }
+
+    @Test
+    fun `epic snapshot remains partial for a truly missing materialized row`() = runTest {
+        val dao = mockk<EpicGameDao>()
+        val normal = EpicGame(
+            id = 1,
+            namespace = "games",
+            catalogId = "normal",
+            title = "Normal Game",
+        )
+        val normalStableId = EpicStableSourceId.encode(normal.namespace, normal.catalogId)
+        val missingStableId = EpicStableSourceId.encode("games", "missing")
+        coEvery { dao.getAllForCanonicalProjection() } returns listOf(normal)
+        val adapter = EpicOwnedCopySourceAdapter(
+            dao,
+            scopes(GameSource.EPIC),
+            completedLedger(GameSource.EPIC, normalStableId, missingStableId),
+        )
+
+        val batch = adapter.snapshot()
+
+        assertEquals(SnapshotCompleteness.PARTIAL, batch.completeness)
+        assertEquals(SnapshotReason.MISSING_MATERIALIZED_ROW, batch.reason)
+        assertEquals(
+            listOf(OwnedCopyKey(scope, GameSource.EPIC, normalStableId)),
+            batch.copies.map { it.key },
+        )
     }
 
     @Test
@@ -422,7 +450,7 @@ class OwnedCopySourceAdapterTest {
         }
         coVerify(exactly = 0) { steamDao._getAllOwnedAppsPaged(any(), any()) }
         coVerify(exactly = 0) { gogDao.getAllAsList() }
-        coVerify(exactly = 0) { epicDao.getAllAsList() }
+        coVerify(exactly = 0) { epicDao.getAllForCanonicalProjection() }
         coVerify(exactly = 0) { amazonDao.getAllAsList() }
     }
 
@@ -434,7 +462,7 @@ class OwnedCopySourceAdapterTest {
         val amazonDao = mockk<AmazonGameDao>()
         coEvery { steamDao._getAllOwnedAppsPaged(any(), any()) } throws SensitiveDaoException()
         coEvery { gogDao.getAllAsList() } throws SensitiveDaoException()
-        coEvery { epicDao.getAllAsList() } throws SensitiveDaoException()
+        coEvery { epicDao.getAllForCanonicalProjection() } throws SensitiveDaoException()
         coEvery { amazonDao.getAllAsList() } throws SensitiveDaoException()
         val batches = listOf(
             SteamOwnedCopySourceAdapter(
@@ -560,7 +588,7 @@ class OwnedCopySourceAdapterTest {
         val amazonDao = mockk<AmazonGameDao>()
         coEvery { steamDao._getAllOwnedAppsPaged(any(), any()) } returns listOf(SteamApp(id = 0, name = "Invalid"))
         coEvery { gogDao.getAllAsList() } returns listOf(GOGGame(id = "", title = "Invalid"))
-        coEvery { epicDao.getAllAsList() } returns listOf(EpicGame(namespace = "", catalogId = "catalog", title = "Invalid"))
+        coEvery { epicDao.getAllForCanonicalProjection() } returns listOf(EpicGame(namespace = "", catalogId = "catalog", title = "Invalid"))
         coEvery { amazonDao.getAllAsList() } returns listOf(AmazonGame(productId = "", title = "Invalid"))
 
         val batches = listOf(
@@ -613,7 +641,7 @@ class OwnedCopySourceAdapterTest {
             assertTrue(batch.copies.isEmpty())
         }
         coVerify(exactly = 0) { gogDao.getAllAsList() }
-        coVerify(exactly = 0) { epicDao.getAllAsList() }
+        coVerify(exactly = 0) { epicDao.getAllForCanonicalProjection() }
         coVerify(exactly = 0) { amazonDao.getAllAsList() }
     }
 
@@ -663,7 +691,7 @@ class OwnedCopySourceAdapterTest {
             assertTrue(batch.copies.isEmpty())
         }
         coVerify(exactly = 0) { gogDao.getAllAsList() }
-        coVerify(exactly = 0) { epicDao.getAllAsList() }
+        coVerify(exactly = 0) { epicDao.getAllForCanonicalProjection() }
         coVerify(exactly = 0) { amazonDao.getAllAsList() }
     }
 
