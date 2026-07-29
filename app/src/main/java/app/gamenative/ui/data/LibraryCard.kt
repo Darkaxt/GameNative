@@ -68,6 +68,7 @@ data class LibraryCard(
         ): LibraryCard = fromLibraryItem(
             identity = LibraryCardIdentity.SourceCopy(item),
             item = item,
+            iconUrl = item.clientIconUrl,
             compatibilityStatus = compatibilityStatus,
             gameStats = gameStats,
         )
@@ -79,6 +80,7 @@ data class LibraryCard(
         ): LibraryCard = fromLibraryItem(
             identity = LibraryCardIdentity.Promotion(item.appId),
             item = item,
+            iconUrl = item.iconHash,
             compatibilityStatus = compatibilityStatus,
             gameStats = gameStats,
         )
@@ -86,13 +88,14 @@ data class LibraryCard(
         private fun fromLibraryItem(
             identity: LibraryCardIdentity,
             item: LibraryItem,
+            iconUrl: String,
             compatibilityStatus: GameCompatibilityStatus?,
             gameStats: GameCardStats?,
         ): LibraryCard = LibraryCard(
             identity = identity,
             index = item.index,
             name = item.name,
-            iconUrl = item.clientIconUrl,
+            iconUrl = iconUrl,
             capsuleImageUrl = item.capsuleImageUrl,
             headerImageUrl = item.headerImageUrl,
             heroImageUrl = item.heroImageUrl,

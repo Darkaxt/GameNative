@@ -121,6 +121,23 @@ class LibraryCardTest {
     }
 
     @Test
+    fun `promotion cards preserve complete icon URLs`() {
+        val iconUrl = "https://cdn.example.invalid/featured/icon.png"
+        val promotion = LibraryItem(
+            appId = "FEATURED_campaign",
+            name = "Featured",
+            iconHash = iconUrl,
+            gameSource = GameSource.STEAM,
+            isRecommended = true,
+            isFeatured = true,
+        )
+
+        val card = LibraryCard.fromPromotion(promotion)
+
+        assertEquals(iconUrl, card.iconUrl)
+    }
+
+    @Test
     fun `gate off mapping preserves source presentation compatibility and stats`() {
         val item = LibraryItem(
             index = 7,
