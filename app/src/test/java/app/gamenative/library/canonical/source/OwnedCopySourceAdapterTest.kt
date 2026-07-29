@@ -253,6 +253,66 @@ class OwnedCopySourceAdapterTest {
     }
 
     @Test
+    fun `epic snapshot and resolution omit rows hidden from All Library`() = runTest {
+        val dao = mockk<EpicGameDao>()
+        val normal = EpicGame(
+            id = 1,
+            namespace = "games",
+            catalogId = "normal",
+            title = "Normal Game",
+        )
+        val excluded = listOf(
+            EpicGame(
+                id = 2,
+                namespace = "games",
+                catalogId = "dlc",
+                title = "DLC",
+                isDLC = true,
+            ),
+            EpicGame(
+                id = 3,
+                namespace = "ue",
+                catalogId = "marketplace",
+                title = "Unreal Marketplace",
+            ),
+            EpicGame(
+                id = 4,
+                namespace = "89efe5924d3d467c839449ab6ab52e7f",
+                catalogId = "engine",
+                title = "Unreal Engine",
+            ),
+        )
+        val games = listOf(normal) + excluded
+        val stableIds = games.associateWith { game ->
+            EpicStableSourceId.encode(game.namespace, game.catalogId)
+        }
+        coEvery { dao.getAllAsList() } returns games
+        coEvery { dao.getByProviderIdentity(any(), any()) } answers {
+            val namespace = invocation.args[0] as String
+            val catalogId = invocation.args[1] as String
+            games.singleOrNull { game ->
+                game.namespace == namespace && game.catalogId == catalogId
+            }
+        }
+        val adapter = EpicOwnedCopySourceAdapter(
+            dao,
+            scopes(GameSource.EPIC),
+            completedLedger(GameSource.EPIC, *stableIds.values.toTypedArray()),
+        )
+
+        val batch = adapter.snapshot()
+
+        val normalKey = OwnedCopyKey(scope, GameSource.EPIC, stableIds.getValue(normal))
+        assertEquals(SnapshotCompleteness.COMPLETE, batch.completeness)
+        assertEquals(listOf(normalKey), batch.copies.map { it.key })
+        assertNull(batch.reason)
+        excluded.forEach { game ->
+            val excludedKey = OwnedCopyKey(scope, GameSource.EPIC, stableIds.getValue(game))
+            assertNull(adapter.resolve(excludedKey))
+        }
+    }
+
+    @Test
     fun amazonUsesProductIdAndKeepsEntitlementOnlyInReference() = runTest {
         val dao = mockk<AmazonGameDao>()
         val games = listOf(

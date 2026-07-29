@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -98,6 +99,41 @@ class CanonicalProjectionCoordinatorTest {
             diagnostics.sources.single { it.source == GameSource.GOG }.errorClass,
         )
         assertEquals(1, steam.snapshotCalls)
+        job.cancel()
+    }
+
+    @Test
+    fun `adapter failure carries current lifecycle generation except for Custom`() = runTest {
+        val lifecycleState = InMemoryAccountLifecycleState().apply {
+            repeat(7) { advanceGeneration(GameSource.GOG) }
+        }
+        val gog = FakeAdapter(completeBatch(GameSource.GOG)).apply {
+            snapshotFailure = IllegalStateException("private GOG failure")
+        }
+        val custom = FakeAdapter(completeBatch(GameSource.CUSTOM_GAME)).apply {
+            snapshotFailure = IllegalStateException("private Custom failure")
+        }
+        val runner = RecordingRunner()
+        val coordinator = coordinator(
+            adapters = listOf(gog, custom),
+            runner = runner,
+            diagnostics = RecordingDiagnostics(),
+            accountLifecycleState = lifecycleState,
+        )
+
+        val job = coordinator.start(backgroundScope)
+        runCurrent()
+
+        val failed = runner.batches.single().single { it.source == GameSource.GOG }
+        assertEquals(7L, failed.lifecycleGeneration)
+        assertNull(failed.accountScope)
+        assertEquals(SnapshotCompleteness.UNAVAILABLE, failed.completeness)
+        assertEquals(SnapshotReason.SOURCE_READ_FAILED, failed.reason)
+        val customFailed = runner.batches.single().single { it.source == GameSource.CUSTOM_GAME }
+        assertNull(customFailed.lifecycleGeneration)
+        assertNull(customFailed.accountScope)
+        assertEquals(SnapshotCompleteness.UNAVAILABLE, customFailed.completeness)
+        assertEquals(SnapshotReason.SOURCE_READ_FAILED, customFailed.reason)
         job.cancel()
     }
 
@@ -293,12 +329,14 @@ class CanonicalProjectionCoordinatorTest {
         runner: CanonicalProjectionRunner,
         diagnostics: CanonicalDiagnosticSink,
         gate: CanonicalProjectionGate = CanonicalProjectionGate { true },
+        accountLifecycleState: AccountLifecycleState = InMemoryAccountLifecycleState(),
     ): CanonicalProjectionCoordinator = CanonicalProjectionCoordinator(
         adapters = adapters.toSet(),
         runner = runner,
         diagnostics = diagnostics,
         gate = gate,
         clock = IncrementingClock(),
+        accountLifecycleState = accountLifecycleState,
     )
 
     private fun completeBatch(source: GameSource): SourceProjectionBatch = SourceProjectionBatch(

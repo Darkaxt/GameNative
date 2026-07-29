@@ -41,6 +41,7 @@ class CanonicalProjectionCoordinator @Inject constructor(
     private val diagnostics: CanonicalDiagnosticSink,
     private val gate: CanonicalProjectionGate,
     private val clock: CanonicalProjectionClock,
+    private val accountLifecycleState: AccountLifecycleState,
 ) {
     private val orderedAdapters = adapters.sortedBy { adapter -> sourceRank(adapter.source) }
 
@@ -125,6 +126,7 @@ class CanonicalProjectionCoordinator @Inject constructor(
                 source = adapter.source,
                 accountScope = null,
                 error = error,
+                lifecycleGeneration = fallbackGeneration(adapter.source),
             )
         }
         diagnostics.sourceSnapshot(
@@ -136,6 +138,9 @@ class CanonicalProjectionCoordinator @Inject constructor(
         )
         return batch
     }
+
+    private fun fallbackGeneration(source: GameSource): Long? =
+        if (source == GameSource.CUSTOM_GAME) null else accountLifecycleState.generation(source)
 
     private fun elapsedSince(startedAt: Long?): Long {
         if (startedAt == null) return 0

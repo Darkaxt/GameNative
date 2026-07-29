@@ -64,6 +64,7 @@ class EpicOwnedCopySourceAdapter @Inject constructor(
                     missingRow = true
                     return@mapNotNull null
                 }
+                if (!isVisibleInAllLibrary(game)) return@mapNotNull null
                 OwnedCopyProjection(
                     key = OwnedCopyKey(accountScope, source, stableSourceId),
                     displayName = game.title,
