@@ -1847,6 +1847,16 @@ The final Stage 1 gate found that an adapter could capture account scope and own
 
 Verify with focused Legacy and Modern tests for `CanonicalProjectionEngineTest`, `CanonicalProjectionScaleTest`, `OwnedCopySourceAdapterTest`, `SteamOwnershipReadinessTest`, `AccountLifecycleStateTest`, and the GOG/Epic/Amazon authentication managers. Compile both Android-test source sets without launching an emulator.
 
+#### Gate remediation: detach a copy from the Steam identity it rejects
+
+A user rejection must change both the sticky decision and the canonical grouping. If the selected non-Steam copy currently belongs to the rejected Steam identity:
+
+- when other relationships still reference that canonical, create a standalone no-Steam canonical from the selected match evidence, move only the selected relationship, retain the original Steam group and its dependents, clear an old preferred-copy pointer to the detached copy, and do not copy canonical-wide overrides or snapshots;
+- when the selected relationship is the canonical's only reference, preserve its immutable canonical ID, clear the Steam identity/review count and automatically derived Steam facets/snapshots, restore fallback presentation metadata from the selected relationship evidence, and retain user preferences;
+- persist the selected row as `USER/MANUAL/REJECTED` for the rejected AppID in the same Room transaction.
+
+Add grouped, sole-copy, and rollback regression tests and run the complete `CanonicalMutationRepositoryTest` in Legacy and Modern.
+
 ---
 
 ### Task 12: Cross-check Stage 1 against the approved design

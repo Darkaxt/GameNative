@@ -397,6 +397,118 @@ class CanonicalMutationRepositoryTest {
     }
 
     @Test
+    fun `rejecting current Steam identity detaches only selected grouped copy`() = runBlocking {
+        val original = canonical(
+            index = 1,
+            steamAppId = 99,
+            createdAt = 100,
+            displayName = "Steam Group",
+            primarySource = GameSource.STEAM,
+        )
+        val selectedKey = key(GameSource.GOG, "selected")
+        val directKey = key(GameSource.STEAM, "99")
+        db.canonicalGameDao().insert(original)
+        db.storeMatchDao().upsert(match(selectedKey, original.canonicalId))
+        db.storeMatchDao().upsert(directMatch(directKey, original.canonicalId, 99))
+        seedFacets(
+            original.canonicalId,
+            genres = setOf("steam:action"),
+            tags = setOf(10),
+            features = setOf("steam:controller"),
+        )
+        db.canonicalPreferenceDao().upsert(
+            preference(
+                canonicalId = original.canonicalId,
+                preferredKey = selectedKey,
+                titleOverride = "Pinned title",
+                artworkOverride = "pinned-art",
+                updatedAt = 120,
+            ),
+        )
+        db.gameDetailSnapshotDao().upsert(snapshot(original.canonicalId, "en", "US", "original"))
+
+        repository.rejectSteamCandidate(selectedKey, steamAppId = 99, nowEpochMs = 200)
+
+        val selected = requireNotNull(db.storeMatchDao().get(selectedKey))
+        assertNotEquals(original.canonicalId, selected.canonicalId)
+        assertManualDecision(
+            match = selected,
+            canonicalId = selected.canonicalId,
+            steamAppId = 99,
+            confidence = MatchConfidence.REJECTED,
+            matchedAt = 200,
+        )
+        val detached = requireNotNull(db.canonicalGameDao().get(selected.canonicalId))
+        assertNull(detached.steamAppId)
+        assertEquals("Standalone Game", detached.displayName)
+        assertEquals(GameSource.GOG, detached.primaryMetadataSource)
+        assertEquals(ClassificationState.UNCLASSIFIED, detached.classificationState)
+        assertEquals(original.canonicalId, requireNotNull(db.storeMatchDao().get(directKey)).canonicalId)
+        assertEquals(99, requireNotNull(db.canonicalGameDao().get(original.canonicalId)).steamAppId)
+        assertTrue(db.canonicalFacetDao().getGenres(detached.canonicalId).isEmpty())
+        assertTrue(db.canonicalFacetDao().getTags(detached.canonicalId).isEmpty())
+        assertTrue(db.canonicalFacetDao().getFeatures(detached.canonicalId).isEmpty())
+        assertNull(db.canonicalPreferenceDao().get(detached.canonicalId))
+        assertTrue(db.gameDetailSnapshotDao().getByCanonicalId(detached.canonicalId).isEmpty())
+        val originalPreference = requireNotNull(db.canonicalPreferenceDao().get(original.canonicalId))
+        assertNull(originalPreference.preferredCopyKeyOrNull())
+        assertEquals("Pinned title", originalPreference.titleOverride)
+        assertEquals("pinned-art", originalPreference.artworkOverrideJson)
+        assertEquals(
+            "original",
+            db.gameDetailSnapshotDao().getByCanonicalId(original.canonicalId).single().payloadJson,
+        )
+    }
+
+    @Test
+    fun `rejecting sole current Steam identity clears association in place`() = runBlocking {
+        val canonical = canonical(
+            index = 1,
+            steamAppId = 99,
+            createdAt = 100,
+            displayName = "Steam Game",
+            primarySource = GameSource.STEAM,
+            reviewCount = 500,
+        )
+        val key = key(GameSource.GOG, "sole")
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(match(key, canonical.canonicalId))
+        seedFacets(
+            canonical.canonicalId,
+            genres = setOf("steam:action"),
+            tags = setOf(10),
+            features = setOf("steam:controller"),
+        )
+        db.gameDetailSnapshotDao().upsert(snapshot(canonical.canonicalId, "en", "US", "steam"))
+        val preference = preference(canonical.canonicalId, key, "Pinned", "pinned-art", 120)
+        db.canonicalPreferenceDao().upsert(preference)
+
+        repository.rejectSteamCandidate(key, steamAppId = 99, nowEpochMs = 200)
+
+        val storedCanonical = requireNotNull(db.canonicalGameDao().get(canonical.canonicalId))
+        assertNull(storedCanonical.steamAppId)
+        assertEquals("Standalone Game", storedCanonical.displayName)
+        assertEquals(GameSource.GOG, storedCanonical.primaryMetadataSource)
+        assertEquals(ClassificationState.UNCLASSIFIED, storedCanonical.classificationState)
+        assertNull(storedCanonical.steamReviewCount)
+        assertEquals(100, storedCanonical.createdAt)
+        assertEquals(200, storedCanonical.updatedAt)
+        assertManualDecision(
+            match = requireNotNull(db.storeMatchDao().get(key)),
+            canonicalId = canonical.canonicalId,
+            steamAppId = 99,
+            confidence = MatchConfidence.REJECTED,
+            matchedAt = 200,
+        )
+        assertTrue(db.canonicalFacetDao().getGenres(canonical.canonicalId).isEmpty())
+        assertTrue(db.canonicalFacetDao().getTags(canonical.canonicalId).isEmpty())
+        assertTrue(db.canonicalFacetDao().getFeatures(canonical.canonicalId).isEmpty())
+        assertTrue(db.gameDetailSnapshotDao().getByCanonicalId(canonical.canonicalId).isEmpty())
+        assertEquals(preference, db.canonicalPreferenceDao().get(canonical.canonicalId))
+        assertEquals(1, db.canonicalGameDao().getAll().size)
+    }
+
+    @Test
     fun `direct Steam identity cannot be corrected rejected reset or unmerged`() = runBlocking {
         val canonical = canonical(index = 1, steamAppId = 10, createdAt = 100)
         val key = key(GameSource.STEAM, "10")
@@ -554,6 +666,28 @@ class CanonicalMutationRepositoryTest {
 
         val failure = runCatching {
             repository.confirmSteamMatch(selectedKey, steamAppId = 99, nowEpochMs = 300)
+        }.exceptionOrNull()
+
+        assertInjectedFailure(failure)
+        assertEquals(before, databaseState())
+    }
+
+    @Test
+    fun `rejection detach failure rolls back canonical and preference changes`() = runBlocking {
+        val original = canonical(index = 1, steamAppId = 99, createdAt = 100)
+        val selectedKey = key(GameSource.GOG, "selected")
+        val directKey = key(GameSource.STEAM, "99")
+        db.canonicalGameDao().insert(original)
+        db.storeMatchDao().upsert(match(selectedKey, original.canonicalId))
+        db.storeMatchDao().upsert(directMatch(directKey, original.canonicalId, 99))
+        db.canonicalPreferenceDao().upsert(
+            preference(original.canonicalId, selectedKey, "Title", "art", 100),
+        )
+        val before = databaseState()
+        installPreferenceFailureTrigger(original.canonicalId)
+
+        val failure = runCatching {
+            repository.rejectSteamCandidate(selectedKey, steamAppId = 99, nowEpochMs = 200)
         }.exceptionOrNull()
 
         assertInjectedFailure(failure)

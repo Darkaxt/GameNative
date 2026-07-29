@@ -155,10 +155,21 @@ class RoomCanonicalMutationRepository @Inject constructor(
         db.withTransaction {
             requireMutableMatch(key)
             require(steamAppId > 0) { "Rejected Steam AppID must be positive" }
-            val match = requireMatch(key)
+            val selectedMatch = requireMatch(key)
+            val currentCanonical = requireCanonical(selectedMatch.canonicalId)
+            val targetCanonicalId = if (currentCanonical.steamAppId == steamAppId) {
+                rejectCurrentSteamIdentity(
+                    key = key,
+                    currentCanonical = currentCanonical,
+                    selectedMatch = selectedMatch,
+                    nowEpochMs = nowEpochMs,
+                )
+            } else {
+                currentCanonical.canonicalId
+            }
             storeMatchDao.upsert(
-                match.asManualDecision(
-                    canonicalId = match.canonicalId,
+                selectedMatch.asManualDecision(
+                    canonicalId = targetCanonicalId,
                     steamAppId = steamAppId,
                     confidence = MatchConfidence.REJECTED,
                     nowEpochMs = nowEpochMs,
@@ -264,7 +275,7 @@ class RoomCanonicalMutationRepository @Inject constructor(
         steamAppId: Int,
         nowEpochMs: Long,
     ): String {
-        val target = requestedTarget ?: createSteamCanonical(
+        val target = requestedTarget ?: createCanonicalFromMatch(
             match = selectedMatch,
             steamAppId = steamAppId,
             nowEpochMs = nowEpochMs,
@@ -279,6 +290,53 @@ class RoomCanonicalMutationRepository @Inject constructor(
         )
         clearPreferredCopy(currentCanonical.canonicalId, key, nowEpochMs)
         return target.canonicalId
+    }
+
+    private suspend fun rejectCurrentSteamIdentity(
+        key: OwnedCopyKey,
+        currentCanonical: CanonicalGameEntity,
+        selectedMatch: StoreMatchEntity,
+        nowEpochMs: Long,
+    ): String {
+        if (storeMatchDao.countAllReferences(currentCanonical.canonicalId) == 1) {
+            clearSteamIdentity(currentCanonical, selectedMatch, nowEpochMs)
+            return currentCanonical.canonicalId
+        }
+
+        val standalone = createCanonicalFromMatch(
+            match = selectedMatch,
+            steamAppId = null,
+            nowEpochMs = nowEpochMs,
+        )
+        clearPreferredCopy(currentCanonical.canonicalId, key, nowEpochMs)
+        return standalone.canonicalId
+    }
+
+    private suspend fun clearSteamIdentity(
+        canonical: CanonicalGameEntity,
+        selectedMatch: StoreMatchEntity,
+        nowEpochMs: Long,
+    ) {
+        facetDao.deleteGenres(canonical.canonicalId)
+        facetDao.deleteTags(canonical.canonicalId)
+        facetDao.deleteFeatures(canonical.canonicalId)
+        snapshotDao.deleteByCanonicalId(canonical.canonicalId)
+        canonicalGameDao.update(
+            canonical.copy(
+                steamAppId = null,
+                displayName = CanonicalNormalization.displayName(selectedMatch.evidenceDisplayName),
+                matchTitleKey = selectedMatch.evidenceTitleKey.ifBlank {
+                    CanonicalNormalization.titleKey(selectedMatch.evidenceDisplayName)
+                },
+                primaryMetadataSource = selectedMatch.source,
+                appType = selectedMatch.evidenceAppType,
+                releaseYear = selectedMatch.evidenceReleaseYear,
+                developerKey = selectedMatch.evidenceDeveloperKey,
+                classificationState = ClassificationState.UNCLASSIFIED,
+                steamReviewCount = null,
+                updatedAt = nowEpochMs,
+            ),
+        )
     }
 
     private suspend fun mergeCanonicals(
@@ -414,9 +472,9 @@ class RoomCanonicalMutationRepository @Inject constructor(
         }
     }
 
-    private suspend fun createSteamCanonical(
+    private suspend fun createCanonicalFromMatch(
         match: StoreMatchEntity,
-        steamAppId: Int,
+        steamAppId: Int?,
         nowEpochMs: Long,
     ): CanonicalGameEntity {
         val canonical = CanonicalGameEntity(
