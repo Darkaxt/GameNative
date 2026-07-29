@@ -620,11 +620,13 @@ class SteamService : Service(), IChallengeUrlChanged {
          * Batch-load licensed depot IDs for many apps in a single DB query.
          * Returns appId → depotIds; missing entries mean license unknown (fall back to unfiltered).
          */
-        fun buildLicensedDepotMap(apps: List<SteamApp>): Map<Int, Set<Int>> {
+        fun buildLicensedDepotMap(apps: List<SteamApp>): Map<Int, Set<Int>> = runBlocking(Dispatchers.IO) {
+            buildLicensedDepotMapSuspending(apps)
+        }
+
+        suspend fun buildLicensedDepotMapSuspending(apps: List<SteamApp>): Map<Int, Set<Int>> {
             val pkgIds = apps.map { it.packageId }.filter { it != INVALID_PKG_ID }.distinct()
-            val licenses = runBlocking(Dispatchers.IO) {
-                instance?.licenseDao?.findLicenses(pkgIds) ?: emptyList()
-            }
+            val licenses = instance?.licenseDao?.findLicenses(pkgIds).orEmpty()
             val pkgToDepots = licenses.associate { it.packageId to it.depotIds.toSet() }
             return apps.mapNotNull { app ->
                 val depots = pkgToDepots[app.packageId]?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
@@ -675,9 +677,12 @@ class SteamService : Service(), IChallengeUrlChanged {
             return runBlocking(Dispatchers.IO) { instance?.appInfoDao?.getInstalledApp(appId) }
         }
 
-        fun getAllInstalledApps(): List<AppInfo>? {
-            return runBlocking(Dispatchers.IO) { instance?.appInfoDao?.getAll() }
+        fun getAllInstalledApps(): List<AppInfo>? = runBlocking(Dispatchers.IO) {
+            getAllInstalledAppsSuspending()
         }
+
+        suspend fun getAllInstalledAppsSuspending(): List<AppInfo>? =
+            instance?.appInfoDao?.getAll()
 
         fun findSteamAppWithAppIds(appIds: List<Int>): List<SteamApp>? {
             return runBlocking(Dispatchers.IO) { instance?.appDao?.findSteamAppWithAppIds(appIds) }
@@ -3002,6 +3007,51 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         // Should service auto-stop when idle (backgrounded)?
         var autoStopWhenIdle: Boolean = false
+
+        suspend fun getUpdatePendingBatch(
+            apps: List<SteamApp>,
+            branches: Map<Int, String>,
+            licensedDepotIds: Map<Int, Set<Int>>,
+        ): Map<Int, Boolean> = withContext(Dispatchers.IO) {
+            if (!isConnected || apps.isEmpty()) return@withContext emptyMap()
+            val steamApps = instance?._steamApps ?: return@withContext emptyMap()
+            buildMap {
+                apps.distinctBy(SteamApp::id).chunked(100).forEach { chunk ->
+                    val pics = steamApps.picsGetProductInfo(
+                        apps = chunk.map { PICSRequest(id = it.id) },
+                        packages = emptyList(),
+                    ).await()
+                    val remoteById = pics.results
+                        .flatMap { it.apps.entries }
+                        .associate { (appId, appInfo) ->
+                            appId to appInfo.keyValues.generateSteamApp()
+                        }
+                    chunk.forEach { localApp ->
+                        val remoteApp = remoteById[localApp.id] ?: return@forEach
+                        val branch = branches[localApp.id] ?: "public"
+                        val installedDepotIds = resolveDownloadableDepots(
+                            depots = localApp.depots,
+                            preferredLanguage = "",
+                            ownedDlc = emptyMap(),
+                            licensedDepotIds = licensedDepotIds[localApp.id],
+                        ).keys
+                        put(
+                            localApp.id,
+                            installedDepotIds.any { depotId ->
+                                val remoteManifest = remoteApp.depots[depotId]
+                                    ?.manifests
+                                    ?.get(branch)
+                                    ?: return@any false
+                                val localManifest = localApp.depots[depotId]
+                                    ?.manifests
+                                    ?.get(branch)
+                                remoteManifest.gid != localManifest?.gid
+                            },
+                        )
+                    }
+                }
+            }
+        }
 
         suspend fun isUpdatePending(
             appId: Int,

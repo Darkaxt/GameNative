@@ -12,6 +12,7 @@ import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeProvider
+import app.gamenative.library.canonical.CanonicalDiagnosticSink
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.GogOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
@@ -20,23 +21,56 @@ import app.gamenative.service.gog.GOGService
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 @Singleton
-class GogOwnedCopyRuntimeState @Inject constructor() {
+class GogOwnedCopyRuntimeGateway private constructor(
+    private val ioDispatcher: CoroutineDispatcher,
+    private val readSnapshot: suspend () -> RuntimeDownloadSnapshot<String>,
+) {
+    @Inject
+    constructor(
+        @CanonicalIoDispatcher ioDispatcher: CoroutineDispatcher,
+    ) : this(
+        ioDispatcher,
+        {
+            RuntimeDownloadSnapshot(
+                activeIds = GOGService.getActiveDownloads()
+                    .filterValues { it.isActive() }
+                    .keys,
+                partialIds = GOGService.getPartialDownloads().toSet(),
+            )
+        },
+    )
+
+    internal constructor(
+        ioDispatcher: CoroutineDispatcher,
+        readSnapshot: () -> RuntimeDownloadSnapshot<String>,
+        @Suppress("UNUSED_PARAMETER") marker: Unit,
+    ) : this(ioDispatcher, readSnapshot)
+
+    internal suspend fun snapshot(): RuntimeDownloadSnapshot<String> =
+        withContext(ioDispatcher) { readSnapshot() }
+}
+
+@Singleton
+class GogOwnedCopyRuntimeState @Inject constructor(
+    private val gateway: GogOwnedCopyRuntimeGateway,
+) {
     internal suspend fun read(games: List<GOGGame>): Map<String, OwnedCopyVolatileState> {
         if (games.isEmpty()) return emptyMap()
-        val activeDownloads = GOGService.getActiveDownloads()
-        val partialDownloads = GOGService.getPartialDownloads().toSet()
+        val downloads = gateway.snapshot()
         return games.associate { game ->
-            val downloading = activeDownloads[game.id]?.isActive() == true
+            val downloading = game.id in downloads.activeIds
             game.id to OwnedCopyVolatileState(
                 installPath = game.installPath.takeIf(String::isNotBlank),
                 installedSizeBytes = game.installSize.positiveOrNull(),
                 branchOrVersion = null,
                 isInstalled = game.isInstalled,
                 isDownloading = downloading,
-                hasPartialDownload = downloading || game.id in partialDownloads,
+                hasPartialDownload = downloading || game.id in downloads.partialIds,
                 updateAvailable = false,
                 isShared = false,
                 playtimeMinutes = game.playTime.positiveOrNull(),
@@ -54,6 +88,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
     private val sourceAdapter: GogOwnedCopySourceAdapter,
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: GogOwnedCopyRuntimeState,
+    private val diagnostics: CanonicalDiagnosticSink? = null,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.GOG
 
@@ -99,7 +134,11 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                     generation,
                     CopyUnavailableReason.SOURCE_ROW_CHANGED,
                 )
-            val localLastPlayed = playHistoryDao.pointLastPlayed(sourceAppId(source, game.id))
+            val localLastPlayed = playHistoryDao.pointLastPlayed(
+                sourceAppId(source, game.id),
+                source,
+                diagnostics,
+            )
             if (!hasFreshProof(key, accountScope, generation)) {
                 return OwnedCopyRuntimeResult.Hidden
             }
@@ -128,6 +167,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
         var accountScope: AccountScope? = null
         var generation: Long? = null
         var ownedIds: Set<String> = emptySet()
+        var completedFinalLedger: CompletedOwnedCopySnapshot? = null
         return try {
             generation = accountLifecycleState.generation(source)
             accountScope = accountScopeProvider.current(source)
@@ -161,8 +201,9 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                 .distinctBy(GOGGame::id)
                 .toList()
             val states = runtimeState.read(requestedRows)
-            val history = playHistoryDao.batchLastPlayed()
+            val history = playHistoryDao.batchLastPlayed(source, diagnostics)
             val finalLedger = finalLedger(accountScope, generation) ?: return keys.hiddenResults()
+            completedFinalLedger = finalLedger
             val finalOwnedIds = finalLedger.stableSourceIds.toSet()
             if (!isCurrent(accountScope, generation)) return keys.hiddenResults()
             keys.associateWith { key ->
@@ -189,7 +230,9 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: Exception) {
             val scope = accountScope ?: return keys.hiddenResults()
             val currentGeneration = generation ?: return keys.hiddenResults()
-            val finalLedger = finalLedger(scope, currentGeneration) ?: return keys.hiddenResults()
+            val finalLedger = completedFinalLedger
+                ?: finalLedger(scope, currentGeneration)
+                ?: return keys.hiddenResults()
             if (!isCurrent(scope, currentGeneration)) return keys.hiddenResults()
             val finalOwnedIds = finalLedger.stableSourceIds.toSet()
             keys.associateWith { key ->

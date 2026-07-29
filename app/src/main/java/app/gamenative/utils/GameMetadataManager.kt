@@ -1,6 +1,7 @@
 package app.gamenative.utils
 
 import java.io.File
+import kotlin.reflect.KClass
 import timber.log.Timber
 import org.json.JSONObject
 
@@ -14,6 +15,12 @@ data class GameMetadata(
     val releaseDate: Long? = null
 )
 
+internal sealed interface ReadOnlyAppIdResult {
+    data class Present(val appId: Int) : ReadOnlyAppIdResult
+    data object MissingOrInvalid : ReadOnlyAppIdResult
+    data class ReadFailure(val errorClass: KClass<out Throwable>) : ReadOnlyAppIdResult
+}
+
 /**
  * Utility for reading and writing game metadata to/from .gamenative files.
  * Consolidates all game metadata (appId, SteamGridDB fetch status, release date) into a single JSON file.
@@ -21,6 +28,7 @@ data class GameMetadata(
  */
 object GameMetadataManager {
     private const val FILE_NAME = ".gamenative"
+    private val LEGACY_APP_ID = Regex("[1-9][0-9]*")
 
     /**
      * Reads metadata from the .gamenative file in the given folder.
@@ -148,26 +156,48 @@ object GameMetadataManager {
     }
 
     /** Reads an existing app ID without migrating or writing metadata. */
-    internal fun getAppIdReadOnly(folder: File): Int? {
+    internal fun getAppIdReadOnly(folder: File): Int? =
+        (readAppIdReadOnly(folder) as? ReadOnlyAppIdResult.Present)?.appId
+
+    internal fun readAppIdReadOnly(folder: File): ReadOnlyAppIdResult = try {
         val metadataFile = File(folder, FILE_NAME)
-        if (!metadataFile.exists() || !metadataFile.isFile) return null
-        return parseAppIdReadOnly(metadataFile::readText)
+        if (!metadataFile.exists() || !metadataFile.isFile) {
+            ReadOnlyAppIdResult.MissingOrInvalid
+        } else {
+            readAppIdReadOnly(metadataFile::readText)
+        }
+    } catch (error: Exception) {
+        ReadOnlyAppIdResult.ReadFailure(error::class)
+    }
+
+    internal fun readAppIdReadOnly(readText: () -> String): ReadOnlyAppIdResult = try {
+        parseAppIdContent(readText())
+            ?.let { ReadOnlyAppIdResult.Present(it) }
+            ?: ReadOnlyAppIdResult.MissingOrInvalid
+    } catch (error: Exception) {
+        ReadOnlyAppIdResult.ReadFailure(error::class)
     }
 
     internal fun parseAppIdReadOnly(readText: () -> String): Int? = try {
-        val content = readText().trim()
-        if (content.isEmpty()) {
-            null
-        } else {
-            val jsonAppId = try {
-                JSONObject(content).optInt("appId", -1).takeIf { it > 0 }
-            } catch (_: Exception) {
-                null
-            }
-            jsonAppId ?: content.toIntOrNull()?.takeIf { it > 0 }
-        }
+        parseAppIdContent(readText())
     } catch (_: Exception) {
         null
+    }
+
+    private fun parseAppIdContent(content: String): Int? {
+        if (content.isEmpty()) return null
+        val jsonAppId = try {
+            when (val value = JSONObject(content).opt("appId")) {
+                is Int -> value.takeIf { it > 0 }
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+        return jsonAppId ?: content
+            .takeIf { LEGACY_APP_ID.matches(it) }
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 && it.toString() == content }
     }
 
     /**

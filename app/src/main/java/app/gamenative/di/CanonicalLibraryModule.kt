@@ -22,6 +22,7 @@ import app.gamenative.library.canonical.SharedPreferencesAccountLifecycleState
 import app.gamenative.library.canonical.SystemCanonicalProjectionClock
 import app.gamenative.library.canonical.TrustedSteamMappingProvider
 import app.gamenative.library.canonical.runtime.AmazonOwnedCopyRuntimeAdapter
+import app.gamenative.library.canonical.runtime.CanonicalIoDispatcher
 import app.gamenative.library.canonical.runtime.CustomOwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.runtime.EpicOwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.runtime.GogOwnedCopyRuntimeAdapter
@@ -41,6 +42,8 @@ import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoSet
 import dagger.multibindings.Multibinds
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -145,6 +148,11 @@ abstract class CanonicalLibraryModule {
     abstract fun trustedSteamMappingProviders(): Set<TrustedSteamMappingProvider>
 
     companion object {
+        @Provides
+        @Singleton
+        @CanonicalIoDispatcher
+        fun provideCanonicalIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
         @Provides
         @Singleton
         fun provideCanonicalIdGenerator(): CanonicalIdGenerator = CanonicalIdGenerator {

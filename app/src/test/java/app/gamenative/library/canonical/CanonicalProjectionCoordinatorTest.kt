@@ -286,6 +286,11 @@ class CanonicalProjectionCoordinatorTest {
         )
         diagnostics.indexFailed(IllegalStateException::class, durationMs = 10)
         diagnostics.indexSkipped(SnapshotReason.FEATURE_DISABLED)
+        diagnostics.playHistoryFailed(
+            source = GameSource.AMAZON,
+            origin = PlayHistoryOrigin.POINT,
+            errorClass = IllegalStateException::class,
+        )
 
         val featureEvents = recorder.events.map { event -> event.toFeatureEvent() }
         val allowed = setOf(
@@ -302,6 +307,7 @@ class CanonicalProjectionCoordinatorTest {
             DiagnosticAttribute.COPY_COUNT,
             DiagnosticAttribute.MATCH_METHOD,
             DiagnosticAttribute.CONFIDENCE,
+            DiagnosticAttribute.OPERATION,
         )
         assertTrue(featureEvents.flatMap { it.attributes.keys }.all { it in allowed })
         val forbiddenKeys = setOf(
@@ -317,6 +323,17 @@ class CanonicalProjectionCoordinatorTest {
         assertEquals(
             DiagnosticOutcome.STALE,
             featureEvents.single { it.attributes[DiagnosticAttribute.SOURCE] == "GOG" }.outcome,
+        )
+        assertEquals(
+            mapOf(
+                DiagnosticAttribute.SOURCE to "AMAZON",
+                DiagnosticAttribute.OPERATION to "PLAY_HISTORY",
+                DiagnosticAttribute.REASON to "POINT",
+                DiagnosticAttribute.ERROR_TYPE to "IllegalStateException",
+            ),
+            featureEvents.single {
+                it.attributes[DiagnosticAttribute.OPERATION] == "PLAY_HISTORY"
+            }.attributes,
         )
         assertEquals(
             setOf(DiagnosticEventName.CANONICAL_INDEX_BUILD, DiagnosticEventName.MATCH_RESOLUTION),
@@ -448,6 +465,12 @@ class CanonicalProjectionCoordinatorTest {
         ) {
             invalidationFailures += source to errorClass
         }
+
+        override fun playHistoryFailed(
+            source: GameSource?,
+            origin: PlayHistoryOrigin,
+            errorClass: KClass<out Throwable>,
+        ) = Unit
 
         override fun matchBucket(bucket: MatchBucket, count: Int) {
             buckets += bucket to count

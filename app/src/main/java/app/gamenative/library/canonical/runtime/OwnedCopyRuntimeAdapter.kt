@@ -6,8 +6,10 @@ import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
+import app.gamenative.library.canonical.PlayHistoryOrigin
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.reflect.KClass
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -82,7 +84,11 @@ class OwnedCopyRuntimeRegistry @Inject constructor(
         emitAll(factory())
     }.retryWhen { error, attempt ->
         if (error is CancellationException || error !is Exception) return@retryWhen false
-        source?.let { diagnostics.invalidationFailed(it, error::class) }
+        if (source == null) {
+            diagnostics.playHistoryFailed(null, PlayHistoryOrigin.FLOW, error::class)
+        } else {
+            diagnostics.invalidationFailed(source, error::class)
+        }
         delay((1_000L shl attempt.coerceAtMost(6).toInt()).coerceAtMost(60_000L))
         true
     }
@@ -98,6 +104,11 @@ class OwnedCopyRuntimeRegistry @Inject constructor(
     }
 }
 
+internal data class RuntimeDownloadSnapshot<K : Any>(
+    val activeIds: Set<K>,
+    val partialIds: Set<K>,
+)
+
 internal data class OwnedCopyVolatileState(
     val installPath: String? = null,
     val installedSizeBytes: Long? = null,
@@ -106,6 +117,11 @@ internal data class OwnedCopyVolatileState(
     val isDownloading: Boolean = false,
     val hasPartialDownload: Boolean = false,
     val updateAvailable: Boolean = false,
+    val updateObservation: UpdateObservation = if (updateAvailable) {
+        UpdateObservation.UPDATE_AVAILABLE
+    } else {
+        UpdateObservation.UNKNOWN
+    },
     val isShared: Boolean = false,
     val playtimeMinutes: Long? = null,
 )
@@ -153,6 +169,16 @@ internal fun unavailable(
     errorClass = error?.let { it::class },
 )
 
+internal fun unavailable(
+    key: OwnedCopyKey,
+    reason: CopyUnavailableReason,
+    errorClass: KClass<out Throwable>,
+): OwnedCopyRuntimeResult.Unavailable = OwnedCopyRuntimeResult.Unavailable(
+    key = key,
+    reason = reason,
+    errorClass = errorClass,
+)
+
 internal suspend fun LibraryPlayHistoryDao.pointLastPlayed(appId: String): Long? =
     get(appId)?.lastPlayed?.takeIf { it > 0L }
 
@@ -160,6 +186,31 @@ internal suspend fun LibraryPlayHistoryDao.batchLastPlayed(): Map<String, Long> 
     getAll().first().asSequence()
         .filter { it.lastPlayed > 0L }
         .associate { it.appId to it.lastPlayed }
+
+internal suspend fun LibraryPlayHistoryDao.pointLastPlayed(
+    appId: String,
+    source: GameSource,
+    diagnostics: CanonicalDiagnosticSink?,
+): Long? = try {
+    pointLastPlayed(appId)
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    diagnostics?.playHistoryFailed(source, PlayHistoryOrigin.POINT, error::class)
+    null
+}
+
+internal suspend fun LibraryPlayHistoryDao.batchLastPlayed(
+    source: GameSource,
+    diagnostics: CanonicalDiagnosticSink?,
+): Map<String, Long> = try {
+    batchLastPlayed()
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    diagnostics?.playHistoryFailed(source, PlayHistoryOrigin.BATCH, error::class)
+    emptyMap()
+}
 
 internal fun sourceAppId(source: GameSource, id: Any): String = "${source.name}_$id"
 

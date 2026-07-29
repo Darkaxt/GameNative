@@ -12,41 +12,46 @@ import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.SteamAppDao
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeProvider
+import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
 import app.gamenative.service.SteamService
 import java.io.File
-import java.nio.file.Paths
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.reflect.KClass
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.withContext
+
+internal data class SteamUpdateRefreshRequest(
+    val app: SteamApp,
+    val branch: String,
+    val licensedDepotIds: Set<Int>?,
+)
+
+internal data class SteamInstallationState(
+    val path: String?,
+    val isInstalled: Boolean,
+    val hasPartialDownload: Boolean,
+)
 
 @Singleton
-class SteamOwnedCopyRuntimeGateway @Inject constructor() {
-    internal suspend fun activeDownloadIds(): Set<Int> =
-        SteamService.getActiveDownloads()
-            .filterValues { it.isActive() }
-            .keys
-
-    internal suspend fun partialDownloadIds(): Set<Int> =
-        SteamService.getPartialDownloads().toSet()
-
-    internal suspend fun installedApps(): Map<Int, AppInfo> =
-        SteamService.getAllInstalledApps().orEmpty().associateBy(AppInfo::id)
-
-    internal suspend fun licensedDepotIds(apps: List<SteamApp>): Map<Int, Set<Int>> =
-        SteamService.buildLicensedDepotMap(apps)
-
-    internal suspend fun installPaths(
+class SteamInstallationSnapshotReader @Inject constructor() {
+    internal fun read(
         apps: List<SteamApp>,
-        installedApps: Map<Int, AppInfo>,
-        partialDownloadIds: Set<Int>,
-    ): Map<Int, String> {
-        val foldersByName = SteamService.allInstallPaths
-            .asSequence()
+        installRoots: List<String>,
+        appInfos: Map<Int, AppInfo>,
+        activeDownloadIds: Set<Int>,
+        persistedPartialIds: Set<Int>,
+        workshopPausedIds: Set<Int>,
+    ): Map<Int, SteamInstallationState> {
+        val directoriesByName = installRoots.asSequence()
             .flatMap { root ->
                 File(root).listFiles()
                     .orEmpty()
@@ -54,35 +59,177 @@ class SteamOwnedCopyRuntimeGateway @Inject constructor() {
                     .filter(File::isDirectory)
             }
             .groupBy(File::getName)
-        return apps.mapNotNull { app ->
-            val installed = installedApps[app.id]
-            if (installed == null && app.id !in partialDownloadIds) return@mapNotNull null
-            val path = installed?.customInstallPath?.takeIf(String::isNotBlank)
-                ?: sequenceOf(SteamService.getAppDirName(app), app.name)
-                    .filter(String::isNotBlank)
-                    .mapNotNull { foldersByName[it]?.firstOrNull()?.path }
-                    .firstOrNull()
-                ?: Paths.get(
-                    if (PrefManager.useExternalStorage) {
-                        SteamService.externalAppInstallPath
-                    } else {
-                        SteamService.internalAppInstallPath
-                    },
-                    SteamService.getAppDirName(app),
-                ).toString()
-            app.id to path
-        }.toMap()
+        return apps.associate { app ->
+            val names = sequenceOf(app.config.installDir, app.name)
+                .filter(String::isNotBlank)
+                .distinct()
+                .toList()
+            val imported = appInfos[app.id]
+                ?.customInstallPath
+                ?.takeIf(String::isNotBlank)
+                ?.let(::File)
+                ?.takeIf(File::isDirectory)
+            val candidates = buildList {
+                imported?.let(::add)
+                names.forEach { name -> addAll(directoriesByName[name].orEmpty()) }
+            }.distinctBy(File::getAbsolutePath)
+            val completed = candidates.firstOrNull { candidate ->
+                File(candidate, DOWNLOAD_COMPLETE_MARKER).isFile
+            }
+            val selected = completed ?: candidates.firstOrNull()
+            val installed = completed != null
+            val partial = app.id in activeDownloadIds ||
+                app.id in persistedPartialIds ||
+                app.id in workshopPausedIds ||
+                (!installed && selected != null)
+            app.id to SteamInstallationState(
+                path = selected?.path,
+                isInstalled = installed,
+                hasPartialDownload = partial,
+            )
+        }
     }
 
-    internal suspend fun updatePending(appId: Int, branch: String): Boolean =
-        SteamService.isUpdatePending(appId, branch)
+    private companion object {
+        const val DOWNLOAD_COMPLETE_MARKER = ".download_complete"
+    }
 }
+
+internal data class SteamRuntimeInputs(
+    val activeDownloadIds: Set<Int>,
+    val appInfos: Map<Int, AppInfo>,
+    val licensedDepotIds: Map<Int, Set<Int>>,
+    val installations: Map<Int, SteamInstallationState>,
+)
+
+@Singleton
+class SteamOwnedCopyRuntimeGateway @Inject constructor(
+    private val installationReader: SteamInstallationSnapshotReader,
+    @CanonicalIoDispatcher private val ioDispatcher: CoroutineDispatcher,
+) {
+    internal suspend fun activeDownloadIds(): Set<Int> = withContext(ioDispatcher) {
+        SteamService.getActiveDownloads()
+            .filterValues { it.isActive() }
+            .keys
+    }
+
+    internal suspend fun partialDownloadIds(): Set<Int> = withContext(ioDispatcher) {
+        SteamService.getPartialDownloads().toSet()
+    }
+
+    internal suspend fun installedApps(): Map<Int, AppInfo> = withContext(ioDispatcher) {
+        SteamService.getAllInstalledAppsSuspending().orEmpty().associateBy(AppInfo::id)
+    }
+
+    internal suspend fun licensedDepotIds(apps: List<SteamApp>): Map<Int, Set<Int>> =
+        withContext(ioDispatcher) {
+            SteamService.buildLicensedDepotMapSuspending(apps)
+        }
+
+    internal suspend fun installationSnapshot(
+        apps: List<SteamApp>,
+        appInfos: Map<Int, AppInfo>,
+        activeDownloadIds: Set<Int>,
+        persistedPartialIds: Set<Int>,
+    ): Map<Int, SteamInstallationState> = withContext(ioDispatcher) {
+        installationReader.read(
+            apps = apps,
+            installRoots = SteamService.allInstallPaths,
+            appInfos = appInfos,
+            activeDownloadIds = activeDownloadIds,
+            persistedPartialIds = persistedPartialIds,
+            workshopPausedIds = SteamService.workshopPausedApps.toSet(),
+        )
+    }
+
+    internal suspend fun refreshUpdates(
+        requests: List<SteamUpdateRefreshRequest>,
+    ): Map<Int, Boolean> = withContext(ioDispatcher) {
+        SteamService.getUpdatePendingBatch(
+            apps = requests.map(SteamUpdateRefreshRequest::app),
+            branches = requests.associate { it.app.id to it.branch },
+            licensedDepotIds = requests.mapNotNull { request ->
+                request.licensedDepotIds?.let { request.app.id to it }
+            }.toMap(),
+        )
+    }
+}
+
+class SteamObservedUpdateState private constructor(
+    private val gateway: SteamOwnedCopyRuntimeGateway,
+    scope: CoroutineScope,
+    nowEpochMs: () -> Long,
+    @Suppress("UNUSED_PARAMETER") marker: Unit,
+) {
+    @Inject
+    constructor(
+        gateway: SteamOwnedCopyRuntimeGateway,
+        clock: CanonicalProjectionClock,
+        @CanonicalIoDispatcher dispatcher: CoroutineDispatcher,
+    ) : this(
+        gateway = gateway,
+        scope = CoroutineScope(SupervisorJob() + dispatcher),
+        nowEpochMs = clock::nowEpochMs,
+        marker = Unit,
+    )
+
+    internal constructor(
+        gateway: SteamOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowEpochMs: () -> Long,
+    ) : this(gateway, scope, nowEpochMs, Unit)
+
+    private val store = ObservedUpdateStateStore<Int, SteamUpdateRefreshRequest>(
+        scope = scope,
+        nowEpochMs = nowEpochMs,
+        ttlMs = UPDATE_TTL_MS,
+        retryDelayMs = UPDATE_RETRY_MS,
+        maxEntries = MAX_UPDATE_ENTRIES,
+        maxRefreshBatch = MAX_UPDATE_REFRESH_BATCH,
+        refresh = { requests -> gateway.refreshUpdates(requests.map { it.fingerprint }) },
+    )
+
+    internal fun invalidations(): Flow<Unit> = store.invalidations()
+
+    internal fun snapshot(
+        owner: UpdateObservationOwner,
+        apps: List<SteamApp>,
+        inputs: SteamRuntimeInputs,
+    ): Map<Int, UpdateObservation> = store.snapshot(
+        owner,
+        apps.associate { app ->
+            val appInfo = inputs.appInfos[app.id]
+            val installed = inputs.installations[app.id]?.isInstalled == true
+            app.id to SteamUpdateRefreshRequest(
+                app = app,
+                branch = appInfo?.branch?.takeIf { installed } ?: "public",
+                licensedDepotIds = inputs.licensedDepotIds[app.id],
+            )
+        },
+    )
+
+    private companion object {
+        const val UPDATE_TTL_MS = 5 * 60_000L
+        const val UPDATE_RETRY_MS = 15_000L
+        const val MAX_UPDATE_ENTRIES = 512
+        const val MAX_UPDATE_REFRESH_BATCH = 100
+    }
+}
+
+internal data class SteamRuntimeBatchResult(
+    val states: Map<Int, OwnedCopyVolatileState>,
+    val failures: Map<Int, KClass<out Throwable>>,
+)
 
 @Singleton
 class SteamOwnedCopyRuntimeState @Inject constructor(
     private val gateway: SteamOwnedCopyRuntimeGateway,
+    private val observedUpdates: SteamObservedUpdateState = SteamObservedUpdateState(
+        gateway = gateway,
+        scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
+        nowEpochMs = System::currentTimeMillis,
+    ),
 ) {
-    private val updateCache = ConcurrentHashMap<SteamUpdateCacheKey, Boolean>()
 
     internal suspend fun readPoint(
         app: SteamApp,
@@ -90,53 +237,78 @@ class SteamOwnedCopyRuntimeState @Inject constructor(
         generation: Long,
     ): OwnedCopyVolatileState {
         val inputs = readInputs(listOf(app))
-        val installed = inputs.installedApps[app.id]?.isDownloaded == true
-        val branch = inputs.installedApps[app.id]?.branch?.takeIf { installed }
-        val updateAvailable = installed && gateway.updatePending(app.id, branch ?: "public")
-        updateCache[SteamUpdateCacheKey(accountScope, generation, app.id)] = updateAvailable
-        return stateFor(app, inputs, updateAvailable)
+        val observation = if (inputs.installations[app.id]?.isInstalled == true) {
+            observedUpdates.snapshot(
+                UpdateObservationOwner(accountScope, generation),
+                listOf(app),
+                inputs,
+            ).getValue(app.id)
+        } else {
+            UpdateObservation.CURRENT
+        }
+        return stateFor(app, inputs, observation)
     }
 
     internal suspend fun readBatch(
         apps: List<SteamApp>,
         accountScope: AccountScope,
         generation: Long,
-    ): Map<Int, OwnedCopyVolatileState> {
-        if (apps.isEmpty()) return emptyMap()
+    ): SteamRuntimeBatchResult {
+        if (apps.isEmpty()) return SteamRuntimeBatchResult(emptyMap(), emptyMap())
         val inputs = readInputs(apps)
-        val updateSnapshot = updateCache.toMap()
-        return apps.mapNotNull { app ->
+        val observedApps = apps.filter { app ->
+            inputs.installations[app.id]?.isInstalled == true
+        }
+        val observations = observedUpdates.snapshot(
+            UpdateObservationOwner(accountScope, generation),
+            observedApps,
+            inputs,
+        )
+        val states = mutableMapOf<Int, OwnedCopyVolatileState>()
+        val failures = mutableMapOf<Int, KClass<out Throwable>>()
+        apps.forEach { app ->
             try {
-                val cacheKey = SteamUpdateCacheKey(accountScope, generation, app.id)
-                app.id to stateFor(app, inputs, updateSnapshot[cacheKey] == true)
+                states[app.id] = stateFor(
+                    app,
+                    inputs,
+                    observations[app.id] ?: UpdateObservation.CURRENT,
+                )
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
-                null
+            } catch (error: Exception) {
+                failures[app.id] = error::class
             }
-        }.toMap()
+        }
+        return SteamRuntimeBatchResult(states, failures)
     }
+
+    internal fun updateInvalidations(): Flow<Unit> = observedUpdates.invalidations()
 
     private suspend fun readInputs(apps: List<SteamApp>): SteamRuntimeInputs {
         val activeDownloadIds = gateway.activeDownloadIds()
-        val partialDownloadIds = gateway.partialDownloadIds() + activeDownloadIds
-        val installedApps = gateway.installedApps()
+        val persistedPartialIds = gateway.partialDownloadIds()
+        val appInfos = gateway.installedApps()
         return SteamRuntimeInputs(
             activeDownloadIds = activeDownloadIds,
-            partialDownloadIds = partialDownloadIds,
-            installedApps = installedApps,
+            appInfos = appInfos,
             licensedDepotIds = gateway.licensedDepotIds(apps),
-            installPaths = gateway.installPaths(apps, installedApps, partialDownloadIds),
+            installations = gateway.installationSnapshot(
+                apps,
+                appInfos,
+                activeDownloadIds,
+                persistedPartialIds,
+            ),
         )
     }
 
     private fun stateFor(
         app: SteamApp,
         inputs: SteamRuntimeInputs,
-        updateAvailable: Boolean,
+        updateObservation: UpdateObservation,
     ): OwnedCopyVolatileState {
-        val appInfo = inputs.installedApps[app.id]
-        val installed = appInfo?.isDownloaded == true
+        val appInfo = inputs.appInfos[app.id]
+        val installation = inputs.installations.getValue(app.id)
+        val installed = installation.isInstalled
         val branch = appInfo?.branch?.takeIf { installed }
         val resolvedSize = SteamService.resolveDownloadableDepots(
             depots = app.depots,
@@ -149,32 +321,20 @@ class SteamOwnedCopyRuntimeState @Inject constructor(
                 ?: 0L
         }.positiveOrNull()
         return OwnedCopyVolatileState(
-            installPath = inputs.installPaths[app.id],
+            installPath = installation.path,
             installedSizeBytes = appInfo?.recoveredInstallSizeBytes?.positiveOrNull() ?: resolvedSize,
             branchOrVersion = branch,
             isInstalled = installed,
             isDownloading = app.id in inputs.activeDownloadIds,
-            hasPartialDownload = app.id in inputs.partialDownloadIds,
-            updateAvailable = updateAvailable,
+            hasPartialDownload = installation.hasPartialDownload,
+            updateAvailable = updateObservation == UpdateObservation.UPDATE_AVAILABLE,
+            updateObservation = updateObservation,
             isShared = PrefManager.steamUserAccountId != 0 &&
                 !app.ownerAccountId.contains(PrefManager.steamUserAccountId),
             playtimeMinutes = null,
         )
     }
 
-    private data class SteamUpdateCacheKey(
-        val accountScope: AccountScope,
-        val generation: Long,
-        val appId: Int,
-    )
-
-    private data class SteamRuntimeInputs(
-        val activeDownloadIds: Set<Int>,
-        val partialDownloadIds: Set<Int>,
-        val installedApps: Map<Int, AppInfo>,
-        val licensedDepotIds: Map<Int, Set<Int>>,
-        val installPaths: Map<Int, String>,
-    )
 }
 
 @Singleton
@@ -188,7 +348,10 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.STEAM
 
-    override fun invalidations(): Flow<Unit> = sourceAdapter.invalidations()
+    override fun invalidations(): Flow<Unit> = merge(
+        sourceAdapter.invalidations(),
+        runtimeState.updateInvalidations(),
+    )
 
     override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult {
         if (key.source != source) return OwnedCopyRuntimeResult.Hidden
@@ -252,6 +415,7 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
         var provedScope: app.gamenative.data.canonical.AccountScope? = null
         var generation: Long? = null
         var provedIds: Set<Int> = emptySet()
+        var completedFinalOwnedIds: Set<Int>? = null
         return try {
             generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
@@ -271,20 +435,27 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                     ?.takeIf { key.source == source && key.accountScope == accountScope }
                     ?.let(rowsById::get)
             }.distinctBy(SteamApp::id)
-            val states = runtimeState.readBatch(requestedRows, accountScope, generation)
+            val stateBatch = runtimeState.readBatch(requestedRows, accountScope, generation)
             val history = playHistoryDao.batchLastPlayed()
             val finalOwnedIds = finalOwnedIds() ?: return keys.hiddenResults()
+            completedFinalOwnedIds = finalOwnedIds
             if (!isCurrent(accountScope, generation)) return keys.hiddenResults()
             keys.associateWith { key ->
                 val appId = key.steamAppIdOrNull()
                 val app = appId?.let(rowsById::get)
-                val sourceState = appId?.let(states::get)
+                val sourceState = appId?.let(stateBatch.states::get)
+                val stateFailure = appId?.let(stateBatch.failures::get)
                 when {
                     key.source != source || key.accountScope != accountScope ->
                         OwnedCopyRuntimeResult.Hidden
                     appId == null || appId !in provedIds || appId !in finalOwnedIds ->
                         OwnedCopyRuntimeResult.Hidden
                     app == null -> OwnedCopyRuntimeResult.Hidden
+                    stateFailure != null -> unavailable(
+                        key,
+                        CopyUnavailableReason.SOURCE_READ_FAILED,
+                        stateFailure,
+                    )
                     sourceState == null -> unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
                     else -> available(
                         key = key,
@@ -300,7 +471,9 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: Exception) {
             val scope = provedScope ?: return keys.hiddenResults()
             val currentGeneration = generation ?: return keys.hiddenResults()
-            val finalOwnedIds = finalOwnedIds() ?: return keys.hiddenResults()
+            val finalOwnedIds = completedFinalOwnedIds
+                ?: finalOwnedIds()
+                ?: return keys.hiddenResults()
             if (!isCurrent(scope, currentGeneration)) return keys.hiddenResults()
             keys.associateWith { key ->
                 val appId = key.steamAppIdOrNull()

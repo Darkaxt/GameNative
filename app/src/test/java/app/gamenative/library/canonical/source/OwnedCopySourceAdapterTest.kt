@@ -482,6 +482,44 @@ class OwnedCopySourceAdapterTest {
     }
 
     @Test
+    fun malformedCustomMetadataCannotProjectOrResolveAsAnotherCanonicalId() = runTest {
+        val malformed = listOf(
+            "{\"appId\":1.0}",
+            "{\"appId\":1e0}",
+            "{\"appId\":2147483648}",
+            "{\"appId\":true}",
+            "{\"appId\":\"1\"}",
+            "+1",
+            "01",
+            " 1",
+            "1 ",
+        ).mapIndexed { index, metadata ->
+            File(testRoot, "Malformed $index").apply {
+                mkdirs()
+                File(this, ".gamenative").writeText(metadata)
+            }
+        }
+        val valid = File(testRoot, "Valid").apply {
+            mkdirs()
+            File(this, ".gamenative").writeText("{\"appId\":7}")
+        }
+        setCustomFolders((malformed + valid).mapTo(linkedSetOf(), File::getPath))
+        val adapter = CustomOwnedCopySourceAdapter(scopes(GameSource.CUSTOM_GAME))
+
+        val batch = adapter.snapshot()
+
+        assertEquals(listOf("7"), batch.copies.map { it.key.stableSourceId })
+        assertNull(adapter.resolve(OwnedCopyKey(scope, GameSource.CUSTOM_GAME, "1")))
+        assertEquals(
+            SourceOwnedCopyReference.Custom(
+                OwnedCopyKey(scope, GameSource.CUSTOM_GAME, "7"),
+                7,
+            ),
+            adapter.resolve(OwnedCopyKey(scope, GameSource.CUSTOM_GAME, "7")),
+        )
+    }
+
+    @Test
     fun missingAccountScopeIsUnavailableEvenWhenStaleRowsExist() = runTest {
         val steamDao = mockk<SteamAppDao>(relaxed = true)
         val gogDao = mockk<GOGGameDao>(relaxed = true)

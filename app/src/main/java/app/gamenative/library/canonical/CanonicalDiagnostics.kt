@@ -12,6 +12,12 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.reflect.KClass
 
+enum class PlayHistoryOrigin {
+    POINT,
+    BATCH,
+    FLOW,
+}
+
 interface CanonicalDiagnosticSink {
     fun indexStarted()
 
@@ -24,6 +30,12 @@ interface CanonicalDiagnosticSink {
     )
 
     fun invalidationFailed(source: GameSource, errorClass: KClass<out Throwable>)
+
+    fun playHistoryFailed(
+        source: GameSource?,
+        origin: PlayHistoryOrigin,
+        errorClass: KClass<out Throwable>,
+    )
 
     fun matchBucket(bucket: MatchBucket, count: Int)
 
@@ -47,6 +59,12 @@ sealed interface CanonicalDiagnosticEvent {
 
     data class InvalidationFailed(
         val source: GameSource,
+        val errorClass: KClass<out Throwable>,
+    ) : CanonicalDiagnosticEvent
+
+    data class PlayHistoryFailed(
+        val source: GameSource?,
+        val origin: PlayHistoryOrigin,
         val errorClass: KClass<out Throwable>,
     ) : CanonicalDiagnosticEvent
 
@@ -119,6 +137,14 @@ class CanonicalDiagnostics @Inject constructor(
         recorder.record(CanonicalDiagnosticEvent.InvalidationFailed(source, errorClass))
     }
 
+    override fun playHistoryFailed(
+        source: GameSource?,
+        origin: PlayHistoryOrigin,
+        errorClass: KClass<out Throwable>,
+    ) {
+        recorder.record(CanonicalDiagnosticEvent.PlayHistoryFailed(source, origin, errorClass))
+    }
+
     override fun matchBucket(bucket: MatchBucket, count: Int) {
         recorder.record(CanonicalDiagnosticEvent.MatchResolution(bucket, count))
     }
@@ -181,6 +207,16 @@ internal fun CanonicalDiagnosticEvent.toFeatureEvent(): CanonicalFeatureEvent = 
             DiagnosticAttribute.REASON to SnapshotReason.SOURCE_READ_FAILED.name,
             DiagnosticAttribute.ERROR_TYPE to errorClass.diagnosticName(),
         ),
+    )
+
+    is CanonicalDiagnosticEvent.PlayHistoryFailed -> canonicalIndexEvent(
+        outcome = DiagnosticOutcome.FAILED,
+        attributes = buildMap {
+            source?.let { put(DiagnosticAttribute.SOURCE, it.name) }
+            put(DiagnosticAttribute.OPERATION, "PLAY_HISTORY")
+            put(DiagnosticAttribute.REASON, origin.name)
+            put(DiagnosticAttribute.ERROR_TYPE, errorClass.diagnosticName())
+        },
     )
 
     is CanonicalDiagnosticEvent.MatchResolution -> CanonicalFeatureEvent(

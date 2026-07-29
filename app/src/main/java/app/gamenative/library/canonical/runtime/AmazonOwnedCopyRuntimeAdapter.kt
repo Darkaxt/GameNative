@@ -15,6 +15,8 @@ import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeProvider
+import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.AmazonOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
@@ -22,33 +24,114 @@ import app.gamenative.library.canonical.source.preferredAmazonRows
 import app.gamenative.service.amazon.AmazonArtwork
 import app.gamenative.service.amazon.AmazonService
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 @Singleton
 class AmazonOwnedCopyRuntimeGateway @Inject constructor(
     @ApplicationContext private val context: Context,
+    @CanonicalIoDispatcher private val ioDispatcher: CoroutineDispatcher,
 ) {
-    internal suspend fun activeDownloadProductIds(): Set<String> =
+    internal suspend fun activeDownloadProductIds(): Set<String> = withContext(ioDispatcher) {
         AmazonService.getActiveDownloads()
             .filterValues { it.isActive() }
             .keys
+    }
 
-    internal suspend fun partialDownloadProductIds(): Set<String> =
+    internal suspend fun partialDownloadProductIds(): Set<String> = withContext(ioDispatcher) {
         AmazonService.getPartialDownloads(context).toSet()
+    }
 
-    internal suspend fun updatePending(productId: String): Boolean =
+    internal suspend fun updatePending(productId: String): Boolean = withContext(ioDispatcher) {
         AmazonService.isUpdatePending(productId)
+    }
+}
+
+class AmazonObservedUpdateState private constructor(
+    private val gateway: AmazonOwnedCopyRuntimeGateway,
+    scope: CoroutineScope,
+    nowEpochMs: () -> Long,
+    @Suppress("UNUSED_PARAMETER") marker: Unit,
+) {
+    @Inject
+    constructor(
+        gateway: AmazonOwnedCopyRuntimeGateway,
+        clock: CanonicalProjectionClock,
+        @CanonicalIoDispatcher dispatcher: CoroutineDispatcher,
+    ) : this(
+        gateway = gateway,
+        scope = CoroutineScope(SupervisorJob() + dispatcher),
+        nowEpochMs = clock::nowEpochMs,
+        marker = Unit,
+    )
+
+    internal constructor(
+        gateway: AmazonOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowEpochMs: () -> Long,
+    ) : this(gateway, scope, nowEpochMs, Unit)
+
+    private val refreshSemaphore = Semaphore(MAX_UPDATE_CONCURRENCY)
+    private val store = ObservedUpdateStateStore<String, String>(
+        scope = scope,
+        nowEpochMs = nowEpochMs,
+        ttlMs = UPDATE_TTL_MS,
+        retryDelayMs = UPDATE_RETRY_MS,
+        maxEntries = MAX_UPDATE_ENTRIES,
+        maxRefreshBatch = MAX_UPDATE_REFRESH_BATCH,
+        refresh = { requests ->
+            coroutineScope {
+                requests.map { request ->
+                    async {
+                        request.key to refreshSemaphore.withPermit {
+                            gateway.updatePending(request.key)
+                        }
+                    }
+                }.awaitAll().toMap()
+            }
+        },
+    )
+
+    internal fun invalidations(): Flow<Unit> = store.invalidations()
+
+    internal fun snapshot(
+        owner: UpdateObservationOwner,
+        games: List<AmazonGame>,
+    ): Map<String, UpdateObservation> = store.snapshot(
+        owner,
+        games.associate { game -> game.productId to game.versionId },
+    )
+
+    private companion object {
+        const val UPDATE_TTL_MS = 5 * 60_000L
+        const val UPDATE_RETRY_MS = 15_000L
+        const val MAX_UPDATE_ENTRIES = 512
+        const val MAX_UPDATE_REFRESH_BATCH = 32
+        const val MAX_UPDATE_CONCURRENCY = 4
+    }
 }
 
 @Singleton
 class AmazonOwnedCopyRuntimeState @Inject constructor(
     private val gateway: AmazonOwnedCopyRuntimeGateway,
+    private val observedUpdates: AmazonObservedUpdateState = AmazonObservedUpdateState(
+        gateway = gateway,
+        scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
+        nowEpochMs = System::currentTimeMillis,
+    ),
 ) {
-    private val updateCache = ConcurrentHashMap<AmazonUpdateCacheKey, Boolean>()
 
     internal suspend fun readPoint(
         game: AmazonGame,
@@ -57,9 +140,15 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
     ): OwnedCopyVolatileState {
         val activeDownloads = gateway.activeDownloadProductIds()
         val partialDownloads = gateway.partialDownloadProductIds() + activeDownloads
-        val updateAvailable = game.isInstalled && gateway.updatePending(game.productId)
-        updateCache[AmazonUpdateCacheKey(accountScope, generation, game.productId)] = updateAvailable
-        return stateFor(game, activeDownloads, partialDownloads, updateAvailable)
+        val observation = if (game.isInstalled) {
+            observedUpdates.snapshot(
+                UpdateObservationOwner(accountScope, generation),
+                listOf(game),
+            ).getValue(game.productId)
+        } else {
+            UpdateObservation.CURRENT
+        }
+        return stateFor(game, activeDownloads, partialDownloads, observation)
     }
 
     internal suspend fun readBatch(
@@ -70,15 +159,17 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
         if (games.isEmpty()) return emptyMap()
         val activeDownloads = gateway.activeDownloadProductIds()
         val partialDownloads = gateway.partialDownloadProductIds() + activeDownloads
-        val updateSnapshot = updateCache.toMap()
+        val observations = observedUpdates.snapshot(
+            UpdateObservationOwner(accountScope, generation),
+            games.filter(AmazonGame::isInstalled),
+        )
         return games.mapNotNull { game ->
             try {
-                val cacheKey = AmazonUpdateCacheKey(accountScope, generation, game.productId)
                 game.appId to stateFor(
                     game,
                     activeDownloads,
                     partialDownloads,
-                    updateSnapshot[cacheKey] == true,
+                    observations[game.productId] ?: UpdateObservation.CURRENT,
                 )
             } catch (error: CancellationException) {
                 throw error
@@ -88,17 +179,13 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
         }.toMap()
     }
 
-    private data class AmazonUpdateCacheKey(
-        val accountScope: AccountScope,
-        val generation: Long,
-        val productId: String,
-    )
+    internal fun updateInvalidations(): Flow<Unit> = observedUpdates.invalidations()
 
     private fun stateFor(
         game: AmazonGame,
         activeDownloads: Set<String>,
         partialDownloads: Set<String>,
-        updateAvailable: Boolean,
+        updateObservation: UpdateObservation,
     ): OwnedCopyVolatileState = OwnedCopyVolatileState(
         installPath = game.installPath.takeIf(String::isNotBlank),
         installedSizeBytes = game.installSize.positiveOrNull(),
@@ -106,7 +193,13 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
         isInstalled = game.isInstalled,
         isDownloading = game.productId in activeDownloads,
         hasPartialDownload = game.productId in partialDownloads,
-        updateAvailable = updateAvailable,
+        updateAvailable = game.isInstalled &&
+            updateObservation == UpdateObservation.UPDATE_AVAILABLE,
+        updateObservation = if (game.isInstalled) {
+            updateObservation
+        } else {
+            UpdateObservation.CURRENT
+        },
         isShared = false,
         playtimeMinutes = game.playTimeMinutes.positiveOrNull(),
     )
@@ -121,10 +214,14 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
     private val sourceAdapter: AmazonOwnedCopySourceAdapter,
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: AmazonOwnedCopyRuntimeState,
+    private val diagnostics: CanonicalDiagnosticSink? = null,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.AMAZON
 
-    override fun invalidations(): Flow<Unit> = sourceAdapter.invalidations()
+    override fun invalidations(): Flow<Unit> = merge(
+        sourceAdapter.invalidations(),
+        runtimeState.updateInvalidations(),
+    )
 
     override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult {
         if (key.source != source) return OwnedCopyRuntimeResult.Hidden
@@ -178,7 +275,11 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 )
             }
             val sourceState = runtimeState.readPoint(game, accountScope, generation)
-            val localLastPlayed = playHistoryDao.pointLastPlayed(sourceAppId(source, game.appId))
+            val localLastPlayed = playHistoryDao.pointLastPlayed(
+                sourceAppId(source, game.appId),
+                source,
+                diagnostics,
+            )
             if (!hasFreshProof(key, accountScope, generation, entitlementId)) {
                 return OwnedCopyRuntimeResult.Hidden
             }
@@ -210,6 +311,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
         var provedScope: AccountScope? = null
         var generation: Long? = null
         var initialLedger: CompletedOwnedCopySnapshot? = null
+        var completedFinalLedger: CompletedOwnedCopySnapshot? = null
         return try {
             generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
@@ -245,8 +347,9 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 .distinctBy(AmazonGame::appId)
                 .toList()
             val states = runtimeState.readBatch(requestedRows, accountScope, generation)
-            val history = playHistoryDao.batchLastPlayed()
+            val history = playHistoryDao.batchLastPlayed(source, diagnostics)
             val finalLedger = finalLedger(accountScope, generation) ?: return keys.hiddenResults()
+            completedFinalLedger = finalLedger
             if (!isCurrent(accountScope, generation)) return keys.hiddenResults()
             keys.associateWith { key ->
                 val entitlementId = ledger.resolvedSourceIds[key.stableSourceId]
@@ -279,7 +382,9 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
             val scope = provedScope ?: return keys.hiddenResults()
             val currentGeneration = generation ?: return keys.hiddenResults()
             val ledger = initialLedger ?: return keys.hiddenResults()
-            val finalLedger = finalLedger(scope, currentGeneration) ?: return keys.hiddenResults()
+            val finalLedger = completedFinalLedger
+                ?: finalLedger(scope, currentGeneration)
+                ?: return keys.hiddenResults()
             if (!isCurrent(scope, currentGeneration)) return keys.hiddenResults()
             keys.associateWith { key ->
                 if (
