@@ -45,6 +45,7 @@ import app.gamenative.db.dao.AppInfoDao
 import app.gamenative.db.dao.CachedLicenseDao
 import app.gamenative.db.dao.CanonicalFacetDao
 import app.gamenative.db.dao.CanonicalGameDao
+import app.gamenative.db.dao.CanonicalLibraryDao
 import app.gamenative.db.dao.CanonicalPreferenceDao
 import app.gamenative.db.dao.ChangeNumbersDao
 import app.gamenative.db.dao.DownloadingAppInfoDao
@@ -164,6 +165,8 @@ abstract class PluviaDatabase : RoomDatabase() {
     abstract fun modDao(): ModDao
 
     abstract fun canonicalGameDao(): CanonicalGameDao
+
+    abstract fun canonicalLibraryDao(): CanonicalLibraryDao
 
     abstract fun storeMatchDao(): StoreMatchDao
 
