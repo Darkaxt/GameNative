@@ -16,6 +16,8 @@ import app.gamenative.data.LibraryItem
 import app.gamenative.data.RecommendationRepository
 import app.gamenative.data.RecommendedGame
 import app.gamenative.data.gog.GogRecommendationsRepository
+import app.gamenative.ui.data.LibraryCard
+import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.screen.library.AppScreen
@@ -32,79 +34,115 @@ internal fun LibraryDetailPane(
     onPlayWithDiagnostics: () -> Unit,
     onBack: () -> Unit,
 ) {
-    Surface {
-        if (libraryItem == null) {
-            val listState = rememberLazyGridState()
-            val emptyState = remember {
-                LibraryState(
-                    appInfoList = emptyList(),
-                    appInfoSortType = EnumSet.of(AppFilter.GAME),
-                )
-            }
-
-            LibraryListPane(
-                state = emptyState,
-                listState = listState,
-                currentLayout = PrefManager.libraryLayout,
-                onPageChange = {},
-                onNavigate = {},
-                onRefresh = {},
-            )
-        } else if (libraryItem.isRecommended) {
-            val context = LocalContext.current
-            var game by remember(libraryItem.recommendedGameId) {
-                mutableStateOf<RecommendedGame?>(null)
-            }
-            LaunchedEffect(libraryItem.recommendedGameId) {
-                game = if (libraryItem.isFeatured) {
-                    RecommendationRepository.getFeaturedGame(context)
-                } else {
-                    GogRecommendationsRepository.getRecommendedGame(libraryItem.recommendedGameId)
-                        ?: RecommendationRepository.getCurrentRecommendation(context)
-                }
-                if (game != null && PrefManager.usageAnalyticsEnabled) {
-                    if (libraryItem.isFeatured) {
-                        PostHog.capture(
-                            event = "featured_opened",
-                            properties = mapOf(
-                                "campaign_id" to (game?.id ?: ""),
-                                "game_name" to (game?.name ?: ""),
-                                "source" to libraryItem.recSource,
-                            ),
-                        )
-                    } else {
-                        PostHog.capture(
-                            event = "recommendation_opened",
-                            properties = mapOf(
-                                "game_name" to (game?.name ?: ""),
-                                "game_id" to (game?.id ?: ""),
-                                "rank" to libraryItem.index,
-                                "source" to libraryItem.recSource,
-                                "seed_count" to libraryItem.recSeedCount,
-                                "because_played" to (game?.becausePlayed ?: ""),
-                            ),
-                        )
-                    }
-                }
-            }
-            game?.let { rec ->
-                RecommendedGameScreen(
-                    game = rec,
-                    recRank = libraryItem.index,
-                    recSource = libraryItem.recSource,
-                    onBack = onBack,
-                )
-            }
+    val card = libraryItem?.let { item ->
+        if (item.isRecommended || item.isFeatured) {
+            LibraryCard.fromPromotion(item)
         } else {
-            AppScreen(
-                libraryItem = libraryItem,
-                onClickPlay = onClickPlay,
-                onTestGraphics = onTestGraphics,
-                onPlayWithDiagnostics = onPlayWithDiagnostics,
-                onBack = onBack,
-            )
+            LibraryCard.fromSource(item)
         }
     }
+    LibraryDetailPane(
+        card = card,
+        onClickPlay = onClickPlay,
+        onTestGraphics = onTestGraphics,
+        onPlayWithDiagnostics = onPlayWithDiagnostics,
+        onBack = onBack,
+    )
+}
+
+@Composable
+internal fun LibraryDetailPane(
+    card: LibraryCard?,
+    onClickPlay: (Boolean) -> Unit,
+    onTestGraphics: () -> Unit,
+    onPlayWithDiagnostics: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Surface {
+        when {
+            card == null -> EmptyLibraryDetailPane()
+            card.identity is LibraryCardIdentity.Promotion -> {
+                val context = LocalContext.current
+                var game by remember(card.recommendedGameId) {
+                    mutableStateOf<RecommendedGame?>(null)
+                }
+                LaunchedEffect(card.recommendedGameId) {
+                    game = if (card.isFeatured) {
+                        RecommendationRepository.getFeaturedGame(context)
+                    } else {
+                        GogRecommendationsRepository.getRecommendedGame(card.recommendedGameId)
+                            ?: RecommendationRepository.getCurrentRecommendation(context)
+                    }
+                    if (game != null && PrefManager.usageAnalyticsEnabled) {
+                        if (card.isFeatured) {
+                            PostHog.capture(
+                                event = "featured_opened",
+                                properties = mapOf(
+                                    "campaign_id" to (game?.id ?: ""),
+                                    "game_name" to (game?.name ?: ""),
+                                    "source" to card.recSource,
+                                ),
+                            )
+                        } else {
+                            PostHog.capture(
+                                event = "recommendation_opened",
+                                properties = mapOf(
+                                    "game_name" to (game?.name ?: ""),
+                                    "game_id" to (game?.id ?: ""),
+                                    "rank" to card.index,
+                                    "source" to card.recSource,
+                                    "seed_count" to card.recSeedCount,
+                                    "because_played" to (game?.becausePlayed ?: ""),
+                                ),
+                            )
+                        }
+                    }
+                }
+                game?.let { rec ->
+                    RecommendedGameScreen(
+                        game = rec,
+                        recRank = card.index,
+                        recSource = card.recSource,
+                        onBack = onBack,
+                    )
+                }
+            }
+            else -> {
+                val libraryItem = card.sourceItemOrNull()
+                if (libraryItem == null) {
+                    EmptyLibraryDetailPane()
+                } else {
+                    AppScreen(
+                        libraryItem = libraryItem,
+                        onClickPlay = onClickPlay,
+                        onTestGraphics = onTestGraphics,
+                        onPlayWithDiagnostics = onPlayWithDiagnostics,
+                        onBack = onBack,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyLibraryDetailPane() {
+    val listState = rememberLazyGridState()
+    val emptyState = remember {
+        LibraryState(
+            cards = emptyList(),
+            appInfoSortType = EnumSet.of(AppFilter.GAME),
+        )
+    }
+
+    LibraryListPane(
+        state = emptyState,
+        listState = listState,
+        currentLayout = PrefManager.libraryLayout,
+        onPageChange = {},
+        onNavigate = {},
+        onRefresh = {},
+    )
 }
 
 /***********
@@ -118,11 +156,13 @@ private fun Preview_LibraryDetailPane() {
     PrefManager.init(LocalContext.current)
     PluviaTheme {
         LibraryDetailPane(
-            libraryItem = LibraryItem(
-                appId = "${GameSource.STEAM.name}_${Int.MAX_VALUE}",
-                name = "Preview Game",
-                iconHash = "",
-                gameSource = GameSource.STEAM,
+            card = LibraryCard.fromSource(
+                LibraryItem(
+                    appId = "${GameSource.STEAM.name}_${Int.MAX_VALUE}",
+                    name = "Preview Game",
+                    iconHash = "",
+                    gameSource = GameSource.STEAM,
+                ),
             ),
             onClickPlay = { },
             onTestGraphics = { },

@@ -83,6 +83,7 @@ import app.gamenative.ui.component.GamepadButton
 import app.gamenative.ui.component.LibraryActions
 import app.gamenative.ui.components.rememberCustomGameFolderPicker
 import app.gamenative.ui.components.requestPermissionsForPath
+import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.LibraryTab
@@ -339,7 +340,7 @@ private fun LibraryScreenContent(
     var wasSystemMenuOpen by remember { mutableStateOf(false) }
     var wasOptionsPanelOpen by remember { mutableStateOf(false) }
     // Keep a stable reference to the selected item so detail view doesn't disappear during list refresh/pagination.
-    var selectedLibraryItem by remember { mutableStateOf<LibraryItem?>(null) }
+    var selectedLibraryCard by remember { mutableStateOf<LibraryCard?>(null) }
     val filterFabExpanded by remember(currentPaneType, listState, carouselListState) {
         derivedStateOf {
             if (currentPaneType == PaneType.CAROUSEL) {
@@ -353,7 +354,7 @@ private fun LibraryScreenContent(
     // Dialog state for add custom game prompt
     var showAddCustomGameDialog by remember { mutableStateOf(false) }
     var dontShowAgain by remember { mutableStateOf(false) }
-    var previousAppCount by remember { mutableIntStateOf(state.appInfoList.size) }
+    var previousAppCount by remember { mutableIntStateOf(state.cards.size) }
     var controllerBootstrapNeeded by remember { mutableStateOf(true) }
     var rootHasFocus by remember { mutableStateOf(false) }
     // True while focus lives in the top tab bar. The delayed focus-restoration effects below must
@@ -366,7 +367,7 @@ private fun LibraryScreenContent(
         return if (state.currentTab == LibraryTab.RECOMMENDED) {
             (recommendationItemCount - 1).coerceAtLeast(0)
         } else {
-            state.appInfoList.lastIndex.coerceAtLeast(0)
+            state.cards.lastIndex.coerceAtLeast(0)
         }
     }
 
@@ -400,8 +401,8 @@ private fun LibraryScreenContent(
         }
     }
 
-    // Moved all state.appInfoList.isNotEmpty() checking to this function
-    fun isListFocusable(): Boolean = state.appInfoList.isNotEmpty() || state.currentTab == LibraryTab.RECOMMENDED
+    // Moved all state.cards.isNotEmpty() checking to this function
+    fun isListFocusable(): Boolean = state.cards.isNotEmpty() || state.currentTab == LibraryTab.RECOMMENDED
 
     fun requestGridFocusOrDefer() {
         if (!isListFocusable()) return
@@ -495,9 +496,9 @@ private fun LibraryScreenContent(
         onSearchQuery("")
     }
 
-    BackHandler(selectedLibraryItem != null) {
+    BackHandler(selectedLibraryCard != null) {
         selectedAppId = null
-        selectedLibraryItem = null
+        selectedLibraryCard = null
     }
 
     // Restore focus when returning from game detail (without reloading list)
@@ -531,7 +532,7 @@ private fun LibraryScreenContent(
     // The detail (game) page deliberately does NOT use this — the hero image is meant
     // to bleed through the cutout, so AppScreenContent insets only the elements that
     // need to stay tappable (e.g. the back button) instead.
-    val safePaddingModifier = if (selectedLibraryItem == null) {
+    val safePaddingModifier = if (selectedLibraryCard == null) {
         Modifier.windowInsetsPadding(
             WindowInsets.statusBars
                 .union(WindowInsets.displayCutout)
@@ -561,7 +562,7 @@ private fun LibraryScreenContent(
     LaunchedEffect(
         pendingGridFocusRequest,
         gridFocusTargetListIndex,
-        state.appInfoList.size,
+        state.cards.size,
         selectedAppId,
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
@@ -587,7 +588,7 @@ private fun LibraryScreenContent(
     LaunchedEffect(
         pendingCarouselFocusRequest,
         carouselFocusTargetListIndex,
-        state.appInfoList.size,
+        state.cards.size,
         selectedAppId,
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
@@ -615,13 +616,13 @@ private fun LibraryScreenContent(
 
     // If the app list starts empty and populates later, bootstrap controller focus once content is ready.
     LaunchedEffect(
-        state.appInfoList.size,
+        state.cards.size,
         selectedAppId,
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
         state.isSearching,
     ) {
-        val currentCount = state.appInfoList.size
+        val currentCount = state.cards.size
         val listBecameNonEmpty = previousAppCount == 0 && currentCount > 0
         val listBecameEmpty = previousAppCount > 0 && currentCount == 0
 
@@ -921,7 +922,7 @@ private fun LibraryScreenContent(
                             currentPaneType = currentPaneType,
                             onNavigate = { item ->
                                 selectedAppId = item.appId
-                                selectedLibraryItem = item
+                                selectedLibraryCard = LibraryCard.fromPromotion(item)
                             },
                             modifier = Modifier.fillMaxSize(),
                             firstCarouselItemFocusRequester = carouselFocusRequester,
@@ -992,9 +993,9 @@ private fun LibraryScreenContent(
                             state = state,
                             listState = carouselListState,
                             onPageChange = onPageChange,
-                            onNavigate = { appId ->
-                                selectedAppId = appId
-                                selectedLibraryItem = state.appInfoList.find { it.appId == appId }
+                            onNavigate = { card ->
+                                selectedAppId = card.composeKey
+                                selectedLibraryCard = card
                             },
                             onRefresh = onRefresh,
                             modifier = Modifier.fillMaxSize(),
@@ -1010,9 +1011,9 @@ private fun LibraryScreenContent(
                             firstGridItemFocusRequester = gridFirstItemFocusRequester,
                             focusTargetListIndex = gridFocusTargetListIndex,
                             onPageChange = onPageChange,
-                            onNavigate = { appId ->
-                                selectedAppId = appId
-                                selectedLibraryItem = state.appInfoList.find { it.appId == appId }
+                            onNavigate = { card ->
+                                selectedAppId = card.composeKey
+                                selectedLibraryCard = card
                             },
                             onRefresh = onRefresh,
                             modifier = Modifier.fillMaxSize(),
@@ -1084,23 +1085,23 @@ private fun LibraryScreenContent(
             }
         } else {
             LibraryDetailPane(
-                libraryItem = selectedLibraryItem,
+                card = selectedLibraryCard,
                 onBack = {
                     selectedAppId = null
-                    selectedLibraryItem = null
+                    selectedLibraryCard = null
                 },
                 onClickPlay = {
-                    selectedLibraryItem?.let { libraryItem ->
+                    selectedLibraryCard?.sourceItemOrNull()?.let { libraryItem ->
                         onClickPlay(libraryItem.appId, it)
                     }
                 },
                 onTestGraphics = {
-                    selectedLibraryItem?.let { libraryItem ->
+                    selectedLibraryCard?.sourceItemOrNull()?.let { libraryItem ->
                         onTestGraphics(libraryItem.appId)
                     }
                 },
                 onPlayWithDiagnostics = {
-                    selectedLibraryItem?.let { libraryItem ->
+                    selectedLibraryCard?.sourceItemOrNull()?.let { libraryItem ->
                         onPlayWithDiagnostics(libraryItem.appId)
                     }
                 },
@@ -1312,13 +1313,23 @@ private fun Preview_LibraryScreenContent() {
     var state by remember {
         mutableStateOf(
             LibraryState(
-                appInfoList = List(15) { idx ->
+                cards = List(15) { idx ->
                     val item = fakeAppInfo(idx)
-                    LibraryItem(
-                        index = idx,
-                        appId = "${GameSource.STEAM.name}_${item.id}",
-                        name = item.name,
-                        iconHash = item.iconHash,
+                    val compatibility = when (idx) {
+                        0 -> GameCompatibilityStatus.COMPATIBLE
+                        1 -> GameCompatibilityStatus.GPU_COMPATIBLE
+                        2 -> GameCompatibilityStatus.NOT_COMPATIBLE
+                        3 -> GameCompatibilityStatus.UNKNOWN
+                        else -> null
+                    }
+                    LibraryCard.fromSource(
+                        LibraryItem(
+                            index = idx,
+                            appId = "${GameSource.STEAM.name}_${item.id}",
+                            name = item.name,
+                            iconHash = item.iconHash,
+                        ),
+                        compatibilityStatus = compatibility,
                     )
                 },
                 // Add compatibility map for preview

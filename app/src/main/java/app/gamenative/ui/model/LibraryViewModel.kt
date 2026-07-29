@@ -43,6 +43,7 @@ import app.gamenative.service.amazon.AmazonService
 import app.gamenative.service.epic.EpicService
 import app.gamenative.service.gog.GOGService
 import app.gamenative.steam.SteamCollectionFilter
+import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.data.statsFor
 import app.gamenative.ui.enums.AppFilter
@@ -178,10 +179,8 @@ class LibraryViewModel @Inject constructor(
                     gpuGameStats = GpuGameStatsCache.getAll(),
                 )
             }
-            // Re-run filtering/sorting now that stats are available, if anything depends on them.
-            if (usesStats(_state.value)) {
-                onFilterApps(paginationCurrentPage)
-            }
+            // Rebuild typed cards now that their display stats are available.
+            onFilterApps(paginationCurrentPage)
         }
 
         @OptIn(ExperimentalCoroutinesApi::class)
@@ -485,7 +484,7 @@ class LibraryViewModel @Inject constructor(
             } finally {
                 onFilterApps(0).join()
                 // Fetch compatibility for current page after refresh
-                val currentPageGames = _state.value.appInfoList.map { it.name }
+                val currentPageGames = _state.value.cards.map { it.name }
                 if (currentPageGames.isNotEmpty()) {
                     fetchCompatibilityForPage(currentPageGames)
                 }
@@ -507,9 +506,7 @@ class LibraryViewModel @Inject constructor(
                         gpuGameStats = GpuGameStatsCache.getAll(),
                     )
                 }
-                if (usesStats(_state.value)) {
-                    onFilterApps(paginationCurrentPage)
-                }
+                onFilterApps(paginationCurrentPage)
             }
         }
     }
@@ -531,21 +528,6 @@ class LibraryViewModel @Inject constructor(
 
             CustomGameScanner.invalidateCache()
             onFilterApps(paginationCurrentPage)
-        }
-    }
-
-    /** Whether the current sort or any active filter depends on per-game stats. */
-    private fun usesStats(state: LibraryState): Boolean {
-        val statSorts = setOf(
-            SortOption.FPS_HIGH,
-            SortOption.RUNS_HIGH,
-            SortOption.REVIEWS_HIGH,
-            SortOption.REVIEWS_GPU_HIGH,
-        )
-        if (state.currentSortOption in statSorts) return true
-        return state.appInfoSortType.any {
-            it == AppFilter.PLAYABLE || it == AppFilter.FIVE_STAR ||
-                it == AppFilter.FIVE_STAR_GPU || it == AppFilter.PROVEN_GPU
         }
     }
 
@@ -1040,12 +1022,19 @@ class LibraryViewModel @Inject constructor(
                 isFirstLoad = false
             }
 
-            // Fetch compatibility for current page games
-            fetchCompatibilityForPage(pagedList.map { it.name })
+            val cards = pagedList.map { item ->
+                val compatibility = currentState.compatibilityMap[item.name]
+                val stats = currentState.statsFor(item)
+                if (item.isRecommended || item.isFeatured) {
+                    LibraryCard.fromPromotion(item, compatibility, stats)
+                } else {
+                    LibraryCard.fromSource(item, compatibility, stats)
+                }
+            }
 
             _state.update {
                 it.copy(
-                    appInfoList = pagedList,
+                    cards = cards,
                     currentPaginationPage = paginationPage + 1, // visual display is not 0 indexed
                     lastPaginationPage = lastPageInCurrentFilter + 1,
                     totalAppsInFilter = totalFound,
@@ -1065,6 +1054,10 @@ class LibraryViewModel @Inject constructor(
                     steamCollectionCounts = steamCollectionCounts,
                 )
             }
+
+            // Fetch compatibility after publishing the page so cached and fetched results can
+            // update the typed cards already held in state.
+            fetchCompatibilityForPage(cards.map { it.name })
 
             FeatureDiagnostics.record(
                 area = DiagnosticArea.LIBRARY_FILTER,
@@ -1201,8 +1194,16 @@ class LibraryViewModel @Inject constructor(
         _state.update { currentState ->
             val mergedMap = currentState.compatibilityMap.toMutableMap()
             mergedMap.putAll(compatibilityMap)
+            val updatedCards = currentState.cards.map { card ->
+                card.copy(
+                    compatibilityStatus = mergedMap[card.name] ?: card.compatibilityStatus,
+                )
+            }
             Timber.tag("LibraryViewModel").d("Updated state with ${compatibilityMap.size} compatibility entries, total: ${mergedMap.size}")
-            currentState.copy(compatibilityMap = mergedMap)
+            currentState.copy(
+                cards = updatedCards,
+                compatibilityMap = mergedMap,
+            )
         }
     }
 

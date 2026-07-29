@@ -17,15 +17,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import app.gamenative.data.LibraryItem
+import app.gamenative.ui.data.LibraryCard
 
 @Composable
 internal fun LibraryList(
     modifier: Modifier = Modifier,
     contentPaddingValues: PaddingValues,
     listState: LazyListState,
-    list: List<LibraryItem>,
-    onItemClick: (String) -> Unit,
+    list: List<LibraryCard>,
+    onItemClick: (LibraryCard) -> Unit,
     imageRefreshCounter: Long = 0L,
 ) {
     if (list.isEmpty()) {
@@ -53,11 +53,11 @@ internal fun LibraryList(
             state = listState,
             contentPadding = contentPaddingValues,
         ) {
-            items(items = list, key = { it.index }) { item ->
+            items(items = list, key = { it.composeKey }) { item ->
                 AppItem(
                     modifier = Modifier.animateItem(),
-                    appInfo = item,
-                    onClick = { onItemClick(item.appId) },
+                    card = item,
+                    onClick = { onItemClick(item) },
                     imageRefreshCounter = imageRefreshCounter,
                 )
 

@@ -38,8 +38,8 @@ import app.gamenative.PrefManager
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
+import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.enums.PaneType
-import app.gamenative.ui.data.GameCardStats
 import app.gamenative.ui.icons.Amazon
 import app.gamenative.ui.icons.Steam
 import app.gamenative.ui.internal.fakeAppInfo
@@ -63,14 +63,12 @@ import androidx.compose.material3.Text
 @Composable
 internal fun AppItem(
     modifier: Modifier = Modifier,
-    appInfo: LibraryItem,
+    card: LibraryCard,
     onClick: () -> Unit,
     paneType: PaneType = PaneType.LIST,
     onFocus: () -> Unit = {},
     isRefreshing: Boolean = false,
     imageRefreshCounter: Long = 0L,
-    compatibilityStatus: GameCompatibilityStatus? = null,
-    gameStats: GameCardStats? = null,
     showFocusGlow: Boolean = true,
     enableFocusScale: Boolean = true,
     animateStats: Boolean = true,
@@ -116,20 +114,18 @@ internal fun AppItem(
     when (paneType) {
         PaneType.LIST -> ListViewCard(
             modifier = modifier,
-            appInfo = appInfo,
+            card = card,
             onClick = onClick,
             onFocus = onFocus,
             isFocused = isFocused,
             onFocusChanged = { isFocused = it },
             isRefreshing = isRefreshing,
-            compatibilityStatus = compatibilityStatus,
-            gameStats = gameStats,
             context = context,
         )
 
         else -> GridViewCard(
             modifier = modifier,
-            appInfo = appInfo,
+            card = card,
             onClick = onClick,
             onFocus = onFocus,
             isFocused = isFocused,
@@ -143,8 +139,6 @@ internal fun AppItem(
                 hideText = false
                 alpha = 0.1f
             },
-            compatibilityStatus = compatibilityStatus,
-            gameStats = gameStats,
             showFocusGlow = showFocusGlow,
             context = context,
             animateStats = animateStats,
@@ -189,26 +183,29 @@ private fun Preview_AppItem() {
                 items(
                     items = List(5) { idx ->
                         val item = fakeAppInfo(idx)
-                        LibraryItem(
-                            index = idx,
-                            appId = "${GameSource.STEAM.name}_${item.id}",
-                            name = item.name,
-                            iconHash = item.iconHash,
-                            isShared = idx % 2 == 0,
-                            gameSource = GameSource.STEAM,
-                        )
-                    },
-                    itemContent = {
-                        val status = when (it.index % 4) {
+                        val status = when (idx % 4) {
                             0 -> GameCompatibilityStatus.COMPATIBLE
                             1 -> GameCompatibilityStatus.GPU_COMPATIBLE
                             2 -> GameCompatibilityStatus.NOT_COMPATIBLE
                             else -> GameCompatibilityStatus.UNKNOWN
                         }
-                        AppItem(
-                            appInfo = it,
-                            onClick = {},
+                        LibraryCard.fromSource(
+                            LibraryItem(
+                                index = idx,
+                                appId = "${GameSource.STEAM.name}_${item.id}",
+                                name = item.name,
+                                iconHash = item.iconHash,
+                                isShared = idx % 2 == 0,
+                                gameSource = GameSource.STEAM,
+                            ),
                             compatibilityStatus = status,
+                        )
+                    },
+                    key = LibraryCard::composeKey,
+                    itemContent = { card ->
+                        AppItem(
+                            card = card,
+                            onClick = {},
                         )
                     },
                 )
@@ -224,15 +221,24 @@ private fun Preview_AppItemGrid() {
     PluviaTheme {
         Surface {
             Column {
-                val appInfoList = List(4) { idx ->
+                val cards = List(4) { idx ->
                     val item = fakeAppInfo(idx)
-                    LibraryItem(
-                        index = idx,
-                        appId = "${GameSource.STEAM.name}_${item.id}",
-                        name = item.name,
-                        iconHash = item.iconHash,
-                        isShared = idx % 2 == 0,
-                        gameSource = GameSource.CUSTOM_GAME,
+                    val status = when (idx % 4) {
+                        0 -> GameCompatibilityStatus.COMPATIBLE
+                        1 -> GameCompatibilityStatus.GPU_COMPATIBLE
+                        2 -> GameCompatibilityStatus.NOT_COMPATIBLE
+                        else -> GameCompatibilityStatus.UNKNOWN
+                    }
+                    LibraryCard.fromSource(
+                        LibraryItem(
+                            index = idx,
+                            appId = "${GameSource.STEAM.name}_${item.id}",
+                            name = item.name,
+                            iconHash = item.iconHash,
+                            isShared = idx % 2 == 0,
+                            gameSource = GameSource.CUSTOM_GAME,
+                        ),
+                        compatibilityStatus = status,
                     )
                 }
 
@@ -241,18 +247,11 @@ private fun Preview_AppItemGrid() {
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(20.dp),
                 ) {
-                    items(items = appInfoList, key = { it.index }) { item ->
-                        val status = when (item.index % 4) {
-                            0 -> GameCompatibilityStatus.COMPATIBLE
-                            1 -> GameCompatibilityStatus.GPU_COMPATIBLE
-                            2 -> GameCompatibilityStatus.NOT_COMPATIBLE
-                            else -> GameCompatibilityStatus.UNKNOWN
-                        }
+                    items(items = cards, key = { it.composeKey }) { card ->
                         AppItem(
-                            appInfo = item,
+                            card = card,
                             onClick = { },
                             paneType = PaneType.GRID_HERO,
-                            compatibilityStatus = status,
                         )
                     }
                 }

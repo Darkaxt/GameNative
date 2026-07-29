@@ -55,9 +55,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import app.gamenative.PrefManager
 import app.gamenative.R
-import app.gamenative.data.LibraryItem
+import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryState
-import app.gamenative.ui.data.statsFor
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.util.AdaptivePadding
 import app.gamenative.ui.util.shouldShowGamepadUI
@@ -225,7 +224,7 @@ internal fun LibraryCarouselPane(
     state: LibraryState,
     listState: LazyListState,
     onPageChange: (Int) -> Unit,
-    onNavigate: (String) -> Unit,
+    onNavigate: (LibraryCard) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     firstCarouselItemFocusRequester: FocusRequester? = null,
@@ -286,16 +285,16 @@ internal fun LibraryCarouselPane(
     val centeredIndex by centeredIndexState
 
     fun currentTargetIndex(): Int {
-        val lastIndex = state.appInfoList.lastIndex
+        val lastIndex = state.cards.lastIndex
         if (lastIndex < 0) return 0
         val preferredIndex = focusTargetListIndex ?: centeredIndex.takeIf { it >= 0 } ?: listState.firstVisibleItemIndex
         return preferredIndex.coerceIn(0, lastIndex)
     }
 
     fun navigateCarousel(delta: Int) {
-        if (state.appInfoList.isEmpty()) return
+        if (state.cards.isEmpty()) return
 
-        val targetIndex = (currentTargetIndex() + delta).coerceIn(0, state.appInfoList.lastIndex)
+        val targetIndex = (currentTargetIndex() + delta).coerceIn(0, state.cards.lastIndex)
         if (targetIndex == currentTargetIndex()) return
 
         scope.launch {
@@ -314,21 +313,21 @@ internal fun LibraryCarouselPane(
         }
     }
 
-    LaunchedEffect(listState, state.appInfoList.size, state.totalAppsInFilter) {
+    LaunchedEffect(listState, state.cards.size, state.totalAppsInFilter) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .filterNotNull()
             .distinctUntilChanged()
             .collect { lastVisibleIndex ->
-                if (lastVisibleIndex >= state.appInfoList.lastIndex &&
-                    state.appInfoList.size < state.totalAppsInFilter
+                if (lastVisibleIndex >= state.cards.lastIndex &&
+                    state.cards.size < state.totalAppsInFilter
                 ) {
                     onPageChange(1)
                 }
             }
     }
 
-    var settledBackdropItem by remember { mutableStateOf<LibraryItem?>(null) }
-    val currentAppInfoList by rememberUpdatedState(state.appInfoList)
+    var settledBackdropItem by remember { mutableStateOf<LibraryCard?>(null) }
+    val currentAppInfoList by rememberUpdatedState(state.cards)
     LaunchedEffect(listState) {
         var pendingUpdate: Job? = null
         var lastSettledIndex = -1
@@ -383,12 +382,12 @@ internal fun LibraryCarouselPane(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 LibraryDynamicBackdrop(
-                    appInfo = settledBackdropItem,
+                    card = settledBackdropItem,
                     imageRefreshCounter = state.imageRefreshCounter,
                     modifier = Modifier.fillMaxSize(),
                 )
 
-                if (state.appInfoList.isNotEmpty()) {
+                if (state.cards.isNotEmpty()) {
                     val flingBehavior = rememberSnapFlingBehavior(lazyListState = listState)
 
                     LazyRow(
@@ -407,10 +406,10 @@ internal fun LibraryCarouselPane(
                         ),
                     ) {
                         items(
-                            count = state.appInfoList.size,
-                            key = { listIndex -> state.appInfoList[listIndex].appId },
+                            count = state.cards.size,
+                            key = { listIndex -> state.cards[listIndex].composeKey },
                         ) { listIndex ->
-                            val item = state.appInfoList[listIndex]
+                            val item = state.cards[listIndex]
 
                             val tiltInputState = remember(listIndex) {
                                 derivedStateOf {
@@ -518,28 +517,26 @@ internal fun LibraryCarouselPane(
                                     ) {
                                         AppItem(
                                             modifier = appItemModifier,
-                                            appInfo = item,
+                                            card = item,
                                             onClick = {
                                                 onFocusedIndexChanged(listIndex)
-                                                onNavigate(item.appId)
+                                                onNavigate(item)
                                             },
                                             onFocus = {
                                                 onFocusedIndexChanged(listIndex)
                                             },
                                             paneType = PaneType.GRID_CAPSULE,
                                             imageRefreshCounter = state.imageRefreshCounter,
-                                            compatibilityStatus = state.compatibilityMap[item.name],
-                                            gameStats = state.statsFor(item),
                                             showFocusGlow = false,
                                             enableFocusScale = false,
-                                            animateStats = item.appId == settledBackdropItem?.appId,
+                                            animateStats = item.composeKey == settledBackdropItem?.composeKey,
                                         )
                                     }
                                 }
                             }
                         }
 
-                        if (state.appInfoList.size < state.totalAppsInFilter) {
+                        if (state.cards.size < state.totalAppsInFilter) {
                             item {
                                 Box(
                                     modifier = Modifier

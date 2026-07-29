@@ -51,8 +51,8 @@ import app.gamenative.service.epic.EpicService
 import app.gamenative.service.gog.GOGService
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.component.Scrollbar
+import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryState
-import app.gamenative.ui.data.statsFor
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.internal.fakeAppInfo
 import app.gamenative.ui.theme.PluviaTheme
@@ -119,7 +119,7 @@ internal fun LibraryListPane(
     firstGridItemFocusRequester: FocusRequester? = null,
     focusTargetListIndex: Int? = null,
     onPageChange: (Int) -> Unit,
-    onNavigate: (String) -> Unit,
+    onNavigate: (LibraryCard) -> Unit,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -169,13 +169,13 @@ internal fun LibraryListPane(
     val horizontalPadding = AdaptivePadding.horizontal()
     val gridSpacing = AdaptivePadding.gridSpacing()
 
-    LaunchedEffect(listState, state.appInfoList.size) {
+    LaunchedEffect(listState, state.cards.size) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .filterNotNull()
             .distinctUntilChanged()
             .collect { lastVisibleIndex ->
-                if (lastVisibleIndex >= state.appInfoList.lastIndex &&
-                    state.appInfoList.size < state.totalAppsInFilter
+                if (lastVisibleIndex >= state.cards.lastIndex &&
+                    state.cards.size < state.totalAppsInFilter
                 ) {
                     onPageChange(1)
                 }
@@ -206,11 +206,11 @@ internal fun LibraryListPane(
                 label = "skeletonFadeOut",
             )
 
-            LaunchedEffect(state.isLoading, state.appInfoList.size, state.totalAppsInFilter) {
+            LaunchedEffect(state.isLoading, state.cards.size, state.totalAppsInFilter) {
                 shouldShowSkeletonOverlay = when {
                     state.totalAppsInFilter == 0 -> false
-                    state.isLoading && state.appInfoList.isEmpty() -> true
-                    state.appInfoList.isNotEmpty() && !state.isLoading -> {
+                    state.isLoading && state.cards.isEmpty() -> true
+                    state.cards.isNotEmpty() && !state.isLoading -> {
                         delay(100)
                         false
                     }
@@ -229,7 +229,7 @@ internal fun LibraryListPane(
                 if (total == 0) 6 else minOf(total, 20)
             }
 
-            if (state.appInfoList.isNotEmpty()) {
+            if (state.cards.isNotEmpty()) {
                 Scrollbar(
                     listState = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -253,10 +253,10 @@ internal fun LibraryListPane(
                             ),
                         ) {
                             items(
-                                count = state.appInfoList.size,
-                                key = { listIndex -> state.appInfoList[listIndex].appId },
+                                count = state.cards.size,
+                                key = { listIndex -> state.cards[listIndex].composeKey },
                             ) { listIndex ->
-                                val item = state.appInfoList[listIndex]
+                                val item = state.cards[listIndex]
                                 val animateFade = remember(item.index) { !listState.isScrollInProgress }
                                 var isVisible by remember(item.index) { mutableStateOf(!animateFade) }
                                 val alpha by animateFloatAsState(
@@ -290,17 +290,15 @@ internal fun LibraryListPane(
                                     }
                                     AppItem(
                                         modifier = appItemModifier,
-                                        appInfo = item,
-                                        onClick = { onNavigate(item.appId) },
+                                        card = item,
+                                        onClick = { onNavigate(item) },
                                         paneType = currentLayout,
                                         onFocus = { targetOfScroll = item.index },
                                         imageRefreshCounter = state.imageRefreshCounter,
-                                        compatibilityStatus = state.compatibilityMap[item.name],
-                                        gameStats = state.statsFor(item),
                                     )
                                 }
                             }
-                            if (state.appInfoList.size < state.totalAppsInFilter) {
+                            if (state.cards.size < state.totalAppsInFilter) {
                                 item {
                                     Box(
                                         modifier = Modifier
@@ -364,14 +362,16 @@ private fun Preview_LibraryListPane() {
     PrefManager.init(context)
     val state = remember {
         LibraryState(
-            appInfoList = List(15) { idx ->
+            cards = List(15) { idx ->
                 val item = fakeAppInfo(idx)
-                LibraryItem(
-                    index = idx,
-                    appId = "${GameSource.STEAM.name}_${item.id}",
-                    name = item.name,
-                    iconHash = item.iconHash,
-                    isShared = idx % 2 == 0,
+                LibraryCard.fromSource(
+                    LibraryItem(
+                        index = idx,
+                        appId = "${GameSource.STEAM.name}_${item.id}",
+                        name = item.name,
+                        iconHash = item.iconHash,
+                        isShared = idx % 2 == 0,
+                    ),
                 )
             },
         )

@@ -56,12 +56,11 @@ import androidx.compose.ui.unit.dp
 import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
-import app.gamenative.data.LibraryItem
+import app.gamenative.ui.data.LibraryCard
 import app.gamenative.data.gog.GogRecommendationsRepository
 import app.gamenative.ui.component.CompatibilityBadge
 import app.gamenative.ui.component.GameStatsRow
 import app.gamenative.ui.component.focusRing
-import app.gamenative.ui.data.GameCardStats
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.theme.PluviaTheme
 import app.gamenative.ui.util.ListItemImage
@@ -78,7 +77,7 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun GridViewCard(
     modifier: Modifier,
-    appInfo: LibraryItem,
+    card: LibraryCard,
     onClick: () -> Unit,
     onFocus: () -> Unit,
     isFocused: Boolean,
@@ -89,8 +88,6 @@ internal fun GridViewCard(
     hideText: Boolean,
     imageAlpha: Float,
     onImageLoadFailed: () -> Unit,
-    compatibilityStatus: GameCompatibilityStatus?,
-    gameStats: GameCardStats?,
     showFocusGlow: Boolean,
     context: Context,
     animateStats: Boolean = true,
@@ -153,7 +150,7 @@ internal fun GridViewCard(
                 containerColor = Color.Transparent,
             ),
             border = when {
-                appInfo.isRecommended -> BorderStroke(
+                card.isRecommended -> BorderStroke(
                     1.dp,
                     MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
                 )
@@ -162,27 +159,30 @@ internal fun GridViewCard(
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 // Game image (primary + optional fallback for Steam header/hero)
-                val imageUrls = if (appInfo.gameSource == GameSource.CUSTOM_GAME) {
+                val sourceItem = card.sourceItemOrNull()
+                val imageUrls = if (
+                    card.orderedSources.firstOrNull() == GameSource.CUSTOM_GAME && sourceItem != null
+                ) {
                     produceState(
                         initialValue = GridImageUrls("", ""),
-                        key1 = appInfo.appId,
+                        key1 = card.composeKey,
                         key2 = paneType,
                         key3 = imageRefreshCounter,
                     ) {
                         value = withContext(Dispatchers.IO) {
-                            getGridImageUrl(context, appInfo, paneType)
+                            getGridImageUrl(context, card, paneType)
                         }
                     }.value
                 } else {
-                    remember(appInfo.appId, paneType, imageRefreshCounter) {
-                        getGridImageUrl(context, appInfo, paneType)
+                    remember(card.composeKey, paneType, imageRefreshCounter) {
+                        getGridImageUrl(context, card, paneType)
                     }
                 }
 
                 var currentImageUrl by remember(
                     imageUrls.primary,
                     imageUrls.fallback,
-                    appInfo.appId,
+                    card.composeKey,
                     imageRefreshCounter,
                 ) {
                     mutableStateOf(imageUrls.primary)
@@ -195,10 +195,10 @@ internal fun GridViewCard(
                     )
                 }
 
-                val gridHeroZoom = if (!isCapsule && appInfo.gridHeroImageScale != 1f) {
+                val gridHeroZoom = if (!isCapsule && card.gridHeroImageScale != 1f) {
                     Modifier.graphicsLayer {
-                        scaleX = appInfo.gridHeroImageScale
-                        scaleY = appInfo.gridHeroImageScale
+                        scaleX = card.gridHeroImageScale
+                        scaleY = card.gridHeroImageScale
                         transformOrigin = TransformOrigin.Center
                     }
                 } else {
@@ -231,7 +231,7 @@ internal fun GridViewCard(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = appInfo.name,
+                            text = card.name,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -267,7 +267,7 @@ internal fun GridViewCard(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = appInfo.name,
+                            text = card.name,
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontWeight = FontWeight.SemiBold,
                             ),
@@ -277,12 +277,12 @@ internal fun GridViewCard(
                             modifier = Modifier.weight(1f),
                         )
 
-                        GridStatusIcons(appInfo = appInfo)
+                        GridStatusIcons(card = card)
                     }
 
-                    if (appInfo.isRecommended && appInfo.recStoreCard && appInfo.recPrice != null) {
+                    if (card.isRecommended && card.recStoreCard && card.recPrice != null) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            appInfo.recBasePrice?.let { base ->
+                            card.recBasePrice?.let { base ->
                                 Text(
                                     text = base,
                                     style = MaterialTheme.typography.labelSmall.copy(
@@ -292,17 +292,17 @@ internal fun GridViewCard(
                                 )
                             }
                             Text(
-                                text = appInfo.recPrice,
+                                text = card.recPrice,
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White,
-                                modifier = if (appInfo.recBasePrice != null) Modifier.padding(start = 6.dp) else Modifier,
+                                modifier = if (card.recBasePrice != null) Modifier.padding(start = 6.dp) else Modifier,
                             )
                         }
                     }
 
-                    if (!appInfo.isFeatured) {
+                    if (!card.isFeatured) {
                         GameStatsRow(
-                            stats = gameStats,
+                            stats = card.gameStats,
                             tint = Color.White.copy(alpha = 0.55f),
                             animate = animateStats,
                         )
@@ -310,15 +310,15 @@ internal fun GridViewCard(
                 }
 
                 // Top-left: Featured badge, GOG rating (store rec), or Recommended/compat badge
-                if (appInfo.isFeatured) {
+                if (card.isFeatured) {
                     FeaturedBadge(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .padding(top = topOverlayPadding, start = topOverlayPadding),
                     )
-                } else if (appInfo.isRecommended && appInfo.recStoreCard) {
-                    val productId = appInfo.recommendedGameId.toLongOrNull()
-                    val rating by produceState(initialValue = appInfo.recRating, productId) {
+                } else if (card.isRecommended && card.recStoreCard) {
+                    val productId = card.recommendedGameId.toLongOrNull()
+                    val rating by produceState(initialValue = card.recRating, productId) {
                         if (value == null && productId != null) {
                             value = GogRecommendationsRepository.getRating(productId)
                         }
@@ -332,10 +332,10 @@ internal fun GridViewCard(
                         )
                     }
                 } else {
-                    val badgeStatus = if (appInfo.isRecommended) {
+                    val badgeStatus = if (card.isRecommended) {
                         GameCompatibilityStatus.RECOMMENDED
                     } else {
-                        compatibilityStatus
+                        card.compatibilityStatus
                     }
                     badgeStatus?.let { status ->
                         CompatibilityBadge(
@@ -349,24 +349,26 @@ internal fun GridViewCard(
                 }
 
                 // Top-right: seed-game badge (store rec), source icon for normal cards
-                if (appInfo.isRecommended && appInfo.recStoreCard) {
-                    if (!appInfo.recSeedIconUrl.isNullOrBlank() || appInfo.recSeedCount >= 2) {
+                if (card.isRecommended && card.recStoreCard) {
+                    if (!card.recSeedIconUrl.isNullOrBlank() || card.recSeedCount >= 2) {
                         RecSimilarBadge(
-                            iconUrl = appInfo.recSeedIconUrl,
-                            extraCount = (appInfo.recSeedCount - 1).coerceAtLeast(0),
+                            iconUrl = card.recSeedIconUrl,
+                            extraCount = (card.recSeedCount - 1).coerceAtLeast(0),
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
                                 .padding(top = topOverlayPadding, end = topOverlayPadding),
                         )
                     }
-                } else if (!appInfo.isRecommended) {
-                    GameSourceIcon(
-                        gameSource = appInfo.gameSource,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = topIconPadding, end = topIconPadding),
-                        iconSize = if (isCapsule) 14 else 12,
-                    )
+                } else if (!card.isRecommended) {
+                    card.orderedSources.firstOrNull()?.let { source ->
+                        GameSourceIcon(
+                            gameSource = source,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = topIconPadding, end = topIconPadding),
+                            iconSize = if (isCapsule) 14 else 12,
+                        )
+                    }
                 }
             }
         }
@@ -505,8 +507,8 @@ private fun RecSimilarBadge(iconUrl: String?, extraCount: Int, modifier: Modifie
  * Status icons for grid view (installed, family share).
  */
 @Composable
-private fun GridStatusIcons(appInfo: LibraryItem) {
-    val isInstalled = appInfo.isInstalled
+private fun GridStatusIcons(card: LibraryCard) {
+    val isInstalled = card.isInstalled
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -528,7 +530,7 @@ private fun GridStatusIcons(appInfo: LibraryItem) {
                 )
             }
         }
-        if (appInfo.isShared) {
+        if (card.isShared) {
             Box(
                 modifier = Modifier
                     .size(20.dp)
@@ -568,12 +570,15 @@ private fun getGridContentScale(paneType: PaneType): ContentScale {
  */
 internal fun getGridImageUrl(
     context: Context,
-    appInfo: LibraryItem,
+    card: LibraryCard,
     paneType: PaneType,
 ): GridImageUrls {
+    val source = card.orderedSources.firstOrNull()
+    val sourceAppId = card.sourceItemOrNull()?.appId
+
     fun findSteamGridDBImage(imageType: String): String? {
-        if (appInfo.gameSource == GameSource.CUSTOM_GAME) {
-            val gameFolderPath = CustomGameScanner.getFolderPathFromAppId(appInfo.appId)
+        if (source == GameSource.CUSTOM_GAME && sourceAppId != null) {
+            val gameFolderPath = CustomGameScanner.getFolderPathFromAppId(sourceAppId)
             gameFolderPath?.let { path ->
                 val folder = File(path)
                 val imageFile = folder.listFiles()?.firstOrNull { file ->
@@ -590,56 +595,66 @@ internal fun getGridImageUrl(
         return null
     }
 
-    return when (appInfo.gameSource) {
+    return when (source) {
         GameSource.CUSTOM_GAME -> {
-            val primary = when (paneType) {
-                PaneType.GRID_CAPSULE ->
-                    // Capsule (vertical): user "coverv"/"cover" wins over SteamGridDB capsule.
-                    CustomGameScanner.findCapsuleCoverForCustomGame(appInfo.appId)
-                        ?: findSteamGridDBImage("grid_capsule")
-                        ?: appInfo.capsuleImageUrl
-                PaneType.GRID_HERO ->
-                    // Hero (horizontal): user "coverh"/"cover" wins over SteamGridDB hero.
-                    CustomGameScanner.findHeroCoverForCustomGame(appInfo.appId)
-                        ?: findSteamGridDBImage("grid_hero")
-                        ?: appInfo.headerImageUrl
-                else -> {
-                    // Default/carousel banner is also a horizontal hero view.
-                    val heroCover = CustomGameScanner.findHeroCoverForCustomGame(appInfo.appId)
-                    val gameFolderPath = CustomGameScanner.getFolderPathFromAppId(appInfo.appId)
-                    val heroUrl = gameFolderPath?.let { path ->
-                        val folder = File(path)
-                        val heroFile = folder.listFiles()?.firstOrNull { file ->
-                            file.name.startsWith("steamgriddb_hero") &&
-                                !file.name.contains("grid") &&
-                                (
-                                    file.name.endsWith(".png", ignoreCase = true) ||
-                                        file.name.endsWith(".jpg", ignoreCase = true) ||
-                                        file.name.endsWith(".webp", ignoreCase = true)
-                                    )
-                        }
-                        heroFile?.let { android.net.Uri.fromFile(it).toString() }
+            if (sourceAppId == null) {
+                val primary = when (paneType) {
+                    PaneType.GRID_CAPSULE -> card.capsuleImageUrl.ifEmpty { card.iconUrl }
+                    else -> card.headerImageUrl.ifEmpty {
+                        card.heroImageUrl.ifEmpty { card.iconUrl }
                     }
-                    heroCover ?: heroUrl ?: appInfo.headerImageUrl
                 }
+                GridImageUrls(primary = primary)
+            } else {
+                val primary = when (paneType) {
+                    PaneType.GRID_CAPSULE ->
+                        // Capsule (vertical): user "coverv"/"cover" wins over SteamGridDB capsule.
+                        CustomGameScanner.findCapsuleCoverForCustomGame(sourceAppId)
+                            ?: findSteamGridDBImage("grid_capsule")
+                            ?: card.capsuleImageUrl
+                    PaneType.GRID_HERO ->
+                        // Hero (horizontal): user "coverh"/"cover" wins over SteamGridDB hero.
+                        CustomGameScanner.findHeroCoverForCustomGame(sourceAppId)
+                            ?: findSteamGridDBImage("grid_hero")
+                            ?: card.headerImageUrl
+                    else -> {
+                        // Default/carousel banner is also a horizontal hero view.
+                        val heroCover = CustomGameScanner.findHeroCoverForCustomGame(sourceAppId)
+                        val gameFolderPath = CustomGameScanner.getFolderPathFromAppId(sourceAppId)
+                        val heroUrl = gameFolderPath?.let { path ->
+                            val folder = File(path)
+                            val heroFile = folder.listFiles()?.firstOrNull { file ->
+                                file.name.startsWith("steamgriddb_hero") &&
+                                    !file.name.contains("grid") &&
+                                    (
+                                        file.name.endsWith(".png", ignoreCase = true) ||
+                                            file.name.endsWith(".jpg", ignoreCase = true) ||
+                                            file.name.endsWith(".webp", ignoreCase = true)
+                                        )
+                            }
+                            heroFile?.let { android.net.Uri.fromFile(it).toString() }
+                        }
+                        heroCover ?: heroUrl ?: card.headerImageUrl
+                    }
+                }
+                GridImageUrls(primary = primary)
             }
-            GridImageUrls(primary = primary)
         }
 
         GameSource.GOG, GameSource.EPIC, GameSource.AMAZON -> {
             val primary = when (paneType) {
-                PaneType.GRID_CAPSULE -> appInfo.capsuleImageUrl.ifEmpty { appInfo.iconHash }
-                else -> appInfo.headerImageUrl.ifEmpty {
-                    appInfo.heroImageUrl.ifEmpty { appInfo.iconHash }
+                PaneType.GRID_CAPSULE -> card.capsuleImageUrl.ifEmpty { card.iconUrl }
+                else -> card.headerImageUrl.ifEmpty {
+                    card.heroImageUrl.ifEmpty { card.iconUrl }
                 }
             }
             val fallback = when {
                 paneType == PaneType.GRID_CAPSULE ->
-                    appInfo.iconHash.takeIf { it.isNotEmpty() && it != primary } ?: ""
-                appInfo.heroImageUrl.isNotEmpty() && appInfo.heroImageUrl != primary ->
-                    appInfo.heroImageUrl
-                appInfo.iconHash.isNotEmpty() && appInfo.iconHash != primary ->
-                    appInfo.iconHash
+                    card.iconUrl.takeIf { it.isNotEmpty() && it != primary } ?: ""
+                card.heroImageUrl.isNotEmpty() && card.heroImageUrl != primary ->
+                    card.heroImageUrl
+                card.iconUrl.isNotEmpty() && card.iconUrl != primary ->
+                    card.iconUrl
                 else -> ""
             }
             GridImageUrls(primary = primary, fallback = fallback)
@@ -647,12 +662,22 @@ internal fun getGridImageUrl(
 
         GameSource.STEAM -> when (paneType) {
             PaneType.GRID_CAPSULE ->
-                GridImageUrls(primary = appInfo.capsuleImageUrl)
+                GridImageUrls(primary = card.capsuleImageUrl)
             else ->
                 GridImageUrls(
-                    primary = appInfo.headerImageUrl,
-                    fallback = appInfo.heroImageUrl,
+                    primary = card.headerImageUrl,
+                    fallback = card.heroImageUrl,
                 )
+        }
+
+        null -> {
+            val primary = when (paneType) {
+                PaneType.GRID_CAPSULE -> card.capsuleImageUrl.ifEmpty { card.iconUrl }
+                else -> card.headerImageUrl.ifEmpty {
+                    card.heroImageUrl.ifEmpty { card.iconUrl }
+                }
+            }
+            GridImageUrls(primary = primary)
         }
     }
 }

@@ -42,12 +42,12 @@ import androidx.compose.ui.unit.dp
 import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
-import app.gamenative.data.LibraryItem
+import app.gamenative.ui.data.LibraryCard
+import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.service.SteamService
 import app.gamenative.ui.component.CompatibilityBadge
 import app.gamenative.ui.component.GameStatsRow
 import app.gamenative.ui.component.focusRing
-import app.gamenative.ui.data.GameCardStats
 import app.gamenative.ui.util.ListItemImage
 import app.gamenative.utils.CustomGameScanner
 import kotlinx.coroutines.Dispatchers
@@ -59,14 +59,12 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun ListViewCard(
     modifier: Modifier,
-    appInfo: LibraryItem,
+    card: LibraryCard,
     onClick: () -> Unit,
     onFocus: () -> Unit,
     isFocused: Boolean,
     onFocusChanged: (Boolean) -> Unit,
     isRefreshing: Boolean,
-    compatibilityStatus: GameCompatibilityStatus?,
-    gameStats: GameCardStats?,
     context: Context,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -101,7 +99,7 @@ internal fun ListViewCard(
             },
         ),
         border = when {
-            appInfo.isRecommended -> BorderStroke(
+            card.isRecommended -> BorderStroke(
                 1.dp,
                 MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
             )
@@ -117,12 +115,12 @@ internal fun ListViewCard(
         ) {
             // Game icon
             val iconUrl by produceState(
-                initialValue = appInfo.clientIconUrl,
-                key1 = appInfo.appId,
-                key2 = appInfo.clientIconUrl,
+                initialValue = card.iconUrl,
+                key1 = card.composeKey,
+                key2 = card.iconUrl,
             ) {
                 value = withContext(Dispatchers.IO) {
-                    getListIconUrl(context, appInfo)
+                    getListIconUrl(context, card)
                 }
             }
 
@@ -145,7 +143,7 @@ internal fun ListViewCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = appInfo.name,
+                    text = card.name,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -158,10 +156,10 @@ internal fun ListViewCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    InstallStatusBadge(appInfo = appInfo, isRefreshing = isRefreshing)
+                    InstallStatusBadge(card = card, isRefreshing = isRefreshing)
 
                     // Family share indicator
-                    if (appInfo.isShared) {
+                    if (card.isShared) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -182,15 +180,15 @@ internal fun ListViewCard(
                 }
 
                 GameStatsRow(
-                    stats = gameStats,
+                    stats = card.gameStats,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                 )
             }
 
-            val badgeStatus = if (appInfo.isRecommended) {
+            val badgeStatus = if (card.isRecommended) {
                 GameCompatibilityStatus.RECOMMENDED
             } else {
-                compatibilityStatus
+                card.compatibilityStatus
             }
             badgeStatus?.let { status ->
                 CompatibilityBadge(
@@ -208,30 +206,37 @@ internal fun ListViewCard(
  */
 @Composable
 private fun InstallStatusBadge(
-    appInfo: LibraryItem,
+    card: LibraryCard,
     isRefreshing: Boolean,
 ) {
-    val isSteam = appInfo.gameSource == GameSource.STEAM
-    val downloadInfo = remember(appInfo.appId) {
-        if (isSteam) SteamService.getAppDownloadInfo(appInfo.gameId) else null
+    val sourceItem = card.sourceItemOrNull()
+    val steamGameId = when {
+        sourceItem?.gameSource == GameSource.STEAM -> sourceItem.gameId
+        card.identity is LibraryCardIdentity.Promotion &&
+            card.orderedSources.firstOrNull() == GameSource.STEAM -> 0
+        else -> null
+    }
+    val isSteam = steamGameId != null
+    val downloadInfo = remember(card.composeKey) {
+        if (steamGameId != null) SteamService.getAppDownloadInfo(steamGameId) else null
     }
     var downloadProgress by remember(downloadInfo) {
         mutableFloatStateOf(downloadInfo?.getProgress() ?: 0f)
     }
     val isDownloading = downloadInfo != null && downloadProgress < 1f
-    var isInstalled by remember(appInfo.appId) {
+    var isInstalled by remember(card.composeKey) {
         mutableStateOf(
-            if (isSteam) {
-                SteamService.isAppInstalled(appInfo.gameId)
+            if (steamGameId != null) {
+                SteamService.isAppInstalled(steamGameId)
             } else {
-                true // Custom Games always installed
+                card.isInstalled
             },
         )
     }
 
     LaunchedEffect(isRefreshing) {
-        if (!isRefreshing && isSteam) {
-            isInstalled = SteamService.isAppInstalled(appInfo.gameId)
+        if (!isRefreshing && steamGameId != null) {
+            isInstalled = SteamService.isAppInstalled(steamGameId)
         }
     }
 
@@ -273,16 +278,17 @@ private fun InstallStatusBadge(
 /**
  * Gets the icon URL for a game in list view.
  */
-private fun getListIconUrl(context: Context, appInfo: LibraryItem): String {
-    if (appInfo.isRecommended) return appInfo.iconHash
-    return if (appInfo.gameSource == GameSource.CUSTOM_GAME) {
-        val path = CustomGameScanner.findIconFileForCustomGame(context, appInfo.appId)
+private fun getListIconUrl(context: Context, card: LibraryCard): String {
+    if (card.isRecommended) return card.iconUrl
+    val sourceItem = card.sourceItemOrNull()
+    return if (sourceItem?.gameSource == GameSource.CUSTOM_GAME) {
+        val path = CustomGameScanner.findIconFileForCustomGame(context, sourceItem.appId)
         if (!path.isNullOrEmpty()) {
             if (path.startsWith("file://")) path else "file://$path"
         } else {
-            appInfo.clientIconUrl
+            card.iconUrl
         }
     } else {
-        appInfo.clientIconUrl
+        card.iconUrl
     }
 }

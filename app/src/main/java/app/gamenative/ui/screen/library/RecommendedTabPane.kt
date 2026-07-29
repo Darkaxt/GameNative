@@ -26,7 +26,10 @@ import app.gamenative.R
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.gog.GogRecCard
+import app.gamenative.ui.data.LibraryCard
+import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.data.LibraryState
+import app.gamenative.ui.data.statsFor
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.model.GogRecommendationsViewModel
@@ -98,13 +101,21 @@ fun RecommendedTabPane(
         }
     }
     val recState = remember(items, state.compatibilityMap, state.deviceGameStats, state.gpuGameStats) {
-        LibraryState(
-            appInfoList = items,
-            totalAppsInFilter = items.size,
+        val baseState = LibraryState(
             appInfoSortType = EnumSet.of(AppFilter.GAME),
             compatibilityMap = state.compatibilityMap,
             deviceGameStats = state.deviceGameStats,
             gpuGameStats = state.gpuGameStats,
+        )
+        baseState.copy(
+            cards = items.map { item ->
+                LibraryCard.fromPromotion(
+                    item = item,
+                    compatibilityStatus = baseState.compatibilityMap[item.name],
+                    gameStats = baseState.statsFor(item),
+                )
+            },
+            totalAppsInFilter = items.size,
         )
     }
 
@@ -130,7 +141,10 @@ fun RecommendedTabPane(
                     state = recState,
                     listState = listState,
                     onPageChange = {},
-                    onNavigate = { appId -> items.find { it.appId == appId }?.let(onNavigate) },
+                    onNavigate = { card ->
+                        val promotionId = (card.identity as? LibraryCardIdentity.Promotion)?.id
+                        items.find { item -> item.appId == promotionId }?.let(onNavigate)
+                    },
                     onRefresh = { viewModel.refresh() },
                     modifier = Modifier.fillMaxSize(),
                     firstCarouselItemFocusRequester = firstCarouselItemFocusRequester,
@@ -145,7 +159,10 @@ fun RecommendedTabPane(
                     listState = gridState,
                     currentLayout = currentPaneType,
                     onPageChange = {},
-                    onNavigate = { appId -> items.find { it.appId == appId }?.let(onNavigate) },
+                    onNavigate = { card ->
+                        val promotionId = (card.identity as? LibraryCardIdentity.Promotion)?.id
+                        items.find { item -> item.appId == promotionId }?.let(onNavigate)
+                    },
                     onRefresh = { viewModel.refresh() },
                     modifier = Modifier.fillMaxSize(),
                     firstGridItemFocusRequester = firstGridItemFocusRequester,

@@ -24,7 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import app.gamenative.R
-import app.gamenative.data.LibraryItem
+import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.theme.PluviaTheme
 import com.skydoves.landscapist.ImageOptions
@@ -36,7 +36,7 @@ private val DYNAMIC_BACKDROP_BLUR_RADIUS = 7.dp
 
 @Composable
 internal fun LibraryDynamicBackdrop(
-    appInfo: LibraryItem?,
+    card: LibraryCard?,
     imageRefreshCounter: Long,
     modifier: Modifier = Modifier,
 ) {
@@ -60,14 +60,14 @@ internal fun LibraryDynamicBackdrop(
             ),
     ) {
         Crossfade(
-            targetState = appInfo,
+            targetState = card,
             animationSpec = tween(durationMillis = 500),
             label = "backdrop_fade",
         ) { targetInfo ->
             if (targetInfo != null) {
                 val imageUrls by produceState(
                     initialValue = GridImageUrls("", ""),
-                    key1 = targetInfo.appId,
+                    key1 = targetInfo.composeKey,
                     key2 = imageRefreshCounter,
                 ) {
                     value = withContext(Dispatchers.IO) {
@@ -78,7 +78,7 @@ internal fun LibraryDynamicBackdrop(
                 var currentImageUrl by remember(
                     imageUrls.primary,
                     imageUrls.fallback,
-                    targetInfo.appId,
+                    targetInfo.composeKey,
                     imageRefreshCounter,
                 ) {
                     mutableStateOf(imageUrls.primary.ifEmpty { imageUrls.fallback })
