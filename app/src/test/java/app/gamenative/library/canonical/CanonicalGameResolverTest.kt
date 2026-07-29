@@ -227,34 +227,91 @@ class CanonicalGameResolverTest {
     }
 
     @Test
-    fun currentAutomaticRelationIsReusedWithoutReevaluation() = runTest {
-        val selected = canonical(index = 1, title = "Original", steamAppId = null)
-        val copy = copy(displayName = "Changed title", developer = "Changed developer")
+    fun currentAutomaticRelationIsReevaluatedWithoutNoOpChurn() = runTest {
+        val standalone = canonical(
+            index = 1,
+            title = "Control",
+            steamAppId = null,
+            source = GameSource.GOG,
+            developer = "Remedy Entertainment",
+            year = 2019,
+        )
+        val ownedCopy = copy()
         val stored = match(
-            copy = copy,
-            canonicalId = selected.canonicalId,
+            copy = ownedCopy,
+            canonicalId = standalone.canonicalId,
             method = MatchMethod.UNMATCHED,
             confidence = MatchConfidence.UNMATCHED,
             resolverVersion = CURRENT_RESOLVER_VERSION,
             matchedAt = 123,
             isPresent = false,
         )
+        var providerCalls = 0
         val idGenerator = SequentialIdGenerator()
         val resolver = resolver(
-            canonicals = listOf(selected),
+            canonicals = listOf(standalone),
             matches = listOf(stored),
-            providers = setOf(TrustedSteamMappingProvider { error("Current relation must win") }),
+            providers = setOf(
+                TrustedSteamMappingProvider {
+                    providerCalls++
+                    null
+                },
+            ),
             idGenerator = idGenerator,
         )
 
-        val result = resolver.resolve(copy, nowEpochMs = 2_000)
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
 
-        assertEquals(selected, result.canonical)
-        assertEquals(selected.canonicalId, result.match.canonicalId)
+        assertEquals(standalone, result.canonical)
+        assertEquals(standalone.canonicalId, result.match.canonicalId)
+        assertEquals(MatchMethod.UNMATCHED, result.match.matchMethod)
+        assertEquals(MatchConfidence.UNMATCHED, result.match.confidence)
         assertEquals(123, result.match.matchedAt)
         assertTrue(result.match.isPresent)
-        assertEquals("changed title", result.match.evidenceTitleKey)
+        assertEquals(1, providerCalls)
         assertEquals(0, idGenerator.generatedCount)
+    }
+
+    @Test
+    fun currentAutomaticUnmatchedRelationUsesNewIndependentCandidate() = runTest {
+        val standalone = canonical(
+            index = 1,
+            title = "Control",
+            steamAppId = null,
+            source = GameSource.GOG,
+            developer = "Remedy Entertainment",
+            year = 2019,
+        )
+        val steamCandidate = canonical(
+            index = 2,
+            title = "Control",
+            steamAppId = 870780,
+            developer = "Remedy Entertainment",
+            year = 2019,
+        )
+        val ownedCopy = copy()
+        val resolver = resolver(
+            canonicals = listOf(standalone, steamCandidate),
+            matches = listOf(
+                match(
+                    copy = ownedCopy,
+                    canonicalId = standalone.canonicalId,
+                    method = MatchMethod.UNMATCHED,
+                    confidence = MatchConfidence.UNMATCHED,
+                    resolverVersion = CURRENT_RESOLVER_VERSION,
+                    matchedAt = 123,
+                ),
+            ),
+        )
+
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
+
+        assertEquals(steamCandidate.canonicalId, result.canonical.canonicalId)
+        assertEquals(MatchMethod.EXACT_METADATA, result.match.matchMethod)
+        assertEquals(MatchConfidence.HIGH, result.match.confidence)
+        assertEquals(870780, result.match.candidateSteamAppId)
+        assertEquals(2_000, result.match.matchedAt)
+        assertFalse(result.createdCanonical)
     }
 
     @Test

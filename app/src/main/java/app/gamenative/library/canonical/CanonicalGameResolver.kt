@@ -89,156 +89,153 @@ class CanonicalGameResolver @Inject constructor(
             )
         }
 
-        if (
-            existingMatch?.decisionSource == MatchDecisionSource.AUTOMATIC &&
-            existingMatch.resolverVersion == CURRENT_RESOLVER_VERSION
-        ) {
-            return existingResolution(
-                existingMatch = existingMatch,
-                copy = copy,
-                evidence = evidence,
-                nowEpochMs = nowEpochMs,
-            )
-        }
-
-        val existingStandaloneCanonical = existingMatch?.let { match ->
-            canonicalGameDao.get(match.canonicalId)?.takeIf {
-                storeMatchDao.countAllReferences(match.canonicalId) == 1
+        val existingStandaloneCanonical = existingMatch
+            ?.takeIf { match ->
+                match.resolverVersion != CURRENT_RESOLVER_VERSION ||
+                    match.confidence == MatchConfidence.UNMATCHED ||
+                    match.confidence == MatchConfidence.REVIEW_REQUIRED
             }
-        }
+            ?.let { match ->
+                canonicalGameDao.get(match.canonicalId)?.takeIf {
+                    storeMatchDao.countAllReferences(match.canonicalId) == 1
+                }
+            }
 
-        val untrustedMappingCandidate = when (val evaluation = evaluateTrustedMappings(copy)) {
-            MappingEvaluation.Conflict -> {
-                return independentResolution(
+        val resolution = run {
+            val untrustedMappingCandidate = when (val evaluation = evaluateTrustedMappings(copy)) {
+                MappingEvaluation.Conflict -> {
+                    return@run independentResolution(
+                        copy = copy,
+                        evidence = evidence,
+                        existingStandaloneCanonical = existingStandaloneCanonical,
+                        method = MatchMethod.OPTIONAL_RESOLVER,
+                        confidence = MatchConfidence.REVIEW_REQUIRED,
+                        candidateSteamAppId = null,
+                        nowEpochMs = nowEpochMs,
+                    )
+                }
+
+                is MappingEvaluation.Candidate -> {
+                    val mapping = evaluation.mapping
+                    val target = canonicalGameDao.findBySteamAppId(mapping.steamAppId)
+                    val mappingIsTrusted =
+                        mapping.validatedOneToOne &&
+                            mapping.mapVersion == SUPPORTED_TRUSTED_MAP_VERSION &&
+                            copy.appType != CanonicalAppType.UNKNOWN
+
+                    if (mappingIsTrusted) {
+                        if (target == null) {
+                            return@run newAcceptedMappingResolution(
+                                copy = copy,
+                                evidence = evidence,
+                                steamAppId = mapping.steamAppId,
+                                nowEpochMs = nowEpochMs,
+                            )
+                        }
+                        if (areKnownTypesCompatible(copy.appType, target.appType)) {
+                            return@run acceptedResolution(
+                                copy = copy,
+                                evidence = evidence,
+                                canonical = target,
+                                method = MatchMethod.TRUSTED_DIRECT_MAP,
+                                confidence = MatchConfidence.VERIFIED,
+                                candidateSteamAppId = mapping.steamAppId,
+                                nowEpochMs = nowEpochMs,
+                            )
+                        }
+                        return@run independentResolution(
+                            copy = copy,
+                            evidence = evidence,
+                            existingStandaloneCanonical = existingStandaloneCanonical,
+                            method = MatchMethod.OPTIONAL_RESOLVER,
+                            confidence = MatchConfidence.REVIEW_REQUIRED,
+                            candidateSteamAppId = mapping.steamAppId,
+                            nowEpochMs = nowEpochMs,
+                        )
+                    }
+                    mapping.steamAppId
+                }
+
+                MappingEvaluation.None -> null
+            }
+
+            val exactCandidates = if (evidence.titleKey.isEmpty()) {
+                emptyList()
+            } else {
+                canonicalGameDao.findByTitleKey(evidence.titleKey)
+                    .filterNot { candidate ->
+                        candidate.canonicalId == existingStandaloneCanonical?.canonicalId
+                    }
+                    .sortedWith(compareBy(CanonicalGameEntity::createdAt, CanonicalGameEntity::canonicalId))
+            }
+
+            val compatibleCandidates = exactCandidates.filter { candidate ->
+                isCompatibleExactMatch(evidence, candidate)
+            }
+            if (compatibleCandidates.size == 1) {
+                val compatibleCandidate = compatibleCandidates.single()
+                return@run acceptedResolution(
+                    copy = copy,
+                    evidence = evidence,
+                    canonical = compatibleCandidate,
+                    method = MatchMethod.EXACT_METADATA,
+                    confidence = MatchConfidence.HIGH,
+                    candidateSteamAppId = compatibleCandidate.steamAppId,
+                    nowEpochMs = nowEpochMs,
+                )
+            }
+            if (compatibleCandidates.size > 1) {
+                return@run independentResolution(
                     copy = copy,
                     evidence = evidence,
                     existingStandaloneCanonical = existingStandaloneCanonical,
-                    method = MatchMethod.OPTIONAL_RESOLVER,
+                    method = MatchMethod.EXACT_METADATA,
                     confidence = MatchConfidence.REVIEW_REQUIRED,
                     candidateSteamAppId = null,
                     nowEpochMs = nowEpochMs,
                 )
             }
 
-            is MappingEvaluation.Candidate -> {
-                val mapping = evaluation.mapping
-                val target = canonicalGameDao.findBySteamAppId(mapping.steamAppId)
-                val mappingIsTrusted =
-                    mapping.validatedOneToOne &&
-                        mapping.mapVersion == SUPPORTED_TRUSTED_MAP_VERSION &&
-                        copy.appType != CanonicalAppType.UNKNOWN
-
-                if (mappingIsTrusted) {
-                    if (target == null) {
-                        return newAcceptedMappingResolution(
-                            copy = copy,
-                            evidence = evidence,
-                            steamAppId = mapping.steamAppId,
-                            nowEpochMs = nowEpochMs,
-                        )
-                    }
-                    if (areKnownTypesCompatible(copy.appType, target.appType)) {
-                        return acceptedResolution(
-                            copy = copy,
-                            evidence = evidence,
-                            canonical = target,
-                            method = MatchMethod.TRUSTED_DIRECT_MAP,
-                            confidence = MatchConfidence.VERIFIED,
-                            candidateSteamAppId = mapping.steamAppId,
-                            nowEpochMs = nowEpochMs,
-                        )
-                    }
-                    return independentResolution(
-                        copy = copy,
-                        evidence = evidence,
-                        existingStandaloneCanonical = existingStandaloneCanonical,
-                        method = MatchMethod.OPTIONAL_RESOLVER,
-                        confidence = MatchConfidence.REVIEW_REQUIRED,
-                        candidateSteamAppId = mapping.steamAppId,
-                        nowEpochMs = nowEpochMs,
-                    )
-                }
-                mapping.steamAppId
+            val reviewableCandidates = exactCandidates.filter { candidate ->
+                isReviewableExactCandidate(evidence.appType, candidate.appType)
+            }
+            if (reviewableCandidates.isNotEmpty()) {
+                return@run independentResolution(
+                    copy = copy,
+                    evidence = evidence,
+                    existingStandaloneCanonical = existingStandaloneCanonical,
+                    method = MatchMethod.EXACT_METADATA,
+                    confidence = MatchConfidence.REVIEW_REQUIRED,
+                    candidateSteamAppId = reviewableCandidates
+                        .singleOrNull()
+                        ?.steamAppId,
+                    nowEpochMs = nowEpochMs,
+                )
             }
 
-            MappingEvaluation.None -> null
-        }
+            if (untrustedMappingCandidate != null) {
+                return@run independentResolution(
+                    copy = copy,
+                    evidence = evidence,
+                    existingStandaloneCanonical = existingStandaloneCanonical,
+                    method = MatchMethod.OPTIONAL_RESOLVER,
+                    confidence = MatchConfidence.REVIEW_REQUIRED,
+                    candidateSteamAppId = untrustedMappingCandidate,
+                    nowEpochMs = nowEpochMs,
+                )
+            }
 
-        val exactCandidates = if (evidence.titleKey.isEmpty()) {
-            emptyList()
-        } else {
-            canonicalGameDao.findByTitleKey(evidence.titleKey)
-                .filterNot { candidate ->
-                    candidate.canonicalId == existingStandaloneCanonical?.canonicalId
-                }
-                .sortedWith(compareBy(CanonicalGameEntity::createdAt, CanonicalGameEntity::canonicalId))
-        }
-
-        val compatibleCandidates = exactCandidates.filter { candidate ->
-            isCompatibleExactMatch(evidence, candidate)
-        }
-        if (compatibleCandidates.size == 1) {
-            val compatibleCandidate = compatibleCandidates.single()
-            return acceptedResolution(
-                copy = copy,
-                evidence = evidence,
-                canonical = compatibleCandidate,
-                method = MatchMethod.EXACT_METADATA,
-                confidence = MatchConfidence.HIGH,
-                candidateSteamAppId = compatibleCandidate.steamAppId,
-                nowEpochMs = nowEpochMs,
-            )
-        }
-        if (compatibleCandidates.size > 1) {
-            return independentResolution(
+            independentResolution(
                 copy = copy,
                 evidence = evidence,
                 existingStandaloneCanonical = existingStandaloneCanonical,
-                method = MatchMethod.EXACT_METADATA,
-                confidence = MatchConfidence.REVIEW_REQUIRED,
+                method = MatchMethod.UNMATCHED,
+                confidence = MatchConfidence.UNMATCHED,
                 candidateSteamAppId = null,
                 nowEpochMs = nowEpochMs,
             )
         }
-
-        val reviewableCandidates = exactCandidates.filter { candidate ->
-            isReviewableExactCandidate(evidence.appType, candidate.appType)
-        }
-        if (reviewableCandidates.isNotEmpty()) {
-            return independentResolution(
-                copy = copy,
-                evidence = evidence,
-                existingStandaloneCanonical = existingStandaloneCanonical,
-                method = MatchMethod.EXACT_METADATA,
-                confidence = MatchConfidence.REVIEW_REQUIRED,
-                candidateSteamAppId = reviewableCandidates
-                    .singleOrNull()
-                    ?.steamAppId,
-                nowEpochMs = nowEpochMs,
-            )
-        }
-
-        if (untrustedMappingCandidate != null) {
-            return independentResolution(
-                copy = copy,
-                evidence = evidence,
-                existingStandaloneCanonical = existingStandaloneCanonical,
-                method = MatchMethod.OPTIONAL_RESOLVER,
-                confidence = MatchConfidence.REVIEW_REQUIRED,
-                candidateSteamAppId = untrustedMappingCandidate,
-                nowEpochMs = nowEpochMs,
-            )
-        }
-
-        return independentResolution(
-            copy = copy,
-            evidence = evidence,
-            existingStandaloneCanonical = existingStandaloneCanonical,
-            method = MatchMethod.UNMATCHED,
-            confidence = MatchConfidence.UNMATCHED,
-            candidateSteamAppId = null,
-            nowEpochMs = nowEpochMs,
-        )
+        return preserveMatchedAtForUnchangedAutomaticDecision(existingMatch, resolution)
     }
 
     private suspend fun resolveDirectSteam(
@@ -344,6 +341,29 @@ class CanonicalGameResolver @Inject constructor(
                 evidenceAppType = evidence.appType,
             ),
             createdCanonical = false,
+        )
+    }
+
+    private fun preserveMatchedAtForUnchangedAutomaticDecision(
+        existingMatch: StoreMatchEntity?,
+        resolution: CanonicalResolution,
+    ): CanonicalResolution {
+        val resolvedMatch = resolution.match
+        if (
+            existingMatch == null ||
+            existingMatch.decisionSource != MatchDecisionSource.AUTOMATIC ||
+            existingMatch.resolverVersion != CURRENT_RESOLVER_VERSION ||
+            resolvedMatch.decisionSource != MatchDecisionSource.AUTOMATIC ||
+            resolvedMatch.resolverVersion != CURRENT_RESOLVER_VERSION ||
+            existingMatch.canonicalId != resolvedMatch.canonicalId ||
+            existingMatch.candidateSteamAppId != resolvedMatch.candidateSteamAppId ||
+            existingMatch.matchMethod != resolvedMatch.matchMethod ||
+            existingMatch.confidence != resolvedMatch.confidence
+        ) {
+            return resolution
+        }
+        return resolution.copy(
+            match = resolvedMatch.copy(matchedAt = existingMatch.matchedAt),
         )
     }
 
