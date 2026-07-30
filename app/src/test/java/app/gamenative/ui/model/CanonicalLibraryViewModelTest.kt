@@ -32,6 +32,7 @@ import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CanonicalLibraryRepository
 import app.gamenative.library.canonical.CanonicalProjectionReadiness
 import app.gamenative.library.canonical.CanonicalPublicFailure
+import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
@@ -63,11 +64,18 @@ import io.mockk.runs
 import io.mockk.unmockkAll
 import io.mockk.verify
 import java.util.EnumSet
-import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
@@ -102,21 +110,30 @@ class CanonicalLibraryViewModelTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         PrefManager.init(context)
-        PrefManager.canonicalPublicLibraryEnabled = true
-        awaitPreference { PrefManager.canonicalPublicLibraryEnabled }
-        PrefManager.canonicalPublicLibraryEnabled = false
+        if (PrefManager.canonicalPublicLibraryEnabled) {
+            PrefManager.canonicalPublicLibraryEnabled = false
+        }
         if (!PrefManager.showSteamInLibrary) PrefManager.showSteamInLibrary = true
         if (!PrefManager.showCustomGamesInLibrary) PrefManager.showCustomGamesInLibrary = true
         if (!PrefManager.showGOGInLibrary) PrefManager.showGOGInLibrary = true
         if (!PrefManager.showEpicInLibrary) PrefManager.showEpicInLibrary = true
         if (!PrefManager.showAmazonInLibrary) PrefManager.showAmazonInLibrary = true
+        val defaultFilters = filters(AppFilter.GAME)
+        if (PrefManager.libraryFilter != defaultFilters) PrefManager.libraryFilter = defaultFilters
+        if (PrefManager.librarySortOption != SortOption.INSTALLED_FIRST) {
+            PrefManager.librarySortOption = SortOption.INSTALLED_FIRST
+        }
+        if (PrefManager.librarySteamCollections.isNotEmpty()) PrefManager.librarySteamCollections = emptySet()
         awaitPreference {
             !PrefManager.canonicalPublicLibraryEnabled &&
                 PrefManager.showSteamInLibrary &&
                 PrefManager.showCustomGamesInLibrary &&
                 PrefManager.showGOGInLibrary &&
                 PrefManager.showEpicInLibrary &&
-                PrefManager.showAmazonInLibrary
+                PrefManager.showAmazonInLibrary &&
+                PrefManager.libraryFilter == defaultFilters &&
+                PrefManager.librarySortOption == SortOption.INSTALLED_FIRST &&
+                PrefManager.librarySteamCollections.isEmpty()
         }
         scheduler = TestCoroutineScheduler()
         dispatcher = StandardTestDispatcher(scheduler)
@@ -293,6 +310,48 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
+    fun `post-validation projection failures back off before becoming healthy`() = runTest(dispatcher) {
+        val collectionAttempts = AtomicInteger(0)
+        val projectionAttempts = AtomicInteger(0)
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            collectionAttempts.incrementAndGet()
+            MutableStateFlow(listOf(card(name = "Projection Recovery")))
+        }
+        every { GameCompatibilityCache.getCached(any()) } answers {
+            if (projectionAttempts.incrementAndGet() <= 2) {
+                throw IllegalStateException("fixed projection failure")
+            }
+            null
+        }
+        val vm = viewModel(
+            repository = repository,
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        runCurrent()
+
+        assertEquals(1, collectionAttempts.get())
+        assertEquals(CanonicalPublicFailure.ASSEMBLY_FAILED, vm.state.value.canonicalPublicFailure)
+        advanceTimeBy(999)
+        runCurrent()
+        assertEquals(1, collectionAttempts.get())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(2, collectionAttempts.get())
+        advanceTimeBy(1_999)
+        runCurrent()
+        assertEquals(2, collectionAttempts.get())
+        advanceTimeBy(1)
+        runCurrent()
+
+        assertEquals(3, collectionAttempts.get())
+        assertEquals(listOf("Projection Recovery"), vm.state.value.cards.map { it.name })
+        assertNull(vm.state.value.canonicalPublicFailure)
+        viewModelStore.clear()
+    }
+
+    @Test
     fun `canonical cancellation remains cancellation and does not publish fallback`() = runTest(dispatcher) {
         val repository = mockk<CanonicalLibraryRepository>()
         every { repository.observeCards() } returns flow { throw CancellationException("stop") }
@@ -341,6 +400,54 @@ class CanonicalLibraryViewModelTest {
         runCurrent()
         assertEquals(CanonicalPublicFailure.INVALID_CARD_STATE, vm.state.value.canonicalPublicFailure)
         assertTrue(vm.state.value.cards.none { it.name == "Duplicate" })
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `cross-card copy trust and preferred invariants reject the whole canonical list`() = runTest(dispatcher) {
+        val first = card(canonicalId = canonicalId(1), name = "First", copyKeys = listOf(steamKey))
+        val crossCardDuplicate = listOf(
+            first,
+            card(canonicalId = canonicalId(2), name = "Second", copyKeys = listOf(steamKey)),
+        )
+        val groupedUntrusted = listOf(
+            MatchConfidence.REVIEW_REQUIRED,
+            MatchConfidence.REJECTED,
+            MatchConfidence.UNMATCHED,
+        ).map { confidence ->
+            listOf(
+                first.copy(
+                    copies = first.copies.map { it.copy(confidence = confidence) },
+                ),
+            )
+        }
+        val independentTrusted = listOf(
+            first.copy(key = CanonicalCardKey.Independent(steamKey)),
+        )
+        val independentUntrusted = listOf(
+            first.copy(
+                key = CanonicalCardKey.Independent(steamKey),
+                copies = first.copies.map { it.copy(confidence = MatchConfidence.REVIEW_REQUIRED) },
+            ),
+        )
+        val nonmemberPreferred = listOf(
+            first.copy(preferredCopy = gogKey),
+        )
+
+        (listOf(crossCardDuplicate, independentTrusted, nonmemberPreferred) + groupedUntrusted).forEach { cards ->
+            assertEquals(CanonicalPublicFailure.INVALID_CARD_STATE, CanonicalLibraryCardValidator.failureOrNull(cards))
+        }
+        assertNull(CanonicalLibraryCardValidator.failureOrNull(independentUntrusted))
+
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(crossCardDuplicate)),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        runCurrent()
+
+        assertEquals(CanonicalPublicFailure.INVALID_CARD_STATE, vm.state.value.canonicalPublicFailure)
+        assertTrue(vm.state.value.cards.none { it.name == "First" || it.name == "Second" })
         viewModelStore.clear()
     }
 
@@ -447,6 +554,41 @@ class CanonicalLibraryViewModelTest {
         assertFalse(
             project(listOf(lyingNonSteam), canonicalState()).cards.single().isShared,
         )
+    }
+
+    @Test
+    fun `mixed-source shared aggregate is excluded from cards tabs and pre-page counts`() {
+        val mixedSteam = key(GameSource.STEAM, "shared-steam")
+        val mixedGog = key(GameSource.GOG, "owned-gog")
+        val mixed = card(
+            canonicalId = canonicalId(41),
+            name = "Mixed Shared",
+            copyKeys = listOf(mixedSteam, mixedGog),
+            sharedKeys = setOf(mixedSteam),
+        )
+        val ownedSteam = card(
+            canonicalId = canonicalId(42),
+            name = "Owned",
+            copyKeys = listOf(key(GameSource.STEAM, "owned-steam")),
+        )
+
+        val all = project(listOf(mixed, ownedSteam), canonicalState())
+        val steam = project(listOf(mixed, ownedSteam), canonicalState(tab = LibraryTab.STEAM))
+        val gog = project(listOf(mixed, ownedSteam), canonicalState(tab = LibraryTab.GOG))
+
+        assertEquals(listOf("Owned"), all.cards.map { it.name })
+        assertEquals(listOf("Owned"), steam.cards.map { it.name })
+        assertTrue(gog.cards.isEmpty())
+        assertEquals(1, all.allCount)
+        assertEquals(1, all.sourceCounts.getValue(GameSource.STEAM))
+        assertEquals(0, all.sourceCounts.getValue(GameSource.GOG))
+
+        val includingShared = project(
+            listOf(mixed, ownedSteam),
+            canonicalState(filters = filters(AppFilter.GAME, AppFilter.SHARED)),
+        )
+        assertEquals(listOf("Mixed Shared", "Owned"), includingShared.cards.map { it.name })
+        assertTrue(includingShared.cards.single { it.name == "Mixed Shared" }.isShared)
     }
 
     @Test
@@ -566,7 +708,6 @@ class CanonicalLibraryViewModelTest {
         )
         val status = CanonicalCompatibilityLookup.resolve(
             card = card,
-            state = canonicalState(),
             cachedStatus = { name ->
                 lookups += name
                 if (name == "A alias") GameCompatibilityStatus.COMPATIBLE else null
@@ -582,6 +723,38 @@ class CanonicalLibraryViewModelTest {
         )
         assertEquals(listOf("Canonical"), page.compatibilityRequestNames)
         assertEquals(GameCompatibilityStatus.COMPATIBLE, page.cards.single().compatibilityStatus)
+    }
+
+    @Test
+    fun `cleared compatibility cache is authoritative over stale state and refetches display name`() {
+        val canonical = card(
+            name = "Cleared Canonical",
+            aliases = linkedSetOf("Cached Alias", "Cleared Canonical"),
+        )
+        val staleState = canonicalState(
+            filters = filters(AppFilter.GAME, AppFilter.COMPATIBLE),
+        ).copy(
+            compatibilityMap = mapOf(
+                "Cleared Canonical" to GameCompatibilityStatus.NOT_COMPATIBLE,
+                "Cached Alias" to GameCompatibilityStatus.UNKNOWN,
+            ),
+        )
+        val cacheLookups = mutableListOf<String>()
+
+        val status = CanonicalCompatibilityLookup.resolve(
+            card = canonical,
+            cachedStatus = { name -> cacheLookups += name; null },
+        )
+        val page = project(
+            cards = listOf(canonical),
+            state = staleState,
+            compatibility = { status },
+        )
+
+        assertNull(status)
+        assertEquals(listOf("Cleared Canonical", "Cached Alias"), cacheLookups)
+        assertEquals(listOf("Cleared Canonical"), page.cards.map { it.name })
+        assertEquals(listOf("Cleared Canonical"), page.compatibilityRequestNames)
     }
 
     @Test
@@ -705,6 +878,397 @@ class CanonicalLibraryViewModelTest {
         viewModelStore.clear()
     }
 
+    @Test
+    fun `slow legacy render cannot overwrite canonical activation`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val legacyStarted = CountDownLatch(1)
+        val releaseLegacy = CountDownLatch(1)
+        val blockFirstLegacy = AtomicBoolean(true)
+        every { DownloadService.getDownloadDirectoryApps() } answers {
+            if (blockFirstLegacy.compareAndSet(true, false)) {
+                legacyStarted.countDown()
+                releaseLegacy.await(10, TimeUnit.SECONDS)
+            }
+            mutableListOf()
+        }
+        every { GOGService.hasStoredCredentials(any()) } returns true
+        val readiness = CanonicalProjectionReadiness()
+        val canonicalCards = MutableStateFlow(listOf(card(name = "Canonical Winner")))
+
+        try {
+            val vm = viewModel(
+                repository = repository(canonicalCards),
+                gateEnabled = true,
+                readiness = readiness,
+                gogRows = MutableStateFlow(
+                    listOf(GOGGame(id = "slow", title = "Stale Legacy", isInstalled = true)),
+                ),
+                ioDispatcher = io,
+            )
+            awaitLatch(legacyStarted, "slow legacy render")
+
+            readiness.markSucceeded()
+            awaitState { state -> state.cards.map { it.name } == listOf("Canonical Winner") }
+
+            releaseLegacy.countDown()
+            assertFalse(
+                "superseded legacy render published after canonical activation",
+                awaitCondition(timeoutMs = 1_500L) {
+                    vm.state.value.cards.any { it.name == "Stale Legacy" }
+                },
+            )
+            assertEquals(listOf("Canonical Winner"), vm.state.value.cards.map { it.name })
+        } finally {
+            releaseLegacy.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `rapid query tab and page requests supersede a blocked canonical render`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val sourceCards = buildList {
+            add(card(canonicalId = canonicalId(60), name = "Alpha", copyKeys = listOf(key(GameSource.STEAM, "alpha"))))
+            repeat(105) { index ->
+                add(
+                    card(
+                        canonicalId = canonicalId(index + 100),
+                        name = "Beta ${index.toString().padStart(2, '0')}",
+                        copyKeys = listOf(key(GameSource.STEAM, "beta-$index")),
+                    ),
+                )
+            }
+        }
+        val slowStarted = CountDownLatch(1)
+        val releaseSlow = CountDownLatch(1)
+        val blockNextLookup = AtomicBoolean(false)
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(sourceCards)),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { it.cards.size == 50 && it.cards.any { card -> card.name == "Alpha" } }
+            every { GameCompatibilityCache.getCached(any()) } answers {
+                if (blockNextLookup.compareAndSet(true, false)) {
+                    slowStarted.countDown()
+                    releaseSlow.await(10, TimeUnit.SECONDS)
+                }
+                null
+            }
+
+            blockNextLookup.set(true)
+            vm.onTabChanged(LibraryTab.ALL)
+            awaitLatch(slowStarted, "blocked canonical render")
+
+            vm.onSearchQuery("Beta")
+            scheduler.advanceTimeBy(500L)
+            scheduler.runCurrent()
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitState { state ->
+                state.currentTab == LibraryTab.STEAM &&
+                    state.searchQuery == "Beta" &&
+                    state.cards.size == 50 &&
+                    state.cards.all { it.name.startsWith("Beta") }
+            }
+            vm.onPageChange(1)
+            vm.onPageChange(1)
+            awaitState { state ->
+                state.currentPaginationPage == 3 &&
+                    state.cards.size == 105 &&
+                    state.cards.all { it.name.startsWith("Beta") }
+            }
+
+            releaseSlow.countDown()
+            assertFalse(
+                "older canonical render replaced the latest query tab or page",
+                awaitCondition(timeoutMs = 1_500L) {
+                    vm.state.value.currentPaginationPage != 3 ||
+                        vm.state.value.cards.any { it.name == "Alpha" }
+                },
+            )
+        } finally {
+            releaseSlow.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `slow canonical render and orphan emission cannot clear unsupported recovery`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val emissions = MutableStateFlow(listOf(card(name = "Initial Canonical")))
+        val slowStarted = CountDownLatch(1)
+        val releaseSlow = CountDownLatch(1)
+        val blockNextLookup = AtomicBoolean(false)
+
+        try {
+            val vm = viewModel(
+                repository = repository(emissions),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { it.cards.map { card -> card.name } == listOf("Initial Canonical") }
+            every { GameCompatibilityCache.getCached(any()) } answers {
+                if (blockNextLookup.compareAndSet(true, false)) {
+                    slowStarted.countDown()
+                    releaseSlow.await(10, TimeUnit.SECONDS)
+                }
+                null
+            }
+
+            blockNextLookup.set(true)
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitLatch(slowStarted, "slow canonical context render")
+            vm.onFilterChanged(AppFilter.EXPIRED)
+            awaitState { state ->
+                state.canonicalPublicFailure == CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT &&
+                    !state.isLoading
+            }
+
+            emissions.value = listOf(card(canonicalId = canonicalId(71), name = "Orphan Canonical"))
+            releaseSlow.countDown()
+            assertFalse(
+                "orphan canonical work cleared unsupported recovery",
+                awaitCondition(timeoutMs = 1_500L) {
+                    val state = vm.state.value
+                    state.canonicalPublicFailure != CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT ||
+                        state.cards.any { it.name == "Orphan Canonical" }
+                },
+            )
+        } finally {
+            releaseSlow.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `noncooperative orphan emission cannot cancel unsupported fallback`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val validationStarted = CountDownLatch(1)
+        val releaseValidation = CountDownLatch(1)
+        val orphanHandled = CountDownLatch(1)
+        val fallbackStarted = CountDownLatch(1)
+        val releaseFallback = CountDownLatch(1)
+        val blockFallback = AtomicBoolean(false)
+        val orphanCards = object : AbstractList<CanonicalLibraryCard>() {
+            override val size: Int = 1
+
+            override fun get(index: Int): CanonicalLibraryCard {
+                require(index == 0)
+                validationStarted.countDown()
+                releaseValidation.await(10, TimeUnit.SECONDS)
+                return card(canonicalId = canonicalId(73), name = "Noncooperative Orphan")
+            }
+        }
+        val emissions = object : Flow<List<CanonicalLibraryCard>> {
+            override suspend fun collect(collector: FlowCollector<List<CanonicalLibraryCard>>) {
+                collector.emit(listOf(card(name = "Initial Canonical")))
+                collector.emit(orphanCards)
+                orphanHandled.countDown()
+            }
+        }
+        every { DownloadService.getDownloadDirectoryApps() } answers {
+            if (blockFallback.get()) {
+                fallbackStarted.countDown()
+                releaseFallback.await(10, TimeUnit.SECONDS)
+            }
+            mutableListOf()
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository(emissions),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { it.cards.map { card -> card.name } == listOf("Initial Canonical") }
+            awaitLatch(validationStarted, "blocked orphan validation")
+
+            blockFallback.set(true)
+            vm.onFilterChanged(AppFilter.EXPIRED)
+            awaitLatch(fallbackStarted, "blocked unsupported fallback")
+            releaseValidation.countDown()
+            awaitLatch(orphanHandled, "noncooperative orphan handling")
+            releaseFallback.countDown()
+
+            assertTrue(
+                "orphan emission canceled unsupported recovery: ${vm.state.value}",
+                awaitCondition(timeoutMs = 3_000L) {
+                    val state = vm.state.value
+                    state.canonicalPublicFailure == CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT &&
+                        !state.isLoading &&
+                        state.cards.none { it.name == "Noncooperative Orphan" }
+                },
+            )
+        } finally {
+            releaseValidation.countDown()
+            releaseFallback.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `concurrent eligible triggers create one collector and unsupported context rejects later emissions`() {
+        val executor = Executors.newFixedThreadPool(16)
+        val delegate = executor.asCoroutineDispatcher()
+        val slowDispatch = object : CoroutineDispatcher() {
+            val armed = AtomicBoolean(false)
+
+            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+                if (armed.get()) Thread.sleep(75L)
+                delegate.dispatch(context, block)
+            }
+        }
+        val gateEnabled = AtomicBoolean(false)
+        val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
+        val readiness = CanonicalProjectionReadiness()
+        val observeCalls = AtomicInteger(0)
+        val emissions = MutableStateFlow<List<CanonicalLibraryCard>>(emptyList())
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            observeCalls.incrementAndGet()
+            emissions
+        }
+        val callers = 12
+        val ready = CountDownLatch(callers)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(callers)
+
+        try {
+            val vm = viewModel(
+                repository = repository,
+                gateEnabled = false,
+                readiness = readiness,
+                gate = gate,
+                ioDispatcher = slowDispatch,
+            )
+            readiness.markSucceeded()
+            gateEnabled.set(true)
+            slowDispatch.armed.set(true)
+            repeat(callers) { index ->
+                Thread {
+                    ready.countDown()
+                    start.await(5, TimeUnit.SECONDS)
+                    vm.onTabChanged(if (index % 2 == 0) LibraryTab.ALL else LibraryTab.STEAM)
+                    done.countDown()
+                }.start()
+            }
+            awaitLatch(ready, "concurrent collector callers")
+            start.countDown()
+            awaitLatch(done, "concurrent collector triggers", timeoutMs = 10_000L)
+            slowDispatch.armed.set(false)
+            assertTrue("canonical repository was not collected", awaitCondition { observeCalls.get() >= 1 })
+            assertEquals(1, observeCalls.get())
+
+            vm.onTabChanged(LibraryTab.RECOMMENDED)
+            awaitState { state ->
+                state.canonicalPublicFailure == CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT &&
+                    !state.isLoading
+            }
+            emissions.value = listOf(card(canonicalId = canonicalId(72), name = "Unsupported Orphan"))
+            assertFalse(
+                "unsupported context accepted an orphan emission",
+                awaitCondition(timeoutMs = 1_000L) {
+                    vm.state.value.cards.any { it.name == "Unsupported Orphan" }
+                },
+            )
+            assertEquals(CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT, vm.state.value.canonicalPublicFailure)
+        } finally {
+            start.countDown()
+            slowDispatch.armed.set(false)
+            viewModelStore.clear()
+            delegate.close()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `readiness fallback throw restores safe state and retries autonomously`() {
+        val io = Executors.newFixedThreadPool(6).asCoroutineDispatcher()
+        val attempts = AtomicInteger(0)
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(emptyList())),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness(),
+                ioDispatcher = io,
+            )
+            awaitState { !it.isLoading }
+            every { DownloadService.getDownloadDirectoryApps() } answers {
+                if (attempts.incrementAndGet() == 1) throw IllegalStateException("fixed legacy failure")
+                mutableListOf()
+            }
+
+            vm.onTabChanged(LibraryTab.STEAM)
+            assertTrue(
+                "legacy fallback did not retry after throwing",
+                awaitCondition(timeoutMs = 5_000L) {
+                    attempts.get() >= 2 && !vm.state.value.isLoading
+                },
+            )
+            assertEquals(CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE, vm.state.value.canonicalPublicFailure)
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `blocked canonical fallback cannot stall collection retry or loading forever`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val fallbackStarted = CountDownLatch(1)
+        val releaseFallback = CountDownLatch(1)
+        val blockFirstFallback = AtomicBoolean(true)
+        val collectionAttempts = AtomicInteger(0)
+        every { DownloadService.getDownloadDirectoryApps() } answers {
+            if (blockFirstFallback.compareAndSet(true, false)) {
+                fallbackStarted.countDown()
+                releaseFallback.await(15, TimeUnit.SECONDS)
+            }
+            mutableListOf()
+        }
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            if (collectionAttempts.incrementAndGet() == 1) {
+                flow { throw IllegalStateException("fixed collection failure") }
+            } else {
+                MutableStateFlow(listOf(card(name = "Autonomous Recovery")))
+            }
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository,
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitLatch(fallbackStarted, "blocked legacy fallback")
+            val recovered = awaitCondition(timeoutMs = 8_000L) {
+                collectionAttempts.get() >= 2 &&
+                    vm.state.value.cards.map { it.name } == listOf("Autonomous Recovery") &&
+                    !vm.state.value.isLoading
+            }
+            assertTrue(
+                "canonical retry waited indefinitely for blocked fallback: attempts=${collectionAttempts.get()}, state=${vm.state.value}",
+                recovered,
+            )
+        } finally {
+            releaseFallback.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
     private fun project(
         cards: List<CanonicalLibraryCard>,
         state: LibraryState,
@@ -732,6 +1296,8 @@ class CanonicalLibraryViewModelTest {
         readiness: CanonicalProjectionReadiness,
         runtimeRegistry: OwnedCopyRuntimeRegistry = mockk(relaxed = true),
         gogRows: Flow<List<GOGGame>> = emptyFlow(),
+        gate: CanonicalPublicLibraryGate = CanonicalPublicLibraryGate { gateEnabled },
+        ioDispatcher: CoroutineDispatcher = dispatcher,
     ): LibraryViewModel {
         val history = mockk<LibraryPlayHistoryDao>(relaxed = true)
         every { history.getAll() } returns emptyFlow()
@@ -751,10 +1317,10 @@ class CanonicalLibraryViewModelTest {
             amazonGameDao = amazon,
             context = context,
             canonicalLibraryRepository = repository,
-            canonicalPublicLibraryGate = { gateEnabled },
+            canonicalPublicLibraryGate = gate,
             canonicalProjectionReadiness = readiness,
             runtimeRegistry = runtimeRegistry,
-            canonicalDispatcher = dispatcher,
+            canonicalDispatcher = ioDispatcher,
         ).also { viewModel ->
             latestVm = viewModel
             viewModelStore.put("latest", viewModel)
@@ -804,6 +1370,7 @@ class CanonicalLibraryViewModelTest {
         sizes: Map<OwnedCopyKey, Long> = emptyMap(),
         lastPlayed: Map<OwnedCopyKey, Long> = emptyMap(),
         nativeTitles: Map<OwnedCopyKey, String> = emptyMap(),
+        confidences: Map<OwnedCopyKey, MatchConfidence> = emptyMap(),
         preferred: OwnedCopyKey? = null,
         steamCollectionAppIds: Set<Int> = copyKeys
             .filter { it.source == GameSource.STEAM }
@@ -818,6 +1385,7 @@ class CanonicalLibraryViewModelTest {
                 shared = key in sharedKeys,
                 size = sizes[key],
                 lastPlayed = lastPlayed[key],
+                confidence = confidences[key] ?: MatchConfidence.VERIFIED,
             )
         }
         return CanonicalLibraryCard(
@@ -846,6 +1414,7 @@ class CanonicalLibraryViewModelTest {
         shared: Boolean = false,
         size: Long? = null,
         lastPlayed: Long? = null,
+        confidence: MatchConfidence = MatchConfidence.VERIFIED,
     ): OwnedCopySummary = OwnedCopySummary(
         key = key,
         source = key.source,
@@ -864,7 +1433,7 @@ class CanonicalLibraryViewModelTest {
         unavailableReason = null,
         canSeparateMatch = true,
         matchMethod = MatchMethod.DIRECT_STEAM,
-        confidence = MatchConfidence.VERIFIED,
+        confidence = confidence,
         decisionSource = MatchDecisionSource.AUTOMATIC,
     )
 
@@ -890,12 +1459,23 @@ class CanonicalLibraryViewModelTest {
     }
 
     private fun awaitState(condition: (LibraryState) -> Boolean) {
-        repeat(200) {
-            val state = stateSnapshot
-            if (condition(state)) return
+        assertTrue("Library state did not settle", awaitCondition { condition(stateSnapshot) })
+    }
+
+    private fun awaitCondition(
+        timeoutMs: Long = 5_000L,
+        condition: () -> Boolean,
+    ): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        while (System.nanoTime() < deadline) {
+            if (condition()) return true
             Thread.sleep(10L)
         }
-        assertTrue("Library state did not settle", condition(stateSnapshot))
+        return condition()
+    }
+
+    private fun awaitLatch(latch: CountDownLatch, name: String, timeoutMs: Long = 5_000L) {
+        assertTrue("Timed out waiting for $name", latch.await(timeoutMs, TimeUnit.MILLISECONDS))
     }
 
     private companion object {
