@@ -202,6 +202,42 @@ class SteamAppDaoTest {
     }
 
     @Test
+    fun `batched owned DLC query excludes expired licenses and keeps active licenses`() = runBlocking {
+        licenseDao.insertAll(
+            listOf(
+                makeLicense(
+                    packageId = 200,
+                    flags = EnumSet.of(ELicenseFlags.Expired),
+                    appIds = listOf(2),
+                ),
+                makeLicense(packageId = 300, appIds = listOf(3)),
+            ),
+        )
+        appDao.insert(
+            SteamApp(
+                id = 2,
+                packageId = 200,
+                type = AppType.dlc,
+                name = "Expired DLC",
+                dlcForAppId = 1,
+            ),
+        )
+        appDao.insert(
+            SteamApp(
+                id = 3,
+                packageId = 300,
+                type = AppType.dlc,
+                name = "Active DLC",
+                dlcForAppId = 1,
+            ),
+        )
+
+        val dlcApps = appDao.findOwnedDLCAppsForParents(listOf(1))
+
+        assertEquals(listOf(3), dlcApps.map(SteamApp::id))
+    }
+
+    @Test
     fun `PICS replacement preserves workshop state updated after payload creation`() = runBlocking {
         appDao.insert(
             SteamApp(

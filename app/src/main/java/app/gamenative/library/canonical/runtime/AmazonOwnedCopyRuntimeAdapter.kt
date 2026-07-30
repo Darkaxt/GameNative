@@ -229,7 +229,14 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
         accountScope: AccountScope,
         generation: Long,
     ): AmazonRuntimeBatchResult {
-        if (games.isEmpty()) return AmazonRuntimeBatchResult(emptyMap(), emptyMap())
+        if (games.isEmpty()) {
+            observedUpdates.snapshot(
+                UpdateObservationOwner(accountScope, generation),
+                emptyList(),
+                UpdateSnapshotCoverage.COMPLETE,
+            )
+            return AmazonRuntimeBatchResult(emptyMap(), emptyMap())
+        }
         val activeDownloads = gateway.activeDownloadProductIds()
         val partialDownloads = gateway.partialDownloadProductIds() + activeDownloads
         val observations = observedUpdates.snapshot(
@@ -384,7 +391,6 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
     override suspend fun resolveAll(
         keys: Set<OwnedCopyKey>,
     ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> {
-        if (keys.isEmpty()) return emptyMap()
         var provedScope: AccountScope? = null
         var generation: Long? = null
         var initialLedger: CompletedOwnedCopySnapshot? = null
@@ -398,6 +404,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 return keys.hiddenResults()
             }
             if (keys.none { it.source == source && it.accountScope == accountScope }) {
+                runtimeState.readBatch(emptyList(), accountScope, generation)
                 return keys.hiddenResults()
             }
             val ledger = ownedCopyLedgerDao.getCompletedSnapshotForLifecycle(
@@ -413,6 +420,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                         it.stableSourceId in ownedIds
                 }
             ) {
+                runtimeState.readBatch(emptyList(), accountScope, generation)
                 return keys.hiddenResults()
             }
             val rows = amazonGameDao.getAllAsList()

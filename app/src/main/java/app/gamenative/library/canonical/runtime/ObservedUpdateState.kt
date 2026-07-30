@@ -110,6 +110,12 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
             }
             if (coverage == UpdateSnapshotCoverage.COMPLETE) {
                 pruneInactiveLocked()
+                if (requestedFingerprints.isEmpty()) {
+                    workerJob?.cancel()
+                    workerJob = null
+                    timerJob?.cancel()
+                    timerJob = null
+                }
             }
             val now = nowMonotonicMs()
             buildList {

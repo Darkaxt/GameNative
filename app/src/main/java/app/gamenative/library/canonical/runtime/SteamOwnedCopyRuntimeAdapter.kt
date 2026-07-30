@@ -275,9 +275,15 @@ class SteamObservedUpdateState private constructor(
                 branch = appInfo?.branch?.takeIf { installed } ?: "public",
                 licensedDepotIds = inputs.licensedDepotIds[app.id],
                 installedDepotIds = appInfo
-                    ?.let { it.downloadedDepots + it.dlcDepots }
-                    .orEmpty()
-                    .toSet(),
+                    ?.let { installedApp ->
+                        buildSet {
+                            addAll(installedApp.downloadedDepots)
+                            installedApp.dlcDepots.forEach { dlcAppId ->
+                                addAll(inputs.appInfos[dlcAppId]?.downloadedDepots.orEmpty())
+                            }
+                        }
+                    }
+                    .orEmpty(),
             )
         },
         coverage,
@@ -331,7 +337,20 @@ class SteamOwnedCopyRuntimeState @Inject constructor(
         accountScope: AccountScope,
         generation: Long,
     ): SteamRuntimeBatchResult {
-        if (apps.isEmpty()) return SteamRuntimeBatchResult(emptyMap(), emptyMap())
+        if (apps.isEmpty()) {
+            observedUpdates.snapshot(
+                UpdateObservationOwner(accountScope, generation),
+                emptyList(),
+                SteamRuntimeInputs(
+                    activeDownloadIds = emptySet(),
+                    appInfos = emptyMap(),
+                    licensedDepotIds = emptyMap(),
+                    installations = emptyMap(),
+                ),
+                UpdateSnapshotCoverage.COMPLETE,
+            )
+            return SteamRuntimeBatchResult(emptyMap(), emptyMap())
+        }
         val inputs = readInputs(apps)
         val observedApps = apps.filter { app ->
             inputs.installations[app.id]?.isInstalled == true
@@ -494,7 +513,6 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
     override suspend fun resolveAll(
         keys: Set<OwnedCopyKey>,
     ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> {
-        if (keys.isEmpty()) return emptyMap()
         var provedScope: app.gamenative.data.canonical.AccountScope? = null
         var generation: Long? = null
         var provedIds: Set<Int> = emptySet()
@@ -508,6 +526,7 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                 return keys.hiddenResults()
             }
             if (keys.none { it.source == source && it.accountScope == accountScope }) {
+                runtimeState.readBatch(emptyList(), accountScope, generation)
                 return keys.hiddenResults()
             }
             val rows = steamAppDao._getAllOwnedAppsPaged()

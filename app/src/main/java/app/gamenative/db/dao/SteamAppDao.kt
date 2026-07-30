@@ -194,6 +194,7 @@ interface SteamAppDao {
             "EXISTS (" +
             "SELECT * FROM steam_license AS license " +
             "WHERE license.license_type <> 0 AND " +
+            "(license.license_flags & 8) = 0 AND " +
             "REPLACE(REPLACE(license.app_ids, '[', ','), ']', ',') LIKE ('%,' || app.id || ',%')" +
             ")",
     )

@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import app.gamenative.PrefManager
 import app.gamenative.data.AmazonGame
 import app.gamenative.data.AppInfo
+import app.gamenative.data.DepotInfo
 import app.gamenative.data.EpicGame
 import app.gamenative.data.GOGGame
 import app.gamenative.data.GameSource
@@ -13,6 +14,7 @@ import app.gamenative.data.LibraryAssetsInfo
 import app.gamenative.data.LibraryCapsuleInfo
 import app.gamenative.data.LibraryHeroInfo
 import app.gamenative.data.LibraryPlayHistory
+import app.gamenative.data.ManifestInfo
 import app.gamenative.data.SteamApp
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
@@ -29,6 +31,9 @@ import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.db.dao.SteamAppDao
 import app.gamenative.enums.AppType
 import app.gamenative.enums.Language
+import app.gamenative.enums.OS
+import app.gamenative.enums.OSArch
+import app.gamenative.enums.SteamRealm
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopedOwnershipLedger
 import app.gamenative.library.canonical.AccountScopeProvider
@@ -44,6 +49,8 @@ import app.gamenative.library.canonical.source.EpicOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.GogOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
+import app.gamenative.service.SteamService
+import app.gamenative.service.SteamUpdateCheckResult
 import app.gamenative.service.amazon.AmazonArtwork
 import app.gamenative.utils.GameMetadataManager
 import app.gamenative.utils.ReadOnlyAppIdResult
@@ -54,6 +61,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import java.io.File
 import java.nio.file.Files
+import java.util.EnumSet
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -61,6 +69,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -108,6 +117,68 @@ class OwnedCopyRuntimeAdapterTest {
     @After
     fun tearDown() {
         PrefManager.customGameManualFolders = emptySet()
+    }
+
+    @Test
+    fun emptyAdapterKeySetsSubmitCompleteEmptyRuntimeSnapshotsWithoutSourceQueries() = runTest {
+        val steamDao = mockk<SteamAppDao>(relaxed = true)
+        val steamState = mockk<SteamOwnedCopyRuntimeState>()
+        coEvery {
+            steamState.readBatch(emptyList(), scope, 0L)
+        } returns SteamRuntimeBatchResult(emptyMap(), emptyMap())
+        val steamAdapter = SteamOwnedCopyRuntimeAdapter(
+            steamDao,
+            scopes(GameSource.STEAM),
+            readyLifecycle(GameSource.STEAM),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+            steamState,
+        )
+        val amazonDao = mockk<AmazonGameDao>(relaxed = true)
+        val amazonState = mockk<AmazonOwnedCopyRuntimeState>()
+        coEvery {
+            amazonState.readBatch(emptyList(), scope, 0L)
+        } returns AmazonRuntimeBatchResult(emptyMap(), emptyMap())
+        val amazonAdapter = AmazonOwnedCopyRuntimeAdapter(
+            amazonDao,
+            scopes(GameSource.AMAZON),
+            mockk(relaxed = true),
+            readyLifecycle(GameSource.AMAZON),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+            amazonState,
+        )
+
+        assertEquals(emptyMap<OwnedCopyKey, OwnedCopyRuntimeResult>(), steamAdapter.resolveAll(emptySet()))
+        assertEquals(emptyMap<OwnedCopyKey, OwnedCopyRuntimeResult>(), amazonAdapter.resolveAll(emptySet()))
+
+        coVerify(exactly = 1) { steamState.readBatch(emptyList(), scope, 0L) }
+        coVerify(exactly = 1) { amazonState.readBatch(emptyList(), scope, 0L) }
+        coVerify(exactly = 0) { steamDao._getAllOwnedAppsPaged(any(), any()) }
+        coVerify(exactly = 0) { amazonDao.getAllAsList() }
+    }
+
+    @Test
+    fun emptyAmazonOwnershipSnapshotSubmitsCompleteEmptyRuntimeSnapshot() = runTest {
+        val key = key(GameSource.AMAZON, "removed")
+        val runtimeState = mockk<AmazonOwnedCopyRuntimeState>()
+        coEvery {
+            runtimeState.readBatch(emptyList(), scope, 0L)
+        } returns AmazonRuntimeBatchResult(emptyMap(), emptyMap())
+        val adapter = AmazonOwnedCopyRuntimeAdapter(
+            mockk(relaxed = true),
+            scopes(GameSource.AMAZON),
+            ledger(GameSource.AMAZON, emptyMap()),
+            readyLifecycle(GameSource.AMAZON),
+            mockk(relaxed = true),
+            mockk(relaxed = true),
+            runtimeState,
+        )
+
+        val result = adapter.resolveAll(setOf(key))
+
+        assertEquals(OwnedCopyRuntimeResult.Hidden, result.getValue(key))
+        coVerify(exactly = 1) { runtimeState.readBatch(emptyList(), scope, 0L) }
     }
 
     @Test
@@ -2372,6 +2443,153 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
+    fun steamRuntimeExpandsInstalledDlcAppIdsToTheirDownloadedDepots() = runTest {
+        val parent = SteamApp(
+            id = 1,
+            name = "Parent",
+            depots = mapOf(100 to steamDepot(100, manifestGid = 10L)),
+        )
+        val dlc = SteamApp(
+            id = 2,
+            name = "DLC",
+            dlcForAppId = parent.id,
+            depots = mapOf(
+                200 to steamDepot(200, manifestGid = 20L, language = "french"),
+            ),
+        )
+        val remoteParent = parent.copy(
+            depots = mapOf(100 to steamDepot(100, manifestGid = 10L)),
+        )
+        val remoteDlc = dlc.copy(
+            depots = mapOf(
+                200 to steamDepot(200, manifestGid = 21L, language = "french"),
+            ),
+        )
+        val appInfos = mapOf(
+            parent.id to AppInfo(
+                id = parent.id,
+                isDownloaded = true,
+                downloadedDepots = listOf(100),
+                dlcDepots = listOf(dlc.id),
+            ),
+            dlc.id to AppInfo(
+                id = dlc.id,
+                isDownloaded = true,
+                downloadedDepots = listOf(200),
+            ),
+        )
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
+        coEvery { gateway.activeDownloadIds() } returns emptySet()
+        coEvery { gateway.partialDownloadIds() } returns emptySet()
+        coEvery { gateway.installedApps() } returns appInfos
+        coEvery { gateway.licensedDepotIds(listOf(parent)) } returns emptyMap()
+        coEvery {
+            gateway.installationSnapshot(
+                listOf(parent),
+                appInfos,
+                emptySet(),
+                emptySet(),
+            )
+        } returns mapOf(
+            parent.id to SteamInstallationState(
+                path = "/installed",
+                isInstalled = true,
+                hasPartialDownload = false,
+            ),
+        )
+        coEvery { gateway.refreshUpdates(any()) } answers {
+            val request = (invocation.args[0] as List<*>)
+                .filterIsInstance<SteamUpdateRefreshRequest>()
+                .single()
+            assertEquals(setOf(100, 200), request.installedDepotIds)
+            val result = SteamService.getUpdatePendingFromSnapshots(
+                localApp = parent,
+                branch = "public",
+                preferredLanguage = "english",
+                ownedDlcApps = listOf(dlc),
+                licensedDepotIds = emptyMap(),
+                installedDepotIds = request.installedDepotIds,
+                remoteApps = mapOf(parent.id to remoteParent, dlc.id to remoteDlc),
+            )
+            mapOf(
+                parent.id to when (result) {
+                    is SteamUpdateCheckResult.Failed ->
+                        UpdateRefreshOutcome.Failed(result.errorClass)
+                    is SteamUpdateCheckResult.Observed ->
+                        UpdateRefreshOutcome.Observed(result.updateAvailable)
+                },
+            )
+        }
+        val runtimeState = SteamOwnedCopyRuntimeState(
+            gateway,
+            SteamObservedUpdateState(gateway, backgroundScope) { testScheduler.currentTime },
+        )
+
+        assertEquals(
+            UpdateObservation.UNKNOWN,
+            runtimeState.readBatch(listOf(parent), scope, 0L)
+                .states.getValue(parent.id).updateObservation,
+        )
+        runCurrent()
+
+        val refreshed = runtimeState.readBatch(listOf(parent), scope, 0L)
+            .states.getValue(parent.id)
+        assertEquals(UpdateObservation.UPDATE_AVAILABLE, refreshed.updateObservation)
+        assertTrue(refreshed.updateAvailable)
+        coVerify(exactly = 1) { gateway.refreshUpdates(any()) }
+    }
+
+    @Test
+    fun steamCompleteEmptyRuntimeSnapshotPrunesObservedStateWithoutProviderReads() = runTest {
+        val app = SteamApp(id = 1, name = "Installed")
+        val appInfo = AppInfo(id = app.id, isDownloaded = true)
+        val installations = mapOf(
+            app.id to SteamInstallationState(
+                path = "/installed",
+                isInstalled = true,
+                hasPartialDownload = false,
+            ),
+        )
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
+        coEvery { gateway.activeDownloadIds() } returns emptySet()
+        coEvery { gateway.partialDownloadIds() } returns emptySet()
+        coEvery { gateway.installedApps() } returns mapOf(app.id to appInfo)
+        coEvery { gateway.licensedDepotIds(listOf(app)) } returns emptyMap()
+        coEvery {
+            gateway.installationSnapshot(
+                listOf(app),
+                mapOf(app.id to appInfo),
+                emptySet(),
+                emptySet(),
+            )
+        } returns installations
+        coEvery { gateway.refreshUpdates(any()) } returns mapOf(
+            app.id to UpdateRefreshOutcome.Observed(updateAvailable = false),
+        )
+        val runtimeState = SteamOwnedCopyRuntimeState(
+            gateway,
+            SteamObservedUpdateState(gateway, backgroundScope) { testScheduler.currentTime },
+        )
+
+        runtimeState.readBatch(listOf(app), scope, 0L)
+        runCurrent()
+        runtimeState.readBatch(emptyList(), scope, 0L)
+        val observedOwnerJob = backgroundScope.coroutineContext[Job]
+            ?.children
+            ?.single { it.isActive }
+        assertEquals(0, observedOwnerJob?.children?.count { it.isActive })
+        advanceTimeBy(5 * 60_000L + 1L)
+        runCurrent()
+
+        coVerify(exactly = 1) { gateway.activeDownloadIds() }
+        coVerify(exactly = 1) { gateway.partialDownloadIds() }
+        coVerify(exactly = 1) { gateway.installedApps() }
+        coVerify(exactly = 1) { gateway.licensedDepotIds(listOf(app)) }
+        coVerify(exactly = 1) { gateway.installationSnapshot(any(), any(), any(), any()) }
+        coVerify(exactly = 1) { gateway.refreshUpdates(any()) }
+    }
+
+    @Test
     fun steamObservedRefreshReportsTypedProviderFailure() = runTest {
         val app = SteamApp(id = 1, name = "Installed")
         val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
@@ -2596,6 +2814,40 @@ class OwnedCopyRuntimeAdapterTest {
         coVerify(exactly = 1) { gateway.activeDownloadProductIds() }
         coVerify(exactly = 1) { gateway.partialDownloadProductIds() }
         coVerify(exactly = 0) { gateway.refreshUpdates(any(), any()) }
+    }
+
+    @Test
+    fun amazonCompleteEmptyRuntimeSnapshotPrunesObservedStateWithoutProviderReads() = runTest {
+        val game = AmazonGame(
+            appId = 1,
+            productId = "installed",
+            versionId = "v1",
+            isInstalled = true,
+        )
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
+        coEvery { gateway.activeDownloadProductIds() } returns emptySet()
+        coEvery { gateway.partialDownloadProductIds() } returns emptySet()
+        coEvery { gateway.refreshUpdates(any(), any()) } returns mapOf(
+            game.productId to UpdateRefreshOutcome.Observed(updateAvailable = false),
+        )
+        val runtimeState = AmazonOwnedCopyRuntimeState(
+            gateway,
+            AmazonObservedUpdateState(gateway, backgroundScope) { testScheduler.currentTime },
+        )
+
+        runtimeState.readBatch(listOf(game), scope, 0L)
+        runCurrent()
+        runtimeState.readBatch(emptyList(), scope, 0L)
+        val observedOwnerJob = backgroundScope.coroutineContext[Job]
+            ?.children
+            ?.single { it.isActive }
+        assertEquals(0, observedOwnerJob?.children?.count { it.isActive })
+        advanceTimeBy(5 * 60_000L + 1L)
+        runCurrent()
+
+        coVerify(exactly = 1) { gateway.activeDownloadProductIds() }
+        coVerify(exactly = 1) { gateway.partialDownloadProductIds() }
+        coVerify(exactly = 1) { gateway.refreshUpdates(any(), any()) }
     }
 
     @Test
@@ -4366,6 +4618,30 @@ class OwnedCopyRuntimeAdapterTest {
         is CustomOwnedCopySourceAdapter -> resolve(key)
         else -> error("Unsupported source adapter")
     }
+
+    private fun steamDepot(
+        depotId: Int,
+        manifestGid: Long,
+        language: String = "",
+    ): DepotInfo = DepotInfo(
+        depotId = depotId,
+        dlcAppId = SteamService.INVALID_APP_ID,
+        depotFromApp = SteamService.INVALID_APP_ID,
+        sharedInstall = false,
+        osList = EnumSet.of(OS.windows),
+        osArch = OSArch.Unknown,
+        manifests = mapOf(
+            "public" to ManifestInfo(
+                name = "",
+                gid = manifestGid,
+                size = 1L,
+                download = 1L,
+            ),
+        ),
+        encryptedManifests = emptyMap(),
+        language = language,
+        realm = SteamRealm.Unknown,
+    )
 
     private fun state(
         installPath: String? = null,
