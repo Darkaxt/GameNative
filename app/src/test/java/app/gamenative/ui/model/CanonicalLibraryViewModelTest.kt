@@ -26,6 +26,11 @@ import app.gamenative.db.dao.EpicGameDao
 import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.SteamAppDao
+import app.gamenative.diagnostics.DiagnosticArea
+import app.gamenative.diagnostics.DiagnosticAttribute
+import app.gamenative.diagnostics.DiagnosticEventName
+import app.gamenative.diagnostics.DiagnosticOutcome
+import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.events.AndroidEvent
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
@@ -69,18 +74,22 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -1183,6 +1192,68 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
+    fun `superseded collector render failure cannot replace newer emission or start cooldown`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val firstProjectionStarted = CountDownLatch(1)
+        val releaseFirstProjection = CountDownLatch(1)
+        val blockFirstProjection = AtomicBoolean(true)
+        val observeCalls = AtomicInteger(0)
+        val emissions = object : Flow<List<CanonicalLibraryCard>> {
+            override suspend fun collect(collector: FlowCollector<List<CanonicalLibraryCard>>) {
+                observeCalls.incrementAndGet()
+                coroutineScope {
+                    val first = launch {
+                        collector.emit(listOf(card(name = "Collector A")))
+                    }
+                    awaitLatch(firstProjectionStarted, "blocked collector render A")
+                    collector.emit(listOf(card(canonicalId = canonicalId(77), name = "Collector B")))
+                    first.join()
+                    awaitCancellation()
+                }
+            }
+        }
+        every { GameCompatibilityCache.getCached(any()) } answers {
+            if (blockFirstProjection.compareAndSet(true, false)) {
+                firstProjectionStarted.countDown()
+                awaitUninterruptibly(releaseFirstProjection)
+                throw IllegalStateException("fixed superseded collector projection failure")
+            }
+            null
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository(emissions),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { state ->
+                state.cards.map { it.name } == listOf("Collector B") &&
+                    state.canonicalPublicFailure == null &&
+                    !state.isLoading
+            }
+
+            releaseFirstProjection.countDown()
+            assertFalse(
+                "superseded collector failure replaced B or published fallback",
+                awaitCondition(timeoutMs = 750L) {
+                    val state = vm.state.value
+                    state.cards.map { it.name } != listOf("Collector B") ||
+                        state.canonicalPublicFailure != null ||
+                        state.isLoading
+                },
+            )
+            Thread.sleep(700L)
+            assertEquals("superseded collector failure started cooldown retry", 1, observeCalls.get())
+        } finally {
+            releaseFirstProjection.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
     fun `delayed waiting request preserves sole initial canonical snapshot`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
         val collectorStarted = CountDownLatch(1)
@@ -1438,23 +1509,91 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `independently cancelled canonical collector recovers without permanent loading`() {
+    fun `superseded physical legacy failure establishes cooldown before pending work`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val gateEnabled = AtomicBoolean(true)
+        val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
+        val firstLegacyStarted = CountDownLatch(1)
+        val releaseFirstLegacy = CountDownLatch(1)
+        val attempts = AtomicInteger(0)
+        every { GOGService.hasStoredCredentials(any()) } returns true
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(listOf(card(name = "Canonical Before Legacy Failure")))),
+                gateEnabled = true,
+                gate = gate,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                gogRows = MutableStateFlow(
+                    listOf(GOGGame(id = "legacy-cooldown", title = "Pending After Cooldown", isInstalled = true)),
+                ),
+                ioDispatcher = io,
+            )
+            awaitState { state ->
+                state.cards.map { it.name } == listOf("Canonical Before Legacy Failure") && !state.isLoading
+            }
+            every { DownloadService.getDownloadDirectoryApps() } answers {
+                if (attempts.incrementAndGet() == 1) {
+                    firstLegacyStarted.countDown()
+                    awaitUninterruptibly(releaseFirstLegacy)
+                    throw IllegalStateException("private physical legacy failure")
+                }
+                mutableListOf()
+            }
+
+            gateEnabled.set(false)
+            vm.onTabChanged(LibraryTab.ALL)
+            awaitLatch(firstLegacyStarted, "physical legacy worker before supersession")
+            vm.onTabChanged(LibraryTab.GOG)
+            mockkObject(FeatureDiagnostics)
+            every { FeatureDiagnostics.record(any(), any(), any(), any(), any()) } just runs
+            releaseFirstLegacy.countDown()
+            repeat(12) {
+                PluviaApp.events.emit(AndroidEvent.CustomGameImagesFetched("private-noisy-payload-$it"))
+            }
+
+            Thread.sleep(700L)
+            assertEquals("pending work bypassed physical failure cooldown", 1, attempts.get())
+            assertTrue(
+                "latest pending work did not run after physical failure cooldown",
+                awaitCondition(timeoutMs = 4_000L) {
+                    attempts.get() == 2 &&
+                        vm.state.value.currentTab == LibraryTab.GOG &&
+                        vm.state.value.cards.map { it.name } == listOf("Pending After Cooldown") &&
+                        !vm.state.value.isLoading
+                },
+            )
+            verify(exactly = 1) {
+                FeatureDiagnostics.record(
+                    area = DiagnosticArea.LIBRARY_FILTER,
+                    name = DiagnosticEventName.LIBRARY_FILTER,
+                    outcome = DiagnosticOutcome.FAILED,
+                    durationMs = null,
+                    attributes = mapOf(DiagnosticAttribute.ERROR_TYPE to "IllegalStateException"),
+                )
+            }
+        } finally {
+            releaseFirstLegacy.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `active initial canonical render cancellation retains safe cards and clears loading`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val renderStarted = CountDownLatch(1)
+        val releaseRender = CountDownLatch(1)
+        val blockCanonicalRender = AtomicBoolean(true)
         val observeCalls = AtomicInteger(0)
-        val cancellationReached = CountDownLatch(1)
         val gateEnabled = AtomicBoolean(false)
         val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
         val repository = mockk<CanonicalLibraryRepository>()
         every { repository.observeCards() } answers {
-            if (observeCalls.incrementAndGet() == 1) {
-                flow {
-                    cancellationReached.countDown()
-                    throw CancellationException("independent upstream cancellation")
-                }
-            } else {
-                MutableStateFlow(listOf(card(name = "Collector Cancellation Recovery")))
-            }
+            observeCalls.incrementAndGet()
+            MutableStateFlow(listOf(card(name = "Cancelled Canonical")))
         }
+        every { GOGService.hasStoredCredentials(any()) } returns true
 
         try {
             val vm = viewModel(
@@ -1462,20 +1601,95 @@ class CanonicalLibraryViewModelTest {
                 gateEnabled = false,
                 gate = gate,
                 readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                gogRows = MutableStateFlow(
+                    listOf(GOGGame(id = "render-safe", title = "Render Safe Card", isInstalled = true)),
+                ),
                 ioDispatcher = io,
             )
-            awaitState { !it.isLoading }
+            awaitState { state ->
+                state.cards.map { it.name } == listOf("Render Safe Card") && !state.isLoading
+            }
+            every { GameCompatibilityCache.getCached(any()) } answers {
+                if (blockCanonicalRender.compareAndSet(true, false)) {
+                    renderStarted.countDown()
+                    awaitUninterruptibly(releaseRender)
+                }
+                null
+            }
+
+            gateEnabled.set(true)
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitLatch(renderStarted, "active initial canonical render")
+            cancelJobField(vm, "renderJob")
+            releaseRender.countDown()
+
+            assertTrue(
+                "cancelled active render published or left loading",
+                awaitCondition(timeoutMs = 2_000L) {
+                    val state = vm.state.value
+                    !state.isLoading &&
+                        state.canonicalPublicFailure == null &&
+                        state.cards.map { it.name } == listOf("Render Safe Card")
+                },
+            )
+            Thread.sleep(1_300L)
+            assertEquals("render cancellation restarted collection", 1, observeCalls.get())
+            assertEquals(listOf("Render Safe Card"), vm.state.value.cards.map { it.name })
+        } finally {
+            releaseRender.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `upstream canonical cancellation clears loading without fallback or retry`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val observeCalls = AtomicInteger(0)
+        val cancellationReached = CountDownLatch(1)
+        val gateEnabled = AtomicBoolean(false)
+        val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            observeCalls.incrementAndGet()
+            flow {
+                cancellationReached.countDown()
+                throw CancellationException("independent upstream cancellation")
+            }
+        }
+        every { GOGService.hasStoredCredentials(any()) } returns true
+
+        try {
+            val vm = viewModel(
+                repository = repository,
+                gateEnabled = false,
+                gate = gate,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                gogRows = MutableStateFlow(
+                    listOf(GOGGame(id = "safe-before-cancel", title = "Safe Before Cancellation", isInstalled = true)),
+                ),
+                ioDispatcher = io,
+            )
+            awaitState { state ->
+                state.cards.map { it.name } == listOf("Safe Before Cancellation") && !state.isLoading
+            }
+
             gateEnabled.set(true)
             vm.onTabChanged(LibraryTab.STEAM)
             awaitLatch(cancellationReached, "upstream collector cancellation")
             assertTrue(
-                "cancelled canonical collector did not recover",
-                awaitCondition(timeoutMs = 5_000L) {
-                    observeCalls.get() >= 2 &&
-                        vm.state.value.cards.map { it.name } == listOf("Collector Cancellation Recovery") &&
-                        !vm.state.value.isLoading
+                "upstream cancellation left loading or published fallback",
+                awaitCondition(timeoutMs = 2_000L) {
+                    val state = vm.state.value
+                    !state.isLoading &&
+                        state.canonicalPublicFailure == null &&
+                        state.cards.map { it.name } == listOf("Safe Before Cancellation")
                 },
             )
+            Thread.sleep(1_300L)
+            assertEquals("upstream cancellation retried collection", 1, observeCalls.get())
+            assertNull(vm.state.value.canonicalPublicFailure)
+            assertEquals(listOf("Safe Before Cancellation"), vm.state.value.cards.map { it.name })
         } finally {
             viewModelStore.clear()
             io.close()
@@ -1483,7 +1697,7 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `independently cancelled legacy worker recovers without permanent loading`() {
+    fun `independently cancelled legacy worker clears loading without fallback or retry`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
         val gateEnabled = AtomicBoolean(true)
         val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
@@ -1494,19 +1708,20 @@ class CanonicalLibraryViewModelTest {
 
         try {
             val vm = viewModel(
-                repository = repository(MutableStateFlow(emptyList())),
+                repository = repository(MutableStateFlow(listOf(card(name = "Canonical Safe Before Legacy Cancel")))),
                 gateEnabled = true,
                 gate = gate,
                 readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
-                gogRows = MutableStateFlow(listOf(GOGGame(id = "cancel-recovery", title = "Legacy Cancellation Recovery", isInstalled = true))),
+                gogRows = MutableStateFlow(listOf(GOGGame(id = "cancel-no-retry", title = "Cancelled Legacy", isInstalled = true))),
                 ioDispatcher = io,
             )
-            awaitState { !it.isLoading }
+            awaitState { state ->
+                state.cards.map { it.name } == listOf("Canonical Safe Before Legacy Cancel") && !state.isLoading
+            }
             every { DownloadService.getDownloadDirectoryApps() } answers {
-                if (attempts.incrementAndGet() == 1) {
-                    cancelledWorkerStarted.countDown()
-                    awaitUninterruptibly(releaseCancelledWorker)
-                }
+                attempts.incrementAndGet()
+                cancelledWorkerStarted.countDown()
+                awaitUninterruptibly(releaseCancelledWorker)
                 mutableListOf()
             }
 
@@ -1516,15 +1731,185 @@ class CanonicalLibraryViewModelTest {
             cancelJobField(vm, "legacyPhysicalJob")
             releaseCancelledWorker.countDown()
             assertTrue(
-                "cancelled legacy worker did not recover",
-                awaitCondition(timeoutMs = 5_000L) {
-                    attempts.get() >= 2 &&
-                        vm.state.value.cards.map { it.name } == listOf("Legacy Cancellation Recovery") &&
-                        !vm.state.value.isLoading
+                "cancelled legacy worker published or left loading",
+                awaitCondition(timeoutMs = 2_000L) {
+                    val state = vm.state.value
+                    !state.isLoading &&
+                        state.canonicalPublicFailure == null &&
+                        state.cards.map { it.name } == listOf("Canonical Safe Before Legacy Cancel")
+                },
+            )
+            Thread.sleep(1_300L)
+            assertEquals("legacy cancellation started retry", 1, attempts.get())
+            assertEquals(listOf("Canonical Safe Before Legacy Cancel"), vm.state.value.cards.map { it.name })
+        } finally {
+            releaseCancelledWorker.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `refresh completion merges fresh stats into latest filter state`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val refreshStarted = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val gogRows = MutableStateFlow(emptyList<GOGGame>())
+        val gogCard = card(
+            canonicalId = canonicalId(71),
+            name = "Fresh GOG Card",
+            copyKeys = listOf(gogKey),
+            nativeTitles = mapOf(gogKey to "Fresh GOG Native"),
+        )
+        val freshDeviceStats = mapOf(
+            GameSource.GOG to mapOf("Fresh GOG Native" to stats(runs = 3, fps = 77, reviews = 5, session = 88)),
+        )
+        val freshGpuStats = mapOf(
+            GameSource.GOG to mapOf("Fresh GOG Native" to stats(runs = 9, fps = 60, reviews = 7, session = 44)),
+        )
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(listOf(gogCard))),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                gogRows = gogRows,
+                ioDispatcher = io,
+            )
+            awaitState { state -> state.cards.map { it.name } == listOf("Fresh GOG Card") && !state.isLoading }
+            coEvery { SteamService.refreshOwnedGamesFromServer() } coAnswers {
+                refreshStarted.complete(Unit)
+                releaseRefresh.await()
+                0
+            }
+
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue("refresh did not reach blocked source work", refreshStarted.isCompleted)
+            vm.onTabChanged(LibraryTab.GOG)
+            vm.onSortOptionChanged(SortOption.NAME_DESC)
+            vm.onSearchQuery("Fresh")
+            gogRows.value = listOf(GOGGame(id = "dao-revision", title = "DAO Revision", isInstalled = true))
+            scheduler.advanceTimeBy(500L)
+            scheduler.runCurrent()
+            awaitState { state ->
+                state.currentTab == LibraryTab.GOG &&
+                    state.currentSortOption == SortOption.NAME_DESC &&
+                    state.searchQuery == "Fresh"
+            }
+            every { DeviceGameStatsCache.getAll() } returns freshDeviceStats
+            every { GpuGameStatsCache.getAll() } returns freshGpuStats
+            releaseRefresh.complete(Unit)
+            scheduler.runCurrent()
+
+            assertTrue(
+                "refresh completion dropped stats or restored an obsolete filter state",
+                awaitCondition(timeoutMs = 4_000L) {
+                    val state = vm.state.value
+                    !state.isRefreshing &&
+                        !state.isLoading &&
+                        state.currentTab == LibraryTab.GOG &&
+                        state.currentSortOption == SortOption.NAME_DESC &&
+                        state.searchQuery == "Fresh" &&
+                        state.currentPaginationPage == 1 &&
+                        state.deviceGameStats == freshDeviceStats &&
+                        state.gpuGameStats == freshGpuStats &&
+                        state.cards.singleOrNull()?.gameStats == GameCardStats(
+                            runsGpu = 9,
+                            reviewsDevice = 5,
+                            reviewsGpu = 7,
+                            fps = 77,
+                            sessionSec = 88,
+                        )
                 },
             )
         } finally {
-            releaseCancelledWorker.countDown()
+            releaseRefresh.complete(Unit)
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `older refresh cannot clear or overwrite a newer refresh`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val firstRefreshStarted = CompletableDeferred<Unit>()
+        val firstRefreshSourceCompleted = CompletableDeferred<Unit>()
+        val secondRefreshStarted = CompletableDeferred<Unit>()
+        val releaseFirstRefresh = CompletableDeferred<Unit>()
+        val releaseSecondRefresh = CompletableDeferred<Unit>()
+        val refreshCalls = AtomicInteger(0)
+        val oldDeviceStats = mapOf(GameSource.STEAM to mapOf("Epoch Native" to stats(1, 10, 1, 10)))
+        val oldGpuStats = mapOf(GameSource.STEAM to mapOf("Epoch Native" to stats(2, 20, 2, 20)))
+        val newDeviceStats = mapOf(GameSource.STEAM to mapOf("Epoch Native" to stats(3, 30, 3, 30)))
+        val newGpuStats = mapOf(GameSource.STEAM to mapOf("Epoch Native" to stats(4, 40, 4, 40)))
+        val deviceResult = AtomicReference<Map<GameSource, Map<String, DeviceGameStats>>>(emptyMap())
+        val gpuResult = AtomicReference<Map<GameSource, Map<String, DeviceGameStats>>>(emptyMap())
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(listOf(card(name = "Refresh Epoch")))),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { state -> state.cards.map { it.name } == listOf("Refresh Epoch") && !state.isLoading }
+            coEvery { SteamService.refreshOwnedGamesFromServer() } coAnswers {
+                if (refreshCalls.incrementAndGet() == 1) {
+                    firstRefreshStarted.complete(Unit)
+                    releaseFirstRefresh.await()
+                    firstRefreshSourceCompleted.complete(Unit)
+                } else {
+                    secondRefreshStarted.complete(Unit)
+                    releaseSecondRefresh.await()
+                }
+                0
+            }
+            every { DeviceGameStatsCache.getAll() } answers { deviceResult.get() }
+            every { GpuGameStatsCache.getAll() } answers { gpuResult.get() }
+
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue("first refresh did not start", firstRefreshStarted.isCompleted)
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue("second refresh did not start", secondRefreshStarted.isCompleted)
+
+            deviceResult.set(oldDeviceStats)
+            gpuResult.set(oldGpuStats)
+            releaseFirstRefresh.complete(Unit)
+            assertTrue(
+                "older refresh source did not complete",
+                awaitCondition(timeoutMs = 4_000L) {
+                    scheduler.runCurrent()
+                    firstRefreshSourceCompleted.isCompleted
+                },
+            )
+            repeat(10) {
+                scheduler.runCurrent()
+                Thread.sleep(50L)
+            }
+            assertTrue("older refresh cleared the active newer refresh", vm.state.value.isRefreshing)
+            assertTrue("older refresh published stale device stats", vm.state.value.deviceGameStats != oldDeviceStats)
+            assertTrue("older refresh published stale GPU stats", vm.state.value.gpuGameStats != oldGpuStats)
+
+            deviceResult.set(newDeviceStats)
+            gpuResult.set(newGpuStats)
+            releaseSecondRefresh.complete(Unit)
+            scheduler.runCurrent()
+            assertTrue(
+                "newer refresh did not publish authoritative stats",
+                awaitCondition(timeoutMs = 4_000L) {
+                    scheduler.runCurrent()
+                    val state = vm.state.value
+                    !state.isRefreshing &&
+                        state.deviceGameStats == newDeviceStats &&
+                        state.gpuGameStats == newGpuStats
+                },
+            )
+        } finally {
+            releaseFirstRefresh.complete(Unit)
+            releaseSecondRefresh.complete(Unit)
             viewModelStore.clear()
             io.close()
         }
