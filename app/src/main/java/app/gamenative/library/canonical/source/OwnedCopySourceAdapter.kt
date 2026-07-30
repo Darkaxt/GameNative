@@ -146,12 +146,26 @@ internal fun sourceReadFailed(
     errorClass = error::class,
 )
 
+internal fun sourceReadFailed(
+    source: GameSource,
+    accountScope: AccountScope?,
+    errorClass: KClass<out Throwable>,
+    lifecycleGeneration: Long? = null,
+): SourceProjectionBatch = unavailableBatch(
+    source = source,
+    accountScope = accountScope,
+    lifecycleGeneration = lifecycleGeneration,
+    reason = SnapshotReason.SOURCE_READ_FAILED,
+    errorClass = errorClass,
+)
+
 internal fun sourceBatch(
     source: GameSource,
     accountScope: AccountScope,
     copies: List<OwnedCopyProjection>,
     partialReason: SnapshotReason?,
     lifecycleGeneration: Long? = null,
+    errorClass: KClass<out Throwable>? = null,
 ): SourceProjectionBatch = SourceProjectionBatch(
     source = source,
     accountScope = accountScope,
@@ -163,6 +177,7 @@ internal fun sourceBatch(
     },
     copies = copies,
     reason = partialReason,
+    errorClass = errorClass,
 )
 
 internal fun sourceQualifiedKeys(provider: String, values: List<String>): Set<String> = values

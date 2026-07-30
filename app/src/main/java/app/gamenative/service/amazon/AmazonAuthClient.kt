@@ -68,8 +68,8 @@ object AmazonAuthClient {
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                Timber.e("[Amazon] Device registration failed: ${response.code} - $responseBody")
-                return@withContext Result.failure(Exception("HTTP ${response.code}: $responseBody"))
+                Timber.e("[Amazon] Device registration failed: HTTP ${response.code}")
+                return@withContext Result.failure(Exception("HTTP ${response.code}"))
             }
 
             val json = JSONObject(responseBody)
@@ -91,7 +91,7 @@ object AmazonAuthClient {
             Timber.i("[Amazon] Device registration successful")
             Result.success(authResponse)
         } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Device registration exception")
+            Timber.e("[Amazon] Device registration exception: ${e.javaClass.simpleName}")
             Result.failure(e)
         }
     }
@@ -123,8 +123,8 @@ object AmazonAuthClient {
             val responseBody = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                Timber.e("[Amazon] Token refresh failed: ${response.code} - $responseBody")
-                return@withContext Result.failure(Exception("HTTP ${response.code}: $responseBody"))
+                Timber.e("[Amazon] Token refresh failed: HTTP ${response.code}")
+                return@withContext Result.failure(Exception("HTTP ${response.code}"))
             }
 
             val json = JSONObject(responseBody)
@@ -139,7 +139,7 @@ object AmazonAuthClient {
             Timber.i("[Amazon] Token refresh successful")
             Result.success(authResponse)
         } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Token refresh exception")
+            Timber.e("[Amazon] Token refresh exception: ${e.javaClass.simpleName}")
             Result.failure(e)
         }
     }
@@ -165,10 +165,8 @@ object AmazonAuthClient {
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
-                val responseBody = response.body?.string() ?: ""
-
                 if (!response.isSuccessful) {
-                    Timber.w("[Amazon] Deregister returned ${response.code}: $responseBody")
+                    Timber.w("[Amazon] Deregister returned HTTP ${response.code}")
                     // Non-fatal: credentials will still be cleared locally
                 } else {
                     Timber.i("[Amazon] Device deregistered successfully")
@@ -177,7 +175,7 @@ object AmazonAuthClient {
 
             Result.success(Unit)
         } catch (e: Exception) {
-            Timber.w(e, "[Amazon] Device deregister exception (non-fatal)")
+            Timber.w("[Amazon] Device deregister exception: ${e.javaClass.simpleName}")
             // Still succeed locally – we'll clear creds regardless
             Result.success(Unit)
         }

@@ -14,15 +14,17 @@ import app.gamenative.db.dao.CompletedOwnedCopySnapshot
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.library.canonical.AccountLifecycleState
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
-import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.AmazonOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.preferredAmazonRows
 import app.gamenative.service.amazon.AmazonArtwork
 import app.gamenative.service.amazon.AmazonService
+import app.gamenative.service.amazon.AmazonUpdateVersionRequest
+import app.gamenative.service.amazon.AmazonUpdateVersionResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -30,13 +32,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Singleton
@@ -54,55 +54,106 @@ class AmazonOwnedCopyRuntimeGateway @Inject constructor(
         AmazonService.getPartialDownloads(context).toSet()
     }
 
-    internal suspend fun updatePending(productId: String): Boolean = withContext(ioDispatcher) {
-        AmazonService.isUpdatePending(productId)
+    internal suspend fun refreshUpdates(
+        requests: List<UpdateObservationRequest<String, String>>,
+    ): Map<String, UpdateRefreshOutcome> = withContext(ioDispatcher) {
+        AmazonService.getUpdatePendingBatch(
+            requests.map { request ->
+                AmazonUpdateVersionRequest(
+                    productId = request.key,
+                    storedVersionId = request.fingerprint,
+                )
+            },
+        ).mapValues { (_, result) ->
+            when (result) {
+                is AmazonUpdateVersionResult.Failed ->
+                    UpdateRefreshOutcome.Failed(result.errorClass)
+                is AmazonUpdateVersionResult.Observed ->
+                    UpdateRefreshOutcome.Observed(result.updateAvailable)
+            }
+        }
     }
 }
 
 class AmazonObservedUpdateState private constructor(
     private val gateway: AmazonOwnedCopyRuntimeGateway,
     scope: CoroutineScope,
-    nowEpochMs: () -> Long,
+    nowMonotonicMs: () -> Long,
+    isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
+    retirements: Flow<Long>,
+    diagnostics: CanonicalDiagnosticSink?,
     @Suppress("UNUSED_PARAMETER") marker: Unit,
 ) {
     @Inject
     constructor(
         gateway: AmazonOwnedCopyRuntimeGateway,
-        clock: CanonicalProjectionClock,
+        accountScopeProvider: AccountScopeProvider,
+        accountLifecycleState: AccountLifecycleState,
+        diagnostics: CanonicalDiagnosticSink,
         @CanonicalIoDispatcher dispatcher: CoroutineDispatcher,
     ) : this(
         gateway = gateway,
         scope = CoroutineScope(SupervisorJob() + dispatcher),
-        nowEpochMs = clock::nowEpochMs,
+        nowMonotonicMs = { System.nanoTime() / 1_000_000L },
+        isOwnerCurrent = { owner ->
+            accountScopeProvider.current(GameSource.AMAZON) == owner.accountScope &&
+                accountLifecycleState.generation(GameSource.AMAZON) == owner.generation &&
+                accountLifecycleState.readyGeneration(GameSource.AMAZON) == owner.generation
+        },
+        retirements = AccountScopeInvalidations.forSource(GameSource.AMAZON).map {
+            accountLifecycleState.generation(GameSource.AMAZON)
+        },
+        diagnostics = diagnostics,
         marker = Unit,
     )
 
     internal constructor(
         gateway: AmazonOwnedCopyRuntimeGateway,
         scope: CoroutineScope,
-        nowEpochMs: () -> Long,
-    ) : this(gateway, scope, nowEpochMs, Unit)
+        nowMonotonicMs: () -> Long,
+    ) : this(gateway, scope, nowMonotonicMs, { true }, emptyFlow(), null, Unit)
 
-    private val refreshSemaphore = Semaphore(MAX_UPDATE_CONCURRENCY)
+    internal constructor(
+        gateway: AmazonOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowMonotonicMs: () -> Long,
+        diagnostics: CanonicalDiagnosticSink,
+    ) : this(gateway, scope, nowMonotonicMs, { true }, emptyFlow(), diagnostics, Unit)
+
+    internal constructor(
+        gateway: AmazonOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowMonotonicMs: () -> Long,
+        isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
+    ) : this(gateway, scope, nowMonotonicMs, isOwnerCurrent, emptyFlow(), null, Unit)
+
+    internal constructor(
+        gateway: AmazonOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowMonotonicMs: () -> Long,
+        isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
+        retirements: Flow<Long>,
+    ) : this(gateway, scope, nowMonotonicMs, isOwnerCurrent, retirements, null, Unit)
+
     private val store = ObservedUpdateStateStore<String, String>(
         scope = scope,
-        nowEpochMs = nowEpochMs,
+        nowMonotonicMs = nowMonotonicMs,
         ttlMs = UPDATE_TTL_MS,
         retryDelayMs = UPDATE_RETRY_MS,
         maxEntries = MAX_UPDATE_ENTRIES,
         maxRefreshBatch = MAX_UPDATE_REFRESH_BATCH,
-        refresh = { requests ->
-            coroutineScope {
-                requests.map { request ->
-                    async {
-                        request.key to refreshSemaphore.withPermit {
-                            gateway.updatePending(request.key)
-                        }
-                    }
-                }.awaitAll().toMap()
-            }
+        isOwnerCurrent = isOwnerCurrent,
+        onRefreshFailure = { errorClass ->
+            diagnostics?.updateObservationFailed(GameSource.AMAZON, errorClass)
         },
+        refresh = { requests -> gateway.refreshUpdates(requests) },
     )
+
+    init {
+        scope.launch {
+            retirements.collect(store::retire)
+        }
+    }
 
     internal fun invalidations(): Flow<Unit> = store.invalidations()
 
@@ -117,9 +168,8 @@ class AmazonObservedUpdateState private constructor(
     private companion object {
         const val UPDATE_TTL_MS = 5 * 60_000L
         const val UPDATE_RETRY_MS = 15_000L
-        const val MAX_UPDATE_ENTRIES = 512
+        const val MAX_UPDATE_ENTRIES = 2_048
         const val MAX_UPDATE_REFRESH_BATCH = 32
-        const val MAX_UPDATE_CONCURRENCY = 4
     }
 }
 
@@ -129,7 +179,7 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
     private val observedUpdates: AmazonObservedUpdateState = AmazonObservedUpdateState(
         gateway = gateway,
         scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
-        nowEpochMs = System::currentTimeMillis,
+        nowMonotonicMs = { System.nanoTime() / 1_000_000L },
     ),
 ) {
 

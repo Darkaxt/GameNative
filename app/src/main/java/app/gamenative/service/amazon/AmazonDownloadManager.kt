@@ -49,7 +49,7 @@ class AmazonDownloadManager @Inject constructor(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val productId = game.productId
         try {
-            Timber.tag(TAG).i("Starting download for ${game.title} → $installPath")
+            Timber.tag(TAG).i("Starting download")
 
             File(installPath).mkdirs()
             MarkerUtils.addMarker(installPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
@@ -62,7 +62,7 @@ class AmazonDownloadManager @Inject constructor(
             // ── 1. Credentials ───────────────────────────────────────────────
             if (game.entitlementId.isBlank()) {
                 cleanupOnFailure()
-                return@withContext Result.failure(Exception("Game '${game.title}' has no entitlement ID — re-sync library first"))
+                return@withContext Result.failure(Exception("Game has no entitlement ID; re-sync library first"))
             }
             val bearerToken = amazonManager.getBearerToken()
             if (bearerToken == null) {
@@ -78,12 +78,12 @@ class AmazonDownloadManager @Inject constructor(
                 return@withContext Result.failure(Exception("Failed to fetch download spec from Amazon"))
             }
 
-            Timber.tag(TAG).d("Download spec: url=${spec.downloadUrl}, version=${spec.versionId}")
+            Timber.tag(TAG).d("Download spec received")
 
             // ── 3. Manifest ──────────────────────────────────────────────────
             downloadInfo.updateStatusMessage("Fetching manifest…")
             val manifestUrl = appendPath(spec.downloadUrl, "manifest.proto")
-            Timber.tag(TAG).d("Manifest URL: $manifestUrl")
+            Timber.tag(TAG).d("Fetching manifest")
             val manifestBytes = fetchBytes(manifestUrl)
             if (manifestBytes == null) {
                 cleanupOnFailure()
@@ -94,7 +94,7 @@ class AmazonDownloadManager @Inject constructor(
                 AmazonManifest.parse(manifestBytes)
             } catch (e: Exception) {
                 cleanupOnFailure()
-                return@withContext Result.failure(Exception("Failed to parse manifest: ${e.message}", e))
+                return@withContext Result.failure(Exception("Failed to parse manifest", e))
             }
 
             val files = manifest.allFiles
@@ -155,13 +155,13 @@ class AmazonDownloadManager @Inject constructor(
                 manifestDir.mkdirs()
                 val manifestFile = File(manifestDir, "$productId.proto")
                 manifestFile.writeBytes(manifestBytes)
-                Timber.tag(TAG).i("Cached manifest: ${manifestFile.absolutePath} (${manifestBytes.size} bytes)")
+                Timber.tag(TAG).i("Cached manifest (${manifestBytes.size} bytes)")
             } catch (e: Exception) {
-                Timber.tag(TAG).w(e, "Failed to cache manifest (non-fatal)")
+                Timber.tag(TAG).w("Failed to cache manifest: ${e.javaClass.simpleName}")
             }
 
             // ── 7. Persist installed state ───────────────────────────────────
-            Timber.tag(TAG).i("Persisting install: productId=$productId, version=${spec.versionId}")
+            Timber.tag(TAG).i("Persisting install")
             amazonManager.markInstalled(productId, installPath, manifest.totalInstallSize, spec.versionId)
 
             MarkerUtils.removeMarker(installPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
@@ -175,7 +175,7 @@ class AmazonDownloadManager @Inject constructor(
             downloadInfo.setActive(false)
             downloadInfo.emitProgressChange()
 
-            Timber.tag(TAG).i("Download complete for ${game.title}")
+            Timber.tag(TAG).i("Download complete")
             Result.success(Unit)
 
         } catch (e: Exception) {
@@ -185,9 +185,9 @@ class AmazonDownloadManager @Inject constructor(
                 downloadInfo.setActive(false)
                 throw e
             }
-            Timber.tag(TAG).e(e, "Download failed for ${game.title}: ${e.message}")
+            Timber.tag(TAG).e("Download failed: ${e.javaClass.simpleName}")
             MarkerUtils.removeMarker(installPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
-            downloadInfo.updateStatusMessage("Failed: ${e.message}")
+            downloadInfo.updateStatusMessage("Failed")
             downloadInfo.setProgress(-1f)
             downloadInfo.setActive(false)
             Result.failure(e)
@@ -215,14 +215,14 @@ class AmazonDownloadManager @Inject constructor(
             if (attempt < MAX_RETRIES - 1) {
                 val backoffMs = RETRY_DELAY_MS * (1 shl attempt) // 1s, 2s, 4s
                 Timber.tag(TAG).w(
-                    "File ${file.unixPath} failed (attempt ${attempt + 1}/$MAX_RETRIES): " +
-                        "${lastException?.message}. Retrying in ${backoffMs}ms…"
+                    "File download failed (attempt ${attempt + 1}/$MAX_RETRIES); " +
+                        "retrying in ${backoffMs}ms",
                 )
                 delay(backoffMs)
             }
         }
         return Result.failure(
-            lastException ?: Exception("Failed to download ${file.unixPath} after $MAX_RETRIES attempts")
+            lastException ?: Exception("File download failed after $MAX_RETRIES attempts")
         )
     }
 
@@ -238,7 +238,7 @@ class AmazonDownloadManager @Inject constructor(
 
         // Security check: prevent path traversal attacks
         if (!destFile.path.startsWith(installDirCanonical) || !tmpFile.path.startsWith(installDirCanonical)) {
-            Timber.tag(TAG).e("Path traversal attempt blocked: ${file.unixPath}")
+            Timber.tag(TAG).e("Path traversal attempt blocked")
             return@withContext Result.failure(SecurityException("Invalid file path"))
         }
 
@@ -264,7 +264,7 @@ class AmazonDownloadManager @Inject constructor(
             okHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(
-                        Exception("HTTP ${response.code} for ${file.unixPath}")
+                        Exception("HTTP ${response.code} while downloading file")
                     )
                 }
 
@@ -305,7 +305,7 @@ class AmazonDownloadManager @Inject constructor(
                 if (!computed.contentEquals(file.hashBytes)) {
                     tmpFile.delete()
                     return@withContext Result.failure(
-                        Exception("SHA-256 mismatch for ${file.unixPath}")
+                        Exception("SHA-256 mismatch for downloaded file")
                     )
                 }
             }
@@ -319,7 +319,7 @@ class AmazonDownloadManager @Inject constructor(
             throw e
         } catch (e: Exception) {
             tmpFile.delete()
-            Timber.tag(TAG).w(e, "Error downloading ${file.unixPath}")
+            Timber.tag(TAG).w("Error downloading file: ${e.javaClass.simpleName}")
             Result.failure(e)
         }
     }
@@ -343,7 +343,7 @@ class AmazonDownloadManager @Inject constructor(
             if (!response.isSuccessful) null else response.body.bytes()
         }
     } catch (e: Exception) {
-        Timber.tag(TAG).e(e, "fetchBytes failed for $url")
+        Timber.tag(TAG).e("fetchBytes failed: ${e.javaClass.simpleName}")
         null
     }
 }

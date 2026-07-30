@@ -4,6 +4,7 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.library.canonical.AccountScopeProvider
+import app.gamenative.utils.CustomGameProjectionScan
 import app.gamenative.utils.CustomGameScanner
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -11,9 +12,21 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 @Singleton
-class CustomOwnedCopySourceAdapter @Inject constructor(
+class CustomOwnedCopySourceAdapter private constructor(
     private val accountScopeProvider: AccountScopeProvider,
+    private val scanProjection: () -> CustomGameProjectionScan,
 ) : OwnedCopySourceAdapter {
+    @Inject
+    constructor(
+        accountScopeProvider: AccountScopeProvider,
+    ) : this(accountScopeProvider, CustomGameScanner::scanForCanonicalProjection)
+
+    internal constructor(
+        accountScopeProvider: AccountScopeProvider,
+        scanProjection: () -> CustomGameProjectionScan,
+        @Suppress("UNUSED_PARAMETER") marker: Unit = Unit,
+    ) : this(accountScopeProvider, scanProjection)
+
     override val source: GameSource = GameSource.CUSTOM_GAME
 
     override fun invalidations(): Flow<Unit> = CustomGameScanner.canonicalInvalidations()
@@ -28,7 +41,7 @@ class CustomOwnedCopySourceAdapter @Inject constructor(
         } ?: return missingAccountScope(source)
 
         return try {
-            val scan = CustomGameScanner.scanForCanonicalProjection()
+            val scan = scanProjection()
             val copies = scan.entries.map { entry ->
                 OwnedCopyProjection(
                     key = OwnedCopyKey(accountScope, source, entry.appId.toString()),
@@ -38,12 +51,21 @@ class CustomOwnedCopySourceAdapter @Inject constructor(
                     appType = CanonicalAppType.GAME,
                 )
             }.sortedBy { it.key.stableSourceId }
-            sourceBatch(
-                source = source,
-                accountScope = accountScope,
-                copies = copies,
-                partialReason = SnapshotReason.MISSING_STABLE_ID.takeIf { scan.partial },
-            )
+            if (copies.isEmpty() && scan.readFailureClass != null) {
+                sourceReadFailed(source, accountScope, scan.readFailureClass)
+            } else {
+                sourceBatch(
+                    source = source,
+                    accountScope = accountScope,
+                    copies = copies,
+                    partialReason = when {
+                        scan.readFailureClass != null -> SnapshotReason.SOURCE_READ_FAILED
+                        scan.missingStableId -> SnapshotReason.MISSING_STABLE_ID
+                        else -> null
+                    },
+                    errorClass = scan.readFailureClass,
+                )
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

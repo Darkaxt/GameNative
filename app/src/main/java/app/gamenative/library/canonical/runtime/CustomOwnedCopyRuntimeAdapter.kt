@@ -125,10 +125,10 @@ class CustomOwnedCopyRuntimeScanner private constructor(
     private fun Candidate.icon(): String? {
         val rootLogo = files.asSequence()
             .filter { file ->
-                file.nameWithoutExtension.startsWith("steamgriddb_logo", ignoreCase = true)
+                file.nameWithoutExtension.equals("steamgriddb_logo", ignoreCase = true)
             }
-            .filter { it.isSupportedIcon() }
-            .sortedWith(iconOrder())
+            .filter { it.isSupportedIcon(STEAM_GRID_LOGO_EXTENSIONS) }
+            .sortedWith(iconOrder(STEAM_GRID_LOGO_EXTENSIONS))
             .firstOrNull()
         if (rootLogo != null) return rootLogo.path
 
@@ -141,9 +141,9 @@ class CustomOwnedCopyRuntimeScanner private constructor(
                 .forEach { child -> addAll(child.listFiles().orEmpty().filter(File::isFile)) }
         }
         val icons = nearbyFiles.asSequence()
-            .filter { it.isSupportedIcon() }
+            .filter { it.isSupportedIcon(NEARBY_ICON_EXTENSIONS) }
             .distinctBy(File::getAbsolutePath)
-            .sortedWith(iconOrder())
+            .sortedWith(iconOrder(NEARBY_ICON_EXTENSIONS))
             .toList()
         val executables = nearbyFiles.asSequence()
             .filter { file ->
@@ -174,11 +174,11 @@ class CustomOwnedCopyRuntimeScanner private constructor(
         return icons.singleOrNull()?.path
     }
 
-    private fun File.isSupportedIcon(): Boolean =
-        isFile && extension.lowercase() in ICON_EXTENSIONS
+    private fun File.isSupportedIcon(extensions: List<String>): Boolean =
+        isFile && extension.lowercase() in extensions
 
-    private fun iconOrder(): Comparator<File> = compareBy(
-        { ICON_EXTENSIONS.indexOf(it.extension.lowercase()) },
+    private fun iconOrder(extensions: List<String>): Comparator<File> = compareBy(
+        { extensions.indexOf(it.extension.lowercase()) },
         File::getName,
     )
 
@@ -229,7 +229,8 @@ class CustomOwnedCopyRuntimeScanner private constructor(
 
     private companion object {
         const val MAX_ASSOCIATIONS = 512
-        val ICON_EXTENSIONS = listOf("png", "jpg", "jpeg", "webp", "ico")
+        val STEAM_GRID_LOGO_EXTENSIONS = listOf("png", "jpg", "webp")
+        val NEARBY_ICON_EXTENSIONS = listOf("png", "ico")
         val ARTWORK_EXTENSIONS = listOf("png", "jpg", "jpeg", "webp")
     }
 }
@@ -284,7 +285,11 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
             }
             val row = first.rows[requestedAppId]
             val lastPlayed = row?.let {
-                playHistoryDao.pointLastPlayed(sourceAppId(source, requestedAppId))
+                playHistoryDao.pointLastPlayed(
+                    sourceAppId(source, requestedAppId),
+                    source,
+                    diagnostics,
+                )
             }
             val final = runtimeState.readTyped(setOf(requestedAppId))
             completedFinal = final
@@ -353,7 +358,7 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
             val first = runtimeState.readTyped(requestedIds)
             initial = first
             val history = if (first.batchFailure == null) {
-                playHistoryDao.batchLastPlayed()
+                playHistoryDao.batchLastPlayed(source, diagnostics)
             } else {
                 emptyMap()
             }

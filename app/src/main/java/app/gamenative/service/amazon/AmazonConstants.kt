@@ -66,11 +66,11 @@ object AmazonConstants {
     fun defaultAmazonGamesPath(context: Context): String {
         return if (PrefManager.useExternalStorage && File(PrefManager.externalStoragePath).exists()) {
             val path = externalAmazonGamesPath()
-            Timber.i("Amazon using external storage: $path")
+            Timber.i("Amazon using external storage")
             path
         } else {
             val path = internalAmazonGamesPath(context)
-            Timber.i("Amazon using internal storage: $path")
+            Timber.i("Amazon using internal storage")
             path
         }
     }

@@ -625,11 +625,17 @@ class SteamService : Service(), IChallengeUrlChanged {
         }
 
         suspend fun buildLicensedDepotMapSuspending(apps: List<SteamApp>): Map<Int, Set<Int>> {
-            val pkgIds = apps.map { it.packageId }.filter { it != INVALID_PKG_ID }.distinct()
+            val pkgIds = apps.map { it.packageId }
+                .filter { it != INVALID_PKG_ID }
+                .plus(0)
+                .distinct()
             val licenses = instance?.licenseDao?.findLicenses(pkgIds).orEmpty()
             val pkgToDepots = licenses.associate { it.packageId to it.depotIds.toSet() }
+            val sharedDepots = pkgToDepots[0].orEmpty()
             return apps.mapNotNull { app ->
-                val depots = pkgToDepots[app.packageId]?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val depots = (pkgToDepots[app.packageId].orEmpty() + sharedDepots)
+                    .takeIf { it.isNotEmpty() }
+                    ?: return@mapNotNull null
                 app.id to depots
             }.toMap()
         }
@@ -3008,47 +3014,97 @@ class SteamService : Service(), IChallengeUrlChanged {
         // Should service auto-stop when idle (backgrounded)?
         var autoStopWhenIdle: Boolean = false
 
+        internal fun isUpdatePendingFromSnapshots(
+            localApp: SteamApp,
+            branch: String,
+            preferredLanguage: String,
+            ownedDlcApps: List<SteamApp>,
+            licensedDepotIds: Map<Int, Set<Int>>,
+            installedDepotIds: Set<Int>,
+            remoteApps: Map<Int, SteamApp>,
+        ): Boolean {
+            val ownedDlcIds = ownedDlcApps.map(SteamApp::id).toSet()
+            val ownedMainDlcDepots = localApp.depots.filterValues { depot ->
+                depot.dlcAppId in ownedDlcIds
+            }
+            val localOwnerByDepot = linkedMapOf<Int, SteamApp>()
+            resolveDownloadableDepots(
+                depots = localApp.depots,
+                preferredLanguage = preferredLanguage,
+                ownedDlc = ownedMainDlcDepots,
+                licensedDepotIds = licensedDepotIds[localApp.id],
+            ).keys.forEach { depotId -> localOwnerByDepot[depotId] = localApp }
+            ownedDlcApps.forEach { dlcApp ->
+                resolveDownloadableDepots(
+                    depots = dlcApp.depots,
+                    preferredLanguage = preferredLanguage,
+                    ownedDlc = null,
+                    licensedDepotIds = licensedDepotIds[dlcApp.id],
+                ).keys.forEach { depotId -> localOwnerByDepot[depotId] = dlcApp }
+            }
+            installedDepotIds.forEach { depotId ->
+                val owner = sequenceOf(localApp)
+                    .plus(ownedDlcApps.asSequence())
+                    .firstOrNull { depotId in it.depots }
+                if (owner != null) localOwnerByDepot[depotId] = owner
+            }
+            return localOwnerByDepot.any { (depotId, localOwner) ->
+                val remoteManifest = remoteApps[localOwner.id]
+                    ?.depots
+                    ?.get(depotId)
+                    ?.manifests
+                    ?.get(branch)
+                    ?: return@any false
+                val localManifest = localOwner.depots[depotId]
+                    ?.manifests
+                    ?.get(branch)
+                remoteManifest.gid != localManifest?.gid
+            }
+        }
+
         suspend fun getUpdatePendingBatch(
             apps: List<SteamApp>,
             branches: Map<Int, String>,
             licensedDepotIds: Map<Int, Set<Int>>,
+            installedDepotIds: Map<Int, Set<Int>>,
         ): Map<Int, Boolean> = withContext(Dispatchers.IO) {
             if (!isConnected || apps.isEmpty()) return@withContext emptyMap()
-            val steamApps = instance?._steamApps ?: return@withContext emptyMap()
+            val service = instance ?: return@withContext emptyMap()
+            val steamApps = service._steamApps ?: return@withContext emptyMap()
+            val localApps = apps.distinctBy(SteamApp::id)
+            val ownedDlcApps = service.appDao
+                .findOwnedDLCAppsForParents(localApps.map(SteamApp::id))
+            val ownedDlcByParent = ownedDlcApps.groupBy(SteamApp::dlcForAppId)
+            val calculatedLicenses = buildLicensedDepotMapSuspending(localApps + ownedDlcApps)
+            val allLicensedDepots = (calculatedLicenses.keys + licensedDepotIds.keys).associateWith { appId ->
+                calculatedLicenses[appId].orEmpty() + licensedDepotIds[appId].orEmpty()
+            }
+            val requestedApps = (localApps + ownedDlcApps).distinctBy(SteamApp::id)
+            val remoteById = requestedApps.chunked(100).flatMap { chunk ->
+                steamApps.picsGetProductInfo(
+                    apps = chunk.map { PICSRequest(id = it.id) },
+                    packages = emptyList(),
+                ).await().results.flatMap { it.apps.entries }
+            }.associate { (appId, appInfo) ->
+                appId to appInfo.keyValues.generateSteamApp()
+            }
             buildMap {
-                apps.distinctBy(SteamApp::id).chunked(100).forEach { chunk ->
-                    val pics = steamApps.picsGetProductInfo(
-                        apps = chunk.map { PICSRequest(id = it.id) },
-                        packages = emptyList(),
-                    ).await()
-                    val remoteById = pics.results
-                        .flatMap { it.apps.entries }
-                        .associate { (appId, appInfo) ->
-                            appId to appInfo.keyValues.generateSteamApp()
-                        }
-                    chunk.forEach { localApp ->
-                        val remoteApp = remoteById[localApp.id] ?: return@forEach
-                        val branch = branches[localApp.id] ?: "public"
-                        val installedDepotIds = resolveDownloadableDepots(
-                            depots = localApp.depots,
-                            preferredLanguage = "",
-                            ownedDlc = emptyMap(),
-                            licensedDepotIds = licensedDepotIds[localApp.id],
-                        ).keys
-                        put(
-                            localApp.id,
-                            installedDepotIds.any { depotId ->
-                                val remoteManifest = remoteApp.depots[depotId]
-                                    ?.manifests
-                                    ?.get(branch)
-                                    ?: return@any false
-                                val localManifest = localApp.depots[depotId]
-                                    ?.manifests
-                                    ?.get(branch)
-                                remoteManifest.gid != localManifest?.gid
-                            },
-                        )
-                    }
+                localApps.forEach { localApp ->
+                    val ownedDlc = ownedDlcByParent[localApp.id].orEmpty()
+                    val requiredRemoteIds = ownedDlc.mapTo(mutableSetOf(localApp.id), SteamApp::id)
+                    if (!remoteById.keys.containsAll(requiredRemoteIds)) return@forEach
+                    put(
+                        localApp.id,
+                        isUpdatePendingFromSnapshots(
+                            localApp = localApp,
+                            branch = branches[localApp.id] ?: "public",
+                            preferredLanguage = PrefManager.containerLanguage,
+                            ownedDlcApps = ownedDlc,
+                            licensedDepotIds = allLicensedDepots,
+                            installedDepotIds = installedDepotIds[localApp.id].orEmpty(),
+                            remoteApps = remoteById,
+                        ),
+                    )
                 }
             }
         }

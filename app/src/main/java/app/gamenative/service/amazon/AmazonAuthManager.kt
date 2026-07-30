@@ -97,7 +97,9 @@ object AmazonAuthManager {
 
             if (result.isFailure) {
                 val error = result.exceptionOrNull()
-                Timber.e(error, "[Amazon] Device registration failed: ${error?.message}")
+                Timber.e(
+                    "[Amazon] Device registration failed: ${error?.javaClass?.simpleName ?: "Exception"}",
+                )
                 return Result.failure(error ?: Exception("Device registration failed"))
             }
 
@@ -126,8 +128,8 @@ object AmazonAuthManager {
             Timber.i("[Amazon] Authentication successful")
             Result.success(credentials)
         } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Authentication exception: ${e.message}")
-            Result.failure(Exception("Authentication exception: ${e.message}", e))
+            Timber.e("[Amazon] Authentication exception: ${e.javaClass.simpleName}")
+            Result.failure(Exception("Authentication exception", e))
         }
     }
 
@@ -153,9 +155,7 @@ object AmazonAuthManager {
 
                 if (refreshResult.isFailure) {
                     Timber.e("[Amazon] Token refresh failed")
-                    return Result.failure(
-                        Exception("Failed to refresh token: ${refreshResult.exceptionOrNull()?.message}")
-                    )
+                    return Result.failure(Exception("Failed to refresh token"))
                 }
 
                 val auth = refreshResult.getOrNull()!!
@@ -176,8 +176,8 @@ object AmazonAuthManager {
             }
             Result.success(credentials)
         } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Error getting credentials: ${e.message}")
-            Result.failure(Exception("Error getting credentials: ${e.message}", e))
+            Timber.e("[Amazon] Error getting credentials: ${e.javaClass.simpleName}")
+            Result.failure(Exception("Error getting credentials", e))
         }
     }
 
@@ -203,7 +203,9 @@ object AmazonAuthManager {
                 )
             }
         } catch (error: Exception) {
-            Timber.e(error, "[Amazon] Remote logout failed after clearing local credentials")
+            Timber.e(
+                "[Amazon] Remote logout failed: ${error.javaClass.simpleName}",
+            )
         }
 
         return if (credentialsCleared) {

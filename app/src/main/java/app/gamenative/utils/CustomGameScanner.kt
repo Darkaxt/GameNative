@@ -22,6 +22,7 @@ import app.gamenative.service.SteamService.Companion.getMainAppDepots
 import com.winlator.container.Container
 import com.winlator.container.ContainerManager
 import java.io.File
+import kotlin.reflect.KClass
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.math.abs
@@ -42,7 +43,8 @@ internal data class CustomGameProjectionEntry(
 
 internal data class CustomGameProjectionScan(
     val entries: List<CustomGameProjectionEntry>,
-    val partial: Boolean,
+    val missingStableId: Boolean,
+    val readFailureClass: KClass<out Throwable>? = null,
 )
 
 object CustomGameScanner {
@@ -525,32 +527,42 @@ object CustomGameScanner {
      * Reads only persisted custom-game identities needed by canonical projection.
      * This scan never generates IDs, writes metadata, inspects Steam imports, or exposes paths.
      */
-    internal fun scanForCanonicalProjection(): CustomGameProjectionScan {
-        var partial = false
+    internal fun scanForCanonicalProjection(
+        readAppId: (File) -> ReadOnlyAppIdResult = GameMetadataManager::readAppIdReadOnly,
+    ): CustomGameProjectionScan {
+        var missingStableId = false
+        var readFailureClass: KClass<out Throwable>? = null
         val candidates = buildList {
             for (path in PrefManager.customGameManualFolders) {
                 val folder = File(path)
                 if (!folder.exists() || !folder.isDirectory) {
-                    partial = true
+                    missingStableId = true
                     continue
                 }
 
-                val appId = GameMetadataManager.getAppIdReadOnly(folder)
-                if (appId == null) {
-                    partial = true
-                    continue
+                when (val result = readAppId(folder)) {
+                    is ReadOnlyAppIdResult.Present -> add(
+                        CustomGameProjectionEntry(
+                            appId = result.appId,
+                            displayName = folder.name,
+                        ),
+                    )
+                    ReadOnlyAppIdResult.MissingOrInvalid -> missingStableId = true
+                    is ReadOnlyAppIdResult.ReadFailure -> {
+                        if (readFailureClass == null) readFailureClass = result.errorClass
+                    }
                 }
-                add(CustomGameProjectionEntry(appId = appId, displayName = folder.name))
             }
         }
         val duplicateIds = candidates.groupingBy(CustomGameProjectionEntry::appId)
             .eachCount()
             .filterValues { it > 1 }
             .keys
-        if (duplicateIds.isNotEmpty()) partial = true
+        if (duplicateIds.isNotEmpty()) missingStableId = true
         return CustomGameProjectionScan(
             entries = candidates.filterNot { it.appId in duplicateIds },
-            partial = partial,
+            missingStableId = missingStableId,
+            readFailureClass = readFailureClass,
         )
     }
 

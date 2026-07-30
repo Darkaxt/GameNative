@@ -291,6 +291,10 @@ class CanonicalProjectionCoordinatorTest {
             origin = PlayHistoryOrigin.POINT,
             errorClass = IllegalStateException::class,
         )
+        diagnostics.updateObservationFailed(
+            source = GameSource.STEAM,
+            errorClass = IllegalStateException::class,
+        )
 
         val featureEvents = recorder.events.map { event -> event.toFeatureEvent() }
         val allowed = setOf(
@@ -333,6 +337,16 @@ class CanonicalProjectionCoordinatorTest {
             ),
             featureEvents.single {
                 it.attributes[DiagnosticAttribute.OPERATION] == "PLAY_HISTORY"
+            }.attributes,
+        )
+        assertEquals(
+            mapOf(
+                DiagnosticAttribute.SOURCE to "STEAM",
+                DiagnosticAttribute.OPERATION to "UPDATE_OBSERVATION",
+                DiagnosticAttribute.ERROR_TYPE to "IllegalStateException",
+            ),
+            featureEvents.single {
+                it.attributes[DiagnosticAttribute.OPERATION] == "UPDATE_OBSERVATION"
             }.attributes,
         )
         assertEquals(
@@ -469,6 +483,11 @@ class CanonicalProjectionCoordinatorTest {
         override fun playHistoryFailed(
             source: GameSource?,
             origin: PlayHistoryOrigin,
+            errorClass: KClass<out Throwable>,
+        ) = Unit
+
+        override fun updateObservationFailed(
+            source: GameSource,
             errorClass: KClass<out Throwable>,
         ) = Unit
 

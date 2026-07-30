@@ -230,7 +230,7 @@ object AmazonApiClient {
             put("Operation", "GetGameDownload")
         }
 
-        Timber.tag("Amazon").d("fetchGameDownload: entitlementId=$entitlementId")
+        Timber.tag("Amazon").d("fetchGameDownload: request started")
 
         val response = postJson(
             url = DISTRIBUTION_URL,
@@ -240,11 +240,11 @@ object AmazonApiClient {
         ) ?: return@withContext null
 
         val downloadUrl = response.optString("downloadUrl", "").ifEmpty {
-            Timber.e("[Amazon] GetGameDownload: missing downloadUrl in response: ${response.toString().take(500)}")
+            Timber.e("[Amazon] GetGameDownload: missing download URL")
             return@withContext null
         }
         val versionId = response.optString("versionId", "")
-        Timber.i("[Amazon] GetGameDownload: versionId=$versionId url=$downloadUrl")
+        Timber.i("[Amazon] GetGameDownload: download spec received")
         GameDownloadSpec(downloadUrl = downloadUrl, versionId = versionId)
     }
 
@@ -275,7 +275,7 @@ object AmazonApiClient {
         // Response shape: { "adgProductIdToVersionIdMap": { "productId1": "versionId1", ... } }
         val versions = response.optJSONObject("adgProductIdToVersionIdMap")
         if (versions == null) {
-            Timber.tag("Amazon").w("GetLiveVersionIds: no 'adgProductIdToVersionIdMap' in response: ${response.toString().take(500)}")
+            Timber.tag("Amazon").w("GetLiveVersionIds: version map missing")
             return@withContext null
         }
 
@@ -297,13 +297,11 @@ object AmazonApiClient {
             ?: return@withContext null
         val liveVersion = liveVersions[productId]
         if (liveVersion.isNullOrEmpty()) {
-            Timber.tag("Amazon").w("isUpdateAvailable: no live version returned for $productId")
+            Timber.tag("Amazon").w("isUpdateAvailable: live version missing")
             return@withContext null
         }
         val updateAvailable = liveVersion != storedVersionId
-        Timber.tag("Amazon").i(
-            "isUpdateAvailable: productId=$productId stored=$storedVersionId live=$liveVersion update=$updateAvailable"
-        )
+        Timber.tag("Amazon").i("isUpdateAvailable: observed=$updateAvailable")
         updateAvailable
     }
 
@@ -314,7 +312,7 @@ object AmazonApiClient {
         entitlementId: String,
         bearerToken: String,
     ): Long? = withContext(Dispatchers.IO) {
-        Timber.tag("Amazon").d("fetchDownloadSize: entitlementId=$entitlementId")
+        Timber.tag("Amazon").d("fetchDownloadSize: request started")
 
         val spec = fetchGameDownload(entitlementId, bearerToken) ?: run {
             Timber.tag("Amazon").w("fetchDownloadSize: failed to get download spec")
@@ -322,7 +320,7 @@ object AmazonApiClient {
         }
 
         val manifestUrl = appendPath(spec.downloadUrl, "manifest.proto")
-        Timber.tag("Amazon").d("fetchDownloadSize: manifest URL = $manifestUrl")
+        Timber.tag("Amazon").d("fetchDownloadSize: fetching manifest")
 
         val manifestBytes = try {
             val request = Request.Builder()
@@ -338,7 +336,9 @@ object AmazonApiClient {
                 response.body?.bytes()
             }
         } catch (e: Exception) {
-            Timber.tag("Amazon").e(e, "fetchDownloadSize: failed to fetch manifest.proto")
+            Timber.tag("Amazon").e(
+                "fetchDownloadSize: manifest fetch failed: ${e.javaClass.simpleName}",
+            )
             return@withContext null
         }
 
@@ -352,7 +352,9 @@ object AmazonApiClient {
             Timber.tag("Amazon").i("fetchDownloadSize: totalInstallSize = ${manifest.totalInstallSize}")
             manifest.totalInstallSize
         } catch (e: Exception) {
-            Timber.tag("Amazon").e(e, "fetchDownloadSize: failed to parse manifest")
+            Timber.tag("Amazon").e(
+                "fetchDownloadSize: manifest parse failed: ${e.javaClass.simpleName}",
+            )
             null
         }
     }
@@ -364,7 +366,7 @@ object AmazonApiClient {
         bearerToken: String,
     ): GameDownloadSpec? = withContext(Dispatchers.IO) {
         val url = "$DISTRIBUTION_URL/download/channel/${AmazonConstants.LAUNCHER_CHANNEL_ID}"
-        Timber.tag("Amazon").d("fetchSdkDownload: GET $url")
+        Timber.tag("Amazon").d("fetchSdkDownload: request started")
 
         try {
             val request = Request.Builder()
@@ -376,8 +378,7 @@ object AmazonApiClient {
 
             Net.http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    val errorBody = response.body?.string() ?: "(no body)"
-                    Timber.tag("Amazon").e("fetchSdkDownload: HTTP ${response.code}: $errorBody")
+                    Timber.tag("Amazon").e("fetchSdkDownload: HTTP ${response.code}")
                     return@withContext null
                 }
 
@@ -389,11 +390,11 @@ object AmazonApiClient {
                     return@withContext null
                 }
                 val versionId = json.optString("versionId", "")
-                Timber.tag("Amazon").i("fetchSdkDownload: versionId=$versionId url=${downloadUrl.take(80)}…")
+                Timber.tag("Amazon").i("fetchSdkDownload: download spec received")
                 GameDownloadSpec(downloadUrl = downloadUrl, versionId = versionId)
             }
         } catch (e: Exception) {
-            Timber.tag("Amazon").e(e, "fetchSdkDownload failed")
+            Timber.tag("Amazon").e("fetchSdkDownload failed: ${e.javaClass.simpleName}")
             null
         }
     }

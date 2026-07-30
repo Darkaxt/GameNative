@@ -27,6 +27,8 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.inject.Inject
+import kotlin.reflect.KClass
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +39,25 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import app.gamenative.ui.util.SnackbarManager
 import timber.log.Timber
+
+internal data class AmazonUpdateVersionRequest(
+    val productId: String,
+    val storedVersionId: String,
+)
+
+internal sealed interface AmazonUpdateVersionResult {
+    data class Observed(val updateAvailable: Boolean) : AmazonUpdateVersionResult
+
+    data class Failed(
+        val errorClass: KClass<out Throwable>,
+    ) : AmazonUpdateVersionResult
+}
+
+internal class AmazonServiceUnavailableException : Exception()
+internal class AmazonTokenUnavailableException : Exception()
+internal class AmazonLiveVersionsUnavailableException : Exception()
+internal class AmazonStoredVersionUnavailableException : Exception()
+internal class AmazonLiveVersionMissingException : Exception()
 
 /** Amazon Games foreground service. */
 @AndroidEntryPoint
@@ -167,7 +188,7 @@ class AmazonService : Service() {
                     Timber.tag("Amazon").i("Logout completed successfully")
                     Result.success(Unit)
                 } catch (e: Exception) {
-                    Timber.tag("Amazon").e(e, "Error during logout")
+                    Timber.tag("Amazon").e("Error during logout: ${e.javaClass.simpleName}")
                     Result.failure(e)
                 }
             }
@@ -242,33 +263,33 @@ class AmazonService : Service() {
         /** Steam-style partial detection: directory exists and completion marker is absent. */
         fun hasPartialDownloadByAppId(context: Context, appId: Int): Boolean {
             if (getDownloadInfoByAppId(appId) != null) {
-                Timber.tag("Amazon").d("[PARTIAL] appId=$appId partial=true reason=active_download")
+                Timber.tag("Amazon").d("[PARTIAL] partial=true reason=active_download")
                 return true
             }
             if (isGameInstalledByAppId(context, appId)) {
-                Timber.tag("Amazon").d("[PARTIAL] appId=$appId partial=false reason=installed")
+                Timber.tag("Amazon").d("[PARTIAL] partial=false reason=installed")
                 return false
             }
 
             val expectedPath = getExpectedInstallPathByAppId(context, appId) ?: return false
             val installDir = File(expectedPath)
             if (!installDir.exists()) {
-                Timber.tag("Amazon").d("[PARTIAL] appId=$appId partial=false reason=path_missing path=$expectedPath")
+                Timber.tag("Amazon").d("[PARTIAL] partial=false reason=path_missing")
                 return false
             }
 
             if (MarkerUtils.hasMarker(expectedPath, Marker.DOWNLOAD_COMPLETE_MARKER)) {
-                Timber.tag("Amazon").d("[PARTIAL] appId=$appId partial=false reason=complete_marker path=$expectedPath")
+                Timber.tag("Amazon").d("[PARTIAL] partial=false reason=complete_marker")
                 return false
             }
             if (MarkerUtils.hasMarker(expectedPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)) {
-                Timber.tag("Amazon").d("[PARTIAL] appId=$appId partial=true reason=in_progress_marker path=$expectedPath")
+                Timber.tag("Amazon").d("[PARTIAL] partial=true reason=in_progress_marker")
                 return true
             }
 
             val children = installDir.listFiles() ?: return false
             if (children.isEmpty()) {
-                Timber.tag("Amazon").d("[PARTIAL] appId=$appId partial=false reason=empty_dir path=$expectedPath")
+                Timber.tag("Amazon").d("[PARTIAL] partial=false reason=empty_dir")
                 return false
             }
 
@@ -283,9 +304,8 @@ class AmazonService : Service() {
                 }
             }
 
-            val childNames = children.joinToString(limit = 8) { it.name }
             Timber.tag("Amazon").d(
-                "[PARTIAL] appId=$appId partial=$hasPartialPayload reason=dir_scan path=$expectedPath children=$childNames"
+                "[PARTIAL] partial=$hasPartialPayload reason=dir_scan childCount=${children.size}",
             )
             return hasPartialPayload
         }
@@ -344,13 +364,92 @@ class AmazonService : Service() {
         /** Deprecated name kept for call-site compatibility — delegates to [getInstallPath]. */
         fun getInstalledGamePath(gameId: String): String? = getInstallPath(gameId)
 
-        /** Check whether an installed game has a newer live version. */
+        /** Observe live versions for one bounded canonical refresh wave. */
+        internal suspend fun getUpdatePendingBatch(
+            requests: List<AmazonUpdateVersionRequest>,
+        ): Map<String, AmazonUpdateVersionResult> {
+            if (requests.isEmpty()) return emptyMap()
+            val svc = instance ?: return requests.failedUpdates(
+                AmazonServiceUnavailableException::class,
+            )
+            return probeUpdateVersions(
+                requests = requests,
+                tokenProvider = svc.amazonManager::getBearerToken,
+                liveVersionFetcher = AmazonApiClient::fetchLiveVersionIds,
+            )
+        }
+
+        internal suspend fun probeUpdateVersions(
+            requests: List<AmazonUpdateVersionRequest>,
+            tokenProvider: suspend () -> String?,
+            liveVersionFetcher: suspend (List<String>, String) -> Map<String, String>?,
+        ): Map<String, AmazonUpdateVersionResult> {
+            if (requests.isEmpty()) return emptyMap()
+            val usable = requests.distinctBy(AmazonUpdateVersionRequest::productId)
+            val missingStoredVersion = usable.filter { it.storedVersionId.isBlank() }
+            val queryable = usable.filter { it.storedVersionId.isNotBlank() }
+            if (queryable.isEmpty()) {
+                return missingStoredVersion.failedUpdates(
+                    AmazonStoredVersionUnavailableException::class,
+                )
+            }
+            return try {
+                val token = tokenProvider() ?: return usable.failedUpdates(
+                    AmazonTokenUnavailableException::class,
+                )
+                val liveVersions = liveVersionFetcher(
+                    queryable.map(AmazonUpdateVersionRequest::productId),
+                    token,
+                ) ?: return usable.failedUpdates(
+                    AmazonLiveVersionsUnavailableException::class,
+                )
+                buildMap {
+                    missingStoredVersion.forEach { request ->
+                        put(
+                            request.productId,
+                            AmazonUpdateVersionResult.Failed(
+                                AmazonStoredVersionUnavailableException::class,
+                            ),
+                        )
+                    }
+                    queryable.forEach { request ->
+                        val liveVersion = liveVersions[request.productId]
+                            ?.takeIf(String::isNotBlank)
+                        put(
+                            request.productId,
+                            if (liveVersion == null) {
+                                AmazonUpdateVersionResult.Failed(
+                                    AmazonLiveVersionMissingException::class,
+                                )
+                            } else {
+                                AmazonUpdateVersionResult.Observed(
+                                    updateAvailable = liveVersion != request.storedVersionId,
+                                )
+                            },
+                        )
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                usable.failedUpdates(error::class)
+            }
+        }
+
+        private fun List<AmazonUpdateVersionRequest>.failedUpdates(
+            errorClass: KClass<out Throwable>,
+        ): Map<String, AmazonUpdateVersionResult> = associate { request ->
+            request.productId to AmazonUpdateVersionResult.Failed(errorClass)
+        }
+
+        /** Legacy point check retained for non-canonical callers. */
         suspend fun isUpdatePending(productId: String): Boolean {
             val svc = instance ?: return false
             val game = svc.amazonManager.getGameById(productId) ?: return false
-            if (!game.isInstalled || game.versionId.isEmpty()) return false
-            val token = svc.amazonManager.getBearerToken() ?: return false
-            return AmazonApiClient.isUpdateAvailable(productId, game.versionId, token) ?: false
+            val result = getUpdatePendingBatch(
+                listOf(AmazonUpdateVersionRequest(productId, game.versionId)),
+            )[productId]
+            return (result as? AmazonUpdateVersionResult.Observed)?.updateAvailable == true
         }
 
         // ── Download management ───────────────────────────────────────────────
@@ -427,7 +526,7 @@ class AmazonService : Service() {
 
             // Already downloading?
             instance.activeDownloads[productId]?.let { existing ->
-                Timber.tag("Amazon").w("Download already in progress for $productId")
+                Timber.tag("Amazon").w("Download already in progress")
                 return Result.success(existing)
             }
 
@@ -468,7 +567,7 @@ class AmazonService : Service() {
                     )
 
                     if (result.isSuccess) {
-                        Timber.tag("Amazon").i("Download succeeded for $productId")
+                        Timber.tag("Amazon").i("Download succeeded")
                         downloadInfo.setActive(false)
                         downloadInfo.clearPersistedBytesDownloaded(installPath)
                         SnackbarManager.show("Download completed: ${game.title}")
@@ -477,16 +576,18 @@ class AmazonService : Service() {
                         )
                     } else {
                         val error = result.exceptionOrNull()
-                        Timber.tag("Amazon").e(error, "Download failed for $productId")
+                        Timber.tag("Amazon").e(
+                            "Download failed: ${error?.javaClass?.simpleName ?: "Exception"}",
+                        )
                         downloadInfo.setActive(false)
                         instance.cleanupFailedInstall(context, game, installPath)
                         SnackbarManager.show("Download failed: ${error?.message ?: "Unknown error"}")
                     }
                 } catch (e: Exception) {
                     if (e is java.util.concurrent.CancellationException) {
-                        Timber.tag("Amazon").d("Download cancelled for $productId")
+                        Timber.tag("Amazon").d("Download cancelled")
                     } else {
-                        Timber.tag("Amazon").e(e, "Download exception for $productId")
+                        Timber.tag("Amazon").e("Download exception: ${e.javaClass.simpleName}")
                         instance.cleanupFailedInstall(context, game, installPath)
                     }
                     downloadInfo.setActive(false)
@@ -507,10 +608,10 @@ class AmazonService : Service() {
         fun cancelDownload(productId: String): Boolean {
             val instance = getInstance() ?: return false
             val downloadInfo = instance.activeDownloads[productId] ?: run {
-                Timber.tag("Amazon").w("No active download for $productId")
+                Timber.tag("Amazon").w("No active download")
                 return false
             }
-            Timber.tag("Amazon").i("Cancelling download for $productId")
+            Timber.tag("Amazon").i("Cancelling download")
             downloadInfo.cancel()
             return true
         }
@@ -533,7 +634,7 @@ class AmazonService : Service() {
 
                         if (manifestFile.exists()) {
                             // ── Manifest-based uninstall ─────────────────────────
-                            Timber.tag("Amazon").i("Manifest-based uninstall for $productId")
+                            Timber.tag("Amazon").i("Manifest-based uninstall started")
                             try {
                                 val manifest = AmazonManifest.parse(manifestFile.readBytes())
                                 var deletedFiles = 0
@@ -546,7 +647,7 @@ class AmazonService : Service() {
                                             deletedFiles++
                                         } else {
                                             failedFiles++
-                                            Timber.tag("Amazon").w("Failed to delete: ${file.absolutePath}")
+                                            Timber.tag("Amazon").w("Failed to delete install file")
                                         }
                                     }
                                 }
@@ -578,12 +679,14 @@ class AmazonService : Service() {
                                     "Manifest-based uninstall complete: $deletedFiles deleted, $failedFiles failed"
                                 )
                             } catch (e: Exception) {
-                                Timber.tag("Amazon").w(e, "Manifest parse failed — falling back to recursive delete")
+                                Timber.tag("Amazon").w(
+                                    "Manifest parse failed: ${e.javaClass.simpleName}; using recursive delete",
+                                )
                                 installDir.deleteRecursively()
                             }
                         } else {
                             // ── Fallback: recursive delete ───────────────────────
-                            Timber.tag("Amazon").i("No cached manifest — recursive delete: $path")
+                            Timber.tag("Amazon").i("No cached manifest; recursive delete")
                             installDir.deleteRecursively()
                         }
 
@@ -606,12 +709,12 @@ class AmazonService : Service() {
                                 installCanonical.deleteRecursively()
                             } else {
                                 Timber.tag("Amazon").w(
-                                    "Skipping final recursive uninstall cleanup outside Amazon root: ${installCanonical.path}"
+                                    "Skipping final recursive uninstall cleanup outside Amazon root",
                                 )
                             }
 
                             Timber.tag("Amazon").i(
-                                "[UNINSTALL] cleanup productId=$productId installDirExists=${installCanonical.exists()} path=${installCanonical.path}"
+                                "[UNINSTALL] cleanup installDirExists=${installCanonical.exists()}",
                             )
                         }
                     }
@@ -623,10 +726,12 @@ class AmazonService : Service() {
                         val manifestFile = File(context.filesDir, "manifests/amazon/$productId.proto")
                         if (manifestFile.exists()) {
                             manifestFile.delete()
-                            Timber.tag("Amazon").d("Deleted cached manifest for $productId")
+                            Timber.tag("Amazon").d("Deleted cached manifest")
                         }
                     } catch (e: Exception) {
-                        Timber.tag("Amazon").w(e, "Failed to delete cached manifest (non-fatal)")
+                        Timber.tag("Amazon").w(
+                            "Failed to delete cached manifest: ${e.javaClass.simpleName}",
+                        )
                     }
 
                     withContext(Dispatchers.Main) {
@@ -639,17 +744,18 @@ class AmazonService : Service() {
                     val inProgressMarkerExists = MarkerUtils.hasMarker(postUninstallPath, Marker.DOWNLOAD_IN_PROGRESS_MARKER)
 
                     Timber.tag("Amazon").i(
-                        "[UNINSTALL] final_state productId=$productId appId=${game.appId} installDirExists=$postInstallDirExists completeMarker=$completeMarkerExists inProgressMarker=$inProgressMarkerExists"
+                        "[UNINSTALL] final_state installDirExists=$postInstallDirExists " +
+                            "completeMarker=$completeMarkerExists inProgressMarker=$inProgressMarkerExists",
                     )
 
                     PluviaApp.events.emitJava(
                         AndroidEvent.LibraryInstallStatusChanged(game.appId, GameSource.AMAZON)
                     )
 
-                    Timber.tag("Amazon").i("Game uninstalled: $productId")
+                    Timber.tag("Amazon").i("Game uninstalled")
                     Result.success(Unit)
                 } catch (e: Exception) {
-                    Timber.tag("Amazon").e(e, "Failed to uninstall $productId")
+                    Timber.tag("Amazon").e("Failed to uninstall: ${e.javaClass.simpleName}")
                     Result.failure(e)
                 }
             }
@@ -696,7 +802,7 @@ class AmazonService : Service() {
                     val manifest = AmazonManifest.parse(manifestFile.readBytes())
                     val files = manifest.allFiles
 
-                    Timber.tag("Amazon").i("Verifying ${files.size} files for $productId at ${game.installPath}")
+                    Timber.tag("Amazon").i("Verifying ${files.size} files")
 
                     var verifiedOk = 0
                     var missingFiles = 0
@@ -710,16 +816,14 @@ class AmazonService : Service() {
                         if (!file.exists()) {
                             missingFiles++
                             failedFiles.add(mf.unixPath)
-                            Timber.tag("Amazon").d("Verify MISSING: ${mf.unixPath}")
+                            Timber.tag("Amazon").d("Verify MISSING")
                             continue
                         }
 
                         if (file.length() != mf.size) {
                             sizeMismatch++
                             failedFiles.add(mf.unixPath)
-                            Timber.tag("Amazon").d(
-                                "Verify SIZE MISMATCH: ${mf.unixPath} (expected=${mf.size}, actual=${file.length()})"
-                            )
+                            Timber.tag("Amazon").d("Verify SIZE MISMATCH")
                             continue
                         }
 
@@ -737,7 +841,7 @@ class AmazonService : Service() {
                             if (!computed.contentEquals(mf.hashBytes)) {
                                 hashMismatch++
                                 failedFiles.add(mf.unixPath)
-                                Timber.tag("Amazon").d("Verify HASH MISMATCH: ${mf.unixPath}")
+                                Timber.tag("Amazon").d("Verify HASH MISMATCH")
                                 continue
                             }
                         }
@@ -766,7 +870,7 @@ class AmazonService : Service() {
 
                     Result.success(result)
                 } catch (e: Exception) {
-                    Timber.tag("Amazon").e(e, "Verification failed for $productId")
+                    Timber.tag("Amazon").e("Verification failed: ${e.javaClass.simpleName}")
                     Result.failure(e)
                 }
             }
@@ -874,13 +978,17 @@ class AmazonService : Service() {
                     dir.deleteRecursively()
                 }
             }.onFailure {
-                Timber.tag("Amazon").w(it, "Failed to clean partial install dir for ${game.productId}")
+                Timber.tag("Amazon").w(
+                    "Failed to clean partial install directory: ${it.javaClass.simpleName}",
+                )
             }
 
             runCatching {
                 amazonManager.markUninstalled(game.productId)
             }.onFailure {
-                Timber.tag("Amazon").w(it, "Failed to mark game uninstalled after failed install: ${game.productId}")
+                Timber.tag("Amazon").w(
+                    "Failed to mark game uninstalled: ${it.javaClass.simpleName}",
+                )
             }
         }
 
@@ -904,7 +1012,7 @@ class AmazonService : Service() {
             hasPerformedInitialSync = true
             Timber.i("[Amazon] Sync complete — next auto-sync in 15 minutes")
         } catch (e: Exception) {
-            Timber.e(e, "[Amazon] Library sync failed")
+            Timber.e("[Amazon] Library sync failed: ${e.javaClass.simpleName}")
         } finally {
             setSyncInProgress(false)
         }

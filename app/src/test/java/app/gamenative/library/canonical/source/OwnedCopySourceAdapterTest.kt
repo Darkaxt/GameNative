@@ -24,6 +24,7 @@ import app.gamenative.enums.AppType
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.InMemoryAccountLifecycleState
 import app.gamenative.utils.CustomGameScanner
+import app.gamenative.utils.ReadOnlyAppIdResult
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -446,6 +447,54 @@ class OwnedCopySourceAdapterTest {
             SourceOwnedCopyReference.Custom(batch.copies.single().key, 42),
             adapter.resolve(batch.copies.single().key),
         )
+    }
+
+    @Test
+    fun customMetadataIoFailurePreservesValidSiblingAsTypedPartialResult() = runTest {
+        val valid = File(testRoot, "Valid Game").apply { mkdirs() }
+        File(valid, ".gamenative").writeText("{\"appId\":42}")
+        val unreadable = File(testRoot, "Unreadable Metadata").apply { mkdirs() }
+        File(unreadable, ".gamenative").mkdirs()
+        setCustomFolders(linkedSetOf(valid.path, unreadable.path))
+
+        val batch = CustomOwnedCopySourceAdapter(
+            scopes(GameSource.CUSTOM_GAME),
+            scanProjection = {
+                CustomGameScanner.scanForCanonicalProjection { folder ->
+                    if (folder == unreadable) {
+                        ReadOnlyAppIdResult.ReadFailure(IllegalStateException::class)
+                    } else {
+                        ReadOnlyAppIdResult.Present(42)
+                    }
+                }
+            },
+        ).snapshot()
+
+        assertEquals(SnapshotCompleteness.PARTIAL, batch.completeness)
+        assertEquals(SnapshotReason.SOURCE_READ_FAILED, batch.reason)
+        assertEquals(listOf("42"), batch.copies.map { it.key.stableSourceId })
+        assertEquals(IllegalStateException::class, batch.errorClass)
+    }
+
+    @Test
+    fun customMetadataIoFailureWithoutValidSiblingsIsUnavailable() = runTest {
+        val unreadable = File(testRoot, "Unreadable Metadata").apply { mkdirs() }
+        File(unreadable, ".gamenative").mkdirs()
+        setCustomFolders(setOf(unreadable.path))
+
+        val batch = CustomOwnedCopySourceAdapter(
+            scopes(GameSource.CUSTOM_GAME),
+            scanProjection = {
+                CustomGameScanner.scanForCanonicalProjection {
+                    ReadOnlyAppIdResult.ReadFailure(IllegalStateException::class)
+                }
+            },
+        ).snapshot()
+
+        assertEquals(SnapshotCompleteness.UNAVAILABLE, batch.completeness)
+        assertEquals(SnapshotReason.SOURCE_READ_FAILED, batch.reason)
+        assertTrue(batch.copies.isEmpty())
+        assertEquals(IllegalStateException::class, batch.errorClass)
     }
 
     @Test

@@ -11,8 +11,9 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.SteamAppDao
 import app.gamenative.library.canonical.AccountLifecycleState
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
-import app.gamenative.library.canonical.CanonicalProjectionClock
+import app.gamenative.library.canonical.CanonicalDiagnosticSink
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
@@ -26,13 +27,17 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal data class SteamUpdateRefreshRequest(
     val app: SteamApp,
     val branch: String,
     val licensedDepotIds: Set<Int>?,
+    val installedDepotIds: Set<Int>,
 )
 
 internal data class SteamInstallationState(
@@ -151,6 +156,9 @@ class SteamOwnedCopyRuntimeGateway @Inject constructor(
             licensedDepotIds = requests.mapNotNull { request ->
                 request.licensedDepotIds?.let { request.app.id to it }
             }.toMap(),
+            installedDepotIds = requests.associate { request ->
+                request.app.id to request.installedDepotIds
+            },
         )
     }
 }
@@ -158,36 +166,86 @@ class SteamOwnedCopyRuntimeGateway @Inject constructor(
 class SteamObservedUpdateState private constructor(
     private val gateway: SteamOwnedCopyRuntimeGateway,
     scope: CoroutineScope,
-    nowEpochMs: () -> Long,
+    nowMonotonicMs: () -> Long,
+    isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
+    retirements: Flow<Long>,
+    diagnostics: CanonicalDiagnosticSink?,
     @Suppress("UNUSED_PARAMETER") marker: Unit,
 ) {
     @Inject
     constructor(
         gateway: SteamOwnedCopyRuntimeGateway,
-        clock: CanonicalProjectionClock,
+        accountScopeProvider: AccountScopeProvider,
+        accountLifecycleState: AccountLifecycleState,
+        diagnostics: CanonicalDiagnosticSink,
         @CanonicalIoDispatcher dispatcher: CoroutineDispatcher,
     ) : this(
         gateway = gateway,
         scope = CoroutineScope(SupervisorJob() + dispatcher),
-        nowEpochMs = clock::nowEpochMs,
+        nowMonotonicMs = { System.nanoTime() / 1_000_000L },
+        isOwnerCurrent = { owner ->
+            accountScopeProvider.current(GameSource.STEAM) == owner.accountScope &&
+                accountLifecycleState.generation(GameSource.STEAM) == owner.generation &&
+                accountLifecycleState.readyGeneration(GameSource.STEAM) == owner.generation
+        },
+        retirements = AccountScopeInvalidations.forSource(GameSource.STEAM).map {
+            accountLifecycleState.generation(GameSource.STEAM)
+        },
+        diagnostics = diagnostics,
         marker = Unit,
     )
 
     internal constructor(
         gateway: SteamOwnedCopyRuntimeGateway,
         scope: CoroutineScope,
-        nowEpochMs: () -> Long,
-    ) : this(gateway, scope, nowEpochMs, Unit)
+        nowMonotonicMs: () -> Long,
+    ) : this(gateway, scope, nowMonotonicMs, { true }, emptyFlow(), null, Unit)
+
+    internal constructor(
+        gateway: SteamOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowMonotonicMs: () -> Long,
+        diagnostics: CanonicalDiagnosticSink,
+    ) : this(gateway, scope, nowMonotonicMs, { true }, emptyFlow(), diagnostics, Unit)
+
+    internal constructor(
+        gateway: SteamOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowMonotonicMs: () -> Long,
+        isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
+    ) : this(gateway, scope, nowMonotonicMs, isOwnerCurrent, emptyFlow(), null, Unit)
+
+    internal constructor(
+        gateway: SteamOwnedCopyRuntimeGateway,
+        scope: CoroutineScope,
+        nowMonotonicMs: () -> Long,
+        isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
+        retirements: Flow<Long>,
+    ) : this(gateway, scope, nowMonotonicMs, isOwnerCurrent, retirements, null, Unit)
 
     private val store = ObservedUpdateStateStore<Int, SteamUpdateRefreshRequest>(
         scope = scope,
-        nowEpochMs = nowEpochMs,
+        nowMonotonicMs = nowMonotonicMs,
         ttlMs = UPDATE_TTL_MS,
         retryDelayMs = UPDATE_RETRY_MS,
         maxEntries = MAX_UPDATE_ENTRIES,
         maxRefreshBatch = MAX_UPDATE_REFRESH_BATCH,
-        refresh = { requests -> gateway.refreshUpdates(requests.map { it.fingerprint }) },
+        isOwnerCurrent = isOwnerCurrent,
+        onRefreshFailure = { errorClass ->
+            diagnostics?.updateObservationFailed(GameSource.STEAM, errorClass)
+        },
+        refresh = { requests ->
+            gateway.refreshUpdates(requests.map { it.fingerprint }).mapValues { (_, pending) ->
+                UpdateRefreshOutcome.Observed(pending)
+            }
+        },
     )
+
+    init {
+        scope.launch {
+            retirements.collect(store::retire)
+        }
+    }
 
     internal fun invalidations(): Flow<Unit> = store.invalidations()
 
@@ -204,6 +262,10 @@ class SteamObservedUpdateState private constructor(
                 app = app,
                 branch = appInfo?.branch?.takeIf { installed } ?: "public",
                 licensedDepotIds = inputs.licensedDepotIds[app.id],
+                installedDepotIds = appInfo
+                    ?.let { it.downloadedDepots + it.dlcDepots }
+                    .orEmpty()
+                    .toSet(),
             )
         },
     )
@@ -211,7 +273,7 @@ class SteamObservedUpdateState private constructor(
     private companion object {
         const val UPDATE_TTL_MS = 5 * 60_000L
         const val UPDATE_RETRY_MS = 15_000L
-        const val MAX_UPDATE_ENTRIES = 512
+        const val MAX_UPDATE_ENTRIES = 2_048
         const val MAX_UPDATE_REFRESH_BATCH = 100
     }
 }
@@ -227,7 +289,7 @@ class SteamOwnedCopyRuntimeState @Inject constructor(
     private val observedUpdates: SteamObservedUpdateState = SteamObservedUpdateState(
         gateway = gateway,
         scope = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
-        nowEpochMs = System::currentTimeMillis,
+        nowMonotonicMs = { System.nanoTime() / 1_000_000L },
     ),
 ) {
 
@@ -345,6 +407,7 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
     private val sourceAdapter: SteamOwnedCopySourceAdapter,
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: SteamOwnedCopyRuntimeState,
+    private val diagnostics: app.gamenative.library.canonical.CanonicalDiagnosticSink? = null,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.STEAM
 
@@ -382,7 +445,11 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                     CopyUnavailableReason.SOURCE_ROW_CHANGED,
                 )
             val sourceState = runtimeState.readPoint(app, accountScope, generation)
-            val lastPlayed = playHistoryDao.pointLastPlayed(sourceAppId(source, reference.appId))
+            val lastPlayed = playHistoryDao.pointLastPlayed(
+                sourceAppId(source, reference.appId),
+                source,
+                diagnostics,
+            )
             if (!hasFreshProof(reference.appId, accountScope, generation)) {
                 return OwnedCopyRuntimeResult.Hidden
             }
@@ -436,7 +503,7 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                     ?.let(rowsById::get)
             }.distinctBy(SteamApp::id)
             val stateBatch = runtimeState.readBatch(requestedRows, accountScope, generation)
-            val history = playHistoryDao.batchLastPlayed()
+            val history = playHistoryDao.batchLastPlayed(source, diagnostics)
             val finalOwnedIds = finalOwnedIds() ?: return keys.hiddenResults()
             completedFinalOwnedIds = finalOwnedIds
             if (!isCurrent(accountScope, generation)) return keys.hiddenResults()

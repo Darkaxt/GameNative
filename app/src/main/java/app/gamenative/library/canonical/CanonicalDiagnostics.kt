@@ -37,6 +37,11 @@ interface CanonicalDiagnosticSink {
         errorClass: KClass<out Throwable>,
     )
 
+    fun updateObservationFailed(
+        source: GameSource,
+        errorClass: KClass<out Throwable>,
+    )
+
     fun matchBucket(bucket: MatchBucket, count: Int)
 
     fun indexSucceeded(result: CanonicalProjectionResult, durationMs: Long)
@@ -65,6 +70,11 @@ sealed interface CanonicalDiagnosticEvent {
     data class PlayHistoryFailed(
         val source: GameSource?,
         val origin: PlayHistoryOrigin,
+        val errorClass: KClass<out Throwable>,
+    ) : CanonicalDiagnosticEvent
+
+    data class UpdateObservationFailed(
+        val source: GameSource,
         val errorClass: KClass<out Throwable>,
     ) : CanonicalDiagnosticEvent
 
@@ -145,6 +155,13 @@ class CanonicalDiagnostics @Inject constructor(
         recorder.record(CanonicalDiagnosticEvent.PlayHistoryFailed(source, origin, errorClass))
     }
 
+    override fun updateObservationFailed(
+        source: GameSource,
+        errorClass: KClass<out Throwable>,
+    ) {
+        recorder.record(CanonicalDiagnosticEvent.UpdateObservationFailed(source, errorClass))
+    }
+
     override fun matchBucket(bucket: MatchBucket, count: Int) {
         recorder.record(CanonicalDiagnosticEvent.MatchResolution(bucket, count))
     }
@@ -217,6 +234,15 @@ internal fun CanonicalDiagnosticEvent.toFeatureEvent(): CanonicalFeatureEvent = 
             put(DiagnosticAttribute.REASON, origin.name)
             put(DiagnosticAttribute.ERROR_TYPE, errorClass.diagnosticName())
         },
+    )
+
+    is CanonicalDiagnosticEvent.UpdateObservationFailed -> canonicalIndexEvent(
+        outcome = DiagnosticOutcome.FAILED,
+        attributes = mapOf(
+            DiagnosticAttribute.SOURCE to source.name,
+            DiagnosticAttribute.OPERATION to "UPDATE_OBSERVATION",
+            DiagnosticAttribute.ERROR_TYPE to errorClass.diagnosticName(),
+        ),
     )
 
     is CanonicalDiagnosticEvent.MatchResolution -> CanonicalFeatureEvent(

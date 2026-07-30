@@ -66,19 +66,19 @@ class AmazonManager @Inject constructor(
     suspend fun markInstalled(productId: String, installPath: String, installSize: Long, versionId: String = "") =
         withContext(Dispatchers.IO) {
             amazonGameDao.markAsInstalled(productId, installPath, installSize, versionId)
-            Timber.i("[Amazon] Marked installed: $productId at $installPath (${installSize}B, version=$versionId)")
+            Timber.i("[Amazon] Marked installed (${installSize}B)")
         }
 
     /** Mark a game as not installed. */
     suspend fun markUninstalled(productId: String) = withContext(Dispatchers.IO) {
         amazonGameDao.markAsUninstalled(productId)
-        Timber.i("[Amazon] Marked uninstalled: $productId")
+        Timber.i("[Amazon] Marked uninstalled")
     }
 
     /** Update cached download size for a game. */
     suspend fun updateDownloadSize(productId: String, size: Long) = withContext(Dispatchers.IO) {
         amazonGameDao.updateDownloadSize(productId, size)
-        Timber.i("[Amazon] Updated download size for $productId: $size bytes")
+        Timber.i("[Amazon] Updated download size: $size bytes")
     }
 
     /** Get the stored bearer token. */

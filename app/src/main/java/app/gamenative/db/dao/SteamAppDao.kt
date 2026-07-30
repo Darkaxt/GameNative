@@ -189,6 +189,16 @@ interface SteamAppDao {
     )
     suspend fun findDownloadableDLCApps(appId: Int): List<SteamApp>?
 
+    @Query(
+        "SELECT * FROM steam_app AS app WHERE dlc_for_app_id IN (:appIds) AND " +
+            "EXISTS (" +
+            "SELECT * FROM steam_license AS license " +
+            "WHERE license.license_type <> 0 AND " +
+            "REPLACE(REPLACE(license.app_ids, '[', ','), ']', ',') LIKE ('%,' || app.id || ',%')" +
+            ")",
+    )
+    suspend fun findOwnedDLCAppsForParents(appIds: List<Int>): List<SteamApp>
+
     @Query("SELECT * FROM steam_app AS app WHERE dlc_for_app_id = :appId AND depots = '{}' AND " +
             " EXISTS (" +
             "   SELECT * FROM steam_license AS license " +

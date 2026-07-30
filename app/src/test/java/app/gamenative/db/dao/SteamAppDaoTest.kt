@@ -183,6 +183,25 @@ class SteamAppDaoTest {
     }
 
     @Test
+    fun `batched owned DLC query includes parent depots represented by hidden DLC rows`() = runBlocking {
+        licenseDao.insertAll(listOf(makeLicense(packageId = 100, appIds = listOf(2))))
+        appDao.insert(
+            SteamApp(
+                id = 2,
+                packageId = 100,
+                type = AppType.dlc,
+                name = "Hidden DLC",
+                dlcForAppId = 1,
+                depots = emptyMap(),
+            ),
+        )
+
+        val dlcApps = appDao.findOwnedDLCAppsForParents(listOf(1))
+
+        assertEquals(listOf(2), dlcApps.map(SteamApp::id))
+    }
+
+    @Test
     fun `PICS replacement preserves workshop state updated after payload creation`() = runBlocking {
         appDao.insert(
             SteamApp(

@@ -35,7 +35,7 @@ object AmazonSdkManager {
 
             // ── 1. Check if already downloaded ──────────────────────────────
             if (isSdkCached(sdkRoot)) {
-                Timber.tag(TAG).d("SDK already cached at ${sdkRoot.absolutePath}")
+                Timber.tag(TAG).d("SDK already cached")
                 return@withContext true
             }
 
@@ -50,7 +50,7 @@ object AmazonSdkManager {
 
             // ── 3. Download and parse manifest ──────────────────────────────
             val manifestUrl = AmazonApiClient.appendPath(spec.downloadUrl, "manifest.proto")
-            Timber.tag(TAG).d("Fetching SDK manifest: $manifestUrl")
+            Timber.tag(TAG).d("Fetching SDK manifest")
 
             val manifestBytes = fetchBytes(manifestUrl)
             if (manifestBytes == null) {
@@ -61,7 +61,7 @@ object AmazonSdkManager {
             val manifest = try {
                 AmazonManifest.parse(manifestBytes)
             } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Failed to parse SDK manifest")
+                Timber.tag(TAG).e("Failed to parse SDK manifest: ${e.javaClass.simpleName}")
                 return@withContext false
             }
 
@@ -88,7 +88,7 @@ object AmazonSdkManager {
 
                 // Skip already-downloaded files
                 if (destFile.exists() && destFile.length() == file.size) {
-                    Timber.tag(TAG).d("  skip (exists): ${file.unixPath}")
+                    Timber.tag(TAG).d("SDK file already cached")
                     downloaded++
                     continue
                 }
@@ -96,10 +96,10 @@ object AmazonSdkManager {
                 val success = downloadFile(fileUrl, destFile)
                 if (success) {
                     downloaded++
-                    Timber.tag(TAG).d("  ok: ${file.unixPath} (${file.size} bytes)")
+                    Timber.tag(TAG).d("SDK file downloaded (${file.size} bytes)")
                 } else {
                     failed++
-                    Timber.tag(TAG).w("  FAILED: ${file.unixPath}")
+                    Timber.tag(TAG).w("SDK file download failed")
                 }
             }
 
@@ -118,7 +118,7 @@ object AmazonSdkManager {
         val sdkServicesDir = File(sdkRoot, SDK_PATH_FILTER)
 
         if (!sdkServicesDir.exists()) {
-            Timber.tag(TAG).w("SDK cache not found at ${sdkServicesDir.absolutePath}")
+            Timber.tag(TAG).w("SDK cache not found")
             return -1
         }
 
@@ -138,11 +138,11 @@ object AmazonSdkManager {
                 destFile.parentFile?.mkdirs()
                 srcFile.copyTo(destFile, overwrite = true)
                 deployed++
-                Timber.tag(TAG).d("  deployed: $relativePath (${srcFile.length()} bytes)")
+                Timber.tag(TAG).d("SDK file deployed (${srcFile.length()} bytes)")
             }
         }
 
-        Timber.tag(TAG).i("Deployed $deployed SDK file(s) to ${targetDir.absolutePath}")
+        Timber.tag(TAG).i("Deployed $deployed SDK file(s)")
         return deployed
     }
 
@@ -159,7 +159,7 @@ object AmazonSdkManager {
             sdkRoot.mkdirs()
             File(sdkRoot, VERSION_FILE).writeText(versionId)
         } catch (e: Exception) {
-            Timber.tag(TAG).w(e, "Failed to write SDK version file")
+            Timber.tag(TAG).w("Failed to write SDK version file: ${e.javaClass.simpleName}")
         }
     }
 
@@ -175,12 +175,12 @@ object AmazonSdkManager {
             if (response.isSuccessful) {
                 response.body?.bytes()
             } else {
-                Timber.tag(TAG).e("fetchBytes: HTTP ${response.code} for $url")
+                Timber.tag(TAG).e("fetchBytes: HTTP ${response.code}")
                 null
             }
         }
     } catch (e: Exception) {
-        Timber.tag(TAG).e(e, "fetchBytes failed: $url")
+        Timber.tag(TAG).e("fetchBytes failed: ${e.javaClass.simpleName}")
         null
     }
 
@@ -204,13 +204,13 @@ object AmazonSdkManager {
                 tmpFile.renameTo(destFile)
                 true
             } else {
-                Timber.tag(TAG).e("downloadFile: HTTP ${response.code} for $url")
+                Timber.tag(TAG).e("downloadFile: HTTP ${response.code}")
                 tmpFile.delete()
                 false
             }
         }
     } catch (e: Exception) {
-        Timber.tag(TAG).e(e, "downloadFile failed: $url")
+        Timber.tag(TAG).e("downloadFile failed: ${e.javaClass.simpleName}")
         false
     }
 }

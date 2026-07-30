@@ -316,6 +316,98 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
+    fun steamHistoryFailuresAreCategoricalEnrichmentFailuresForPointAndBatch() = runTest {
+        val key = key(GameSource.STEAM, "7")
+        val app = SteamApp(id = 7, name = "Provider")
+        val dao = mockk<SteamAppDao>()
+        coEvery { dao.findOwnedApp(7) } returns app
+        coEvery { dao._getAllOwnedAppsPaged() } returns listOf(app)
+        val sourceAdapter = sourceAdapter<SteamOwnedCopySourceAdapter>(
+            key,
+            SourceOwnedCopyReference.Steam(key, 7),
+        )
+        val history = mockk<LibraryPlayHistoryDao>()
+        coEvery { history.get("STEAM_7") } throws SensitiveFailure()
+        every { history.getAll() } returns flow { throw SensitiveFailure() }
+        val runtimeState = mockk<SteamOwnedCopyRuntimeState>()
+        coEvery { runtimeState.readPoint(app, scope, 0L) } returns state()
+        coEvery { runtimeState.readBatch(listOf(app), scope, 0L) } returns
+            SteamRuntimeBatchResult(mapOf(7 to state()), emptyMap())
+        every { runtimeState.updateInvalidations() } returns emptyFlow()
+        val diagnostics = mockk<CanonicalDiagnosticSink>(relaxed = true)
+        val adapter = SteamOwnedCopyRuntimeAdapter(
+            dao,
+            scopes(GameSource.STEAM),
+            readyLifecycle(GameSource.STEAM),
+            sourceAdapter,
+            history,
+            runtimeState,
+            diagnostics,
+        )
+
+        val point = available(adapter.resolve(key))
+        val batch = available(adapter.resolveAll(setOf(key)).getValue(key))
+
+        assertEquals(null, point.lastPlayedEpochMs)
+        assertEquals(null, batch.lastPlayedEpochMs)
+        verify(exactly = 1) {
+            diagnostics.playHistoryFailed(GameSource.STEAM, PlayHistoryOrigin.POINT, SensitiveFailure::class)
+        }
+        verify(exactly = 1) {
+            diagnostics.playHistoryFailed(GameSource.STEAM, PlayHistoryOrigin.BATCH, SensitiveFailure::class)
+        }
+    }
+
+    @Test
+    fun customHistoryFailuresAreCategoricalEnrichmentFailuresForPointAndBatch() = runTest {
+        val key = key(GameSource.CUSTOM_GAME, "7")
+        val row = CustomOwnedCopyRuntimeRow(
+            appId = 7,
+            nativeTitle = "Provider",
+            installPath = "/installed",
+            installedSizeBytes = 1L,
+            iconUrl = "",
+            capsuleImageUrl = "",
+            headerImageUrl = "",
+            heroImageUrl = "",
+        )
+        val history = mockk<LibraryPlayHistoryDao>()
+        coEvery { history.get("CUSTOM_GAME_7") } throws SensitiveFailure()
+        every { history.getAll() } returns flow { throw SensitiveFailure() }
+        val runtimeState = mockk<CustomOwnedCopyRuntimeState>()
+        coEvery { runtimeState.readTyped(setOf(7)) } returns
+            CustomRuntimeScanResult(mapOf(7 to row))
+        val diagnostics = mockk<CanonicalDiagnosticSink>(relaxed = true)
+        val adapter = CustomOwnedCopyRuntimeAdapter(
+            scopes(GameSource.CUSTOM_GAME),
+            mockk(relaxed = true),
+            history,
+            runtimeState,
+            diagnostics,
+        )
+
+        val point = available(adapter.resolve(key))
+        val batch = available(adapter.resolveAll(setOf(key)).getValue(key))
+
+        assertEquals(null, point.lastPlayedEpochMs)
+        assertEquals(null, batch.lastPlayedEpochMs)
+        verify(exactly = 1) {
+            diagnostics.playHistoryFailed(
+                GameSource.CUSTOM_GAME,
+                PlayHistoryOrigin.POINT,
+                SensitiveFailure::class,
+            )
+        }
+        verify(exactly = 1) {
+            diagnostics.playHistoryFailed(
+                GameSource.CUSTOM_GAME,
+                PlayHistoryOrigin.BATCH,
+                SensitiveFailure::class,
+            )
+        }
+    }
+
+    @Test
     fun historyEnrichmentPreservesCancellationAndFatalFailures() = runTest {
         val cancelledPoint = mockk<LibraryPlayHistoryDao>()
         coEvery { cancelledPoint.get(any()) } throws CancellationException("cancel")
@@ -936,7 +1028,7 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
-    fun customReadFailureAfterCurrentRowProofIsTypedWithoutPrivateMessages() = runTest {
+    fun customHistoryFailureAfterCurrentRowProofDoesNotSuppressCopy() = runTest {
         val key = key(GameSource.CUSTOM_GAME, "5")
         val source = sourceAdapter<CustomOwnedCopySourceAdapter>(
             key,
@@ -948,17 +1040,25 @@ class OwnedCopyRuntimeAdapterTest {
         )
         val history = mockk<LibraryPlayHistoryDao>()
         coEvery { history.get("CUSTOM_GAME_5") } throws SensitiveFailure()
+        val diagnostics = mockk<CanonicalDiagnosticSink>(relaxed = true)
         val adapter = CustomOwnedCopyRuntimeAdapter(
             scopes(GameSource.CUSTOM_GAME),
             source,
             history,
             runtimeState,
+            diagnostics,
         )
 
-        val result = adapter.resolve(key)
+        val result = available(adapter.resolve(key))
 
-        assertUnavailable(result, key, CopyUnavailableReason.SOURCE_READ_FAILED, SensitiveFailure::class)
-        assertFalse(result.toString().contains(SENSITIVE_MESSAGE))
+        assertEquals(null, result.lastPlayedEpochMs)
+        verify(exactly = 1) {
+            diagnostics.playHistoryFailed(
+                GameSource.CUSTOM_GAME,
+                PlayHistoryOrigin.POINT,
+                SensitiveFailure::class,
+            )
+        }
     }
 
     @Test
@@ -2232,7 +2332,7 @@ class OwnedCopyRuntimeAdapterTest {
         val observed = SteamObservedUpdateState(
             gateway = gateway,
             scope = backgroundScope,
-            nowEpochMs = { 0L },
+            nowMonotonicMs = { 0L },
         )
         val runtimeState = SteamOwnedCopyRuntimeState(gateway, observed)
         val invalidated = async(start = CoroutineStart.UNDISPATCHED) {
@@ -2249,6 +2349,80 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(UpdateObservation.UPDATE_AVAILABLE, refreshed.updateObservation)
         assertTrue(refreshed.updateAvailable)
         coVerify(exactly = 1) { gateway.refreshUpdates(any()) }
+    }
+
+    @Test
+    fun steamObservedRefreshReportsTypedProviderFailure() = runTest {
+        val app = SteamApp(id = 1, name = "Installed")
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
+        coEvery { gateway.refreshUpdates(any()) } throws SensitiveFailure()
+        val diagnostics = mockk<CanonicalDiagnosticSink>(relaxed = true)
+        val observed = SteamObservedUpdateState(
+            gateway = gateway,
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            diagnostics = diagnostics,
+        )
+
+        observed.snapshot(
+            UpdateObservationOwner(scope, 1L),
+            listOf(app),
+            SteamRuntimeInputs(
+                activeDownloadIds = emptySet(),
+                appInfos = mapOf(1 to AppInfo(id = 1, isDownloaded = true)),
+                licensedDepotIds = emptyMap(),
+                installations = mapOf(
+                    1 to SteamInstallationState(
+                        path = "/installed",
+                        isInstalled = true,
+                        hasPartialDownload = false,
+                    ),
+                ),
+            ),
+        )
+        runCurrent()
+
+        verify(exactly = 1) {
+            diagnostics.updateObservationFailed(GameSource.STEAM, SensitiveFailure::class)
+        }
+    }
+
+    @Test
+    fun steamMissingProviderObservationRemainsUnknownAndReportsTypedFailure() = runTest {
+        val app = SteamApp(id = 1, name = "Installed")
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
+        coEvery { gateway.refreshUpdates(any()) } returns emptyMap()
+        val diagnostics = mockk<CanonicalDiagnosticSink>(relaxed = true)
+        val observed = SteamObservedUpdateState(
+            gateway = gateway,
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            diagnostics = diagnostics,
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+        val inputs = SteamRuntimeInputs(
+            activeDownloadIds = emptySet(),
+            appInfos = mapOf(1 to AppInfo(id = 1, isDownloaded = true)),
+            licensedDepotIds = emptyMap(),
+            installations = mapOf(
+                1 to SteamInstallationState(
+                    path = "/installed",
+                    isInstalled = true,
+                    hasPartialDownload = false,
+                ),
+            ),
+        )
+
+        observed.snapshot(owner, listOf(app), inputs)
+        runCurrent()
+
+        assertEquals(UpdateObservation.UNKNOWN, observed.snapshot(owner, listOf(app), inputs)[1])
+        verify(exactly = 1) {
+            diagnostics.updateObservationFailed(
+                GameSource.STEAM,
+                MissingUpdateObservationException::class,
+            )
+        }
     }
 
     @Test
@@ -2395,7 +2569,121 @@ class OwnedCopyRuntimeAdapterTest {
         assertFalse(states.getValue(1).updateAvailable)
         coVerify(exactly = 1) { gateway.activeDownloadProductIds() }
         coVerify(exactly = 1) { gateway.partialDownloadProductIds() }
-        coVerify(exactly = 0) { gateway.updatePending(any()) }
+        coVerify(exactly = 0) { gateway.refreshUpdates(any()) }
+    }
+
+    @Test
+    fun amazonObservedUpdateRechecksAccountAuthorityBeforeBatchProviderIo() = runTest {
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>(relaxed = true)
+        val owner = UpdateObservationOwner(scope, 1L)
+        var authoritative = true
+        val observed = AmazonObservedUpdateState(
+            gateway = gateway,
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            isOwnerCurrent = { authoritative },
+        )
+        val game = AmazonGame(
+            appId = 1,
+            productId = "old-account-product",
+            versionId = "v1",
+            isInstalled = true,
+        )
+
+        assertEquals(UpdateObservation.UNKNOWN, observed.snapshot(owner, listOf(game))[game.productId])
+        authoritative = false
+        runCurrent()
+
+        coVerify(exactly = 0) { gateway.refreshUpdates(any()) }
+    }
+
+    @Test
+    fun amazonLifecycleRetirementCancelsActiveObservedProviderIo() = runTest {
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        coEvery { gateway.refreshUpdates(any()) } coAnswers {
+            started.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                cancelled.complete(Unit)
+            }
+        }
+        val retirements = MutableSharedFlow<Long>(extraBufferCapacity = 1)
+        val observed = AmazonObservedUpdateState(
+            gateway = gateway,
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            isOwnerCurrent = { true },
+            retirements = retirements,
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+        val game = AmazonGame(
+            appId = 1,
+            productId = "product",
+            versionId = "version",
+            isInstalled = true,
+        )
+
+        observed.snapshot(owner, listOf(game))
+        runCurrent()
+        assertEquals(Unit, started.await())
+        retirements.emit(2L)
+        runCurrent()
+
+        assertEquals(Unit, cancelled.await())
+    }
+
+    @Test
+    fun amazonObservedRefreshUsesOneBatchGatewayCallAndPreservesPerKeyFailure() = runTest {
+        val games = listOf(
+            AmazonGame(appId = 1, productId = "product-a", versionId = "v1", isInstalled = true),
+            AmazonGame(appId = 2, productId = "product-b", versionId = "v2", isInstalled = true),
+        )
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
+        coEvery { gateway.refreshUpdates(any()) } returns mapOf(
+            "product-a" to UpdateRefreshOutcome.Observed(updateAvailable = true),
+            "product-b" to UpdateRefreshOutcome.Failed(SensitiveFailure::class),
+        )
+        val observed = AmazonObservedUpdateState(gateway, backgroundScope) { 0L }
+        val owner = UpdateObservationOwner(scope, 1L)
+
+        observed.snapshot(owner, games)
+        runCurrent()
+
+        val state = observed.snapshot(owner, games)
+        assertEquals(UpdateObservation.UPDATE_AVAILABLE, state["product-a"])
+        assertEquals(UpdateObservation.UNKNOWN, state["product-b"])
+        coVerify(exactly = 1) { gateway.refreshUpdates(any()) }
+    }
+
+    @Test
+    fun amazonObservedRefreshReportsTypedProviderFailure() = runTest {
+        val game = AmazonGame(
+            appId = 1,
+            productId = "product",
+            versionId = "version",
+            isInstalled = true,
+        )
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
+        coEvery { gateway.refreshUpdates(any()) } returns mapOf(
+            game.productId to UpdateRefreshOutcome.Failed(SensitiveFailure::class),
+        )
+        val diagnostics = mockk<CanonicalDiagnosticSink>(relaxed = true)
+        val observed = AmazonObservedUpdateState(
+            gateway = gateway,
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            diagnostics = diagnostics,
+        )
+
+        observed.snapshot(UpdateObservationOwner(scope, 1L), listOf(game))
+        runCurrent()
+
+        verify(exactly = 1) {
+            diagnostics.updateObservationFailed(GameSource.AMAZON, SensitiveFailure::class)
+        }
     }
 
     @Test
@@ -2409,11 +2697,17 @@ class OwnedCopyRuntimeAdapterTest {
         val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
         coEvery { gateway.activeDownloadProductIds() } returns emptySet()
         coEvery { gateway.partialDownloadProductIds() } returns emptySet()
-        coEvery { gateway.updatePending("product") } returns true
+        coEvery { gateway.refreshUpdates(any()) } answers {
+            (invocation.args[0] as List<*>)
+                .filterIsInstance<UpdateObservationRequest<String, String>>()
+                .associate { request ->
+                    request.key to UpdateRefreshOutcome.Observed(updateAvailable = true)
+                }
+        }
         val observed = AmazonObservedUpdateState(
             gateway = gateway,
             scope = backgroundScope,
-            nowEpochMs = { 0L },
+            nowMonotonicMs = { 0L },
         )
         val runtimeState = AmazonOwnedCopyRuntimeState(gateway, observed)
         val invalidated = async(start = CoroutineStart.UNDISPATCHED) {
@@ -2422,17 +2716,45 @@ class OwnedCopyRuntimeAdapterTest {
 
         val cold = runtimeState.readBatch(listOf(game), scope, 0L).getValue(1)
         assertEquals(UpdateObservation.UNKNOWN, cold.updateObservation)
-        coVerify(exactly = 0) { gateway.updatePending(any()) }
+        coVerify(exactly = 0) { gateway.refreshUpdates(any()) }
         runCurrent()
 
         assertEquals(Unit, invalidated.await())
         val refreshed = runtimeState.readBatch(listOf(game), scope, 0L).getValue(1)
         assertEquals(UpdateObservation.UPDATE_AVAILABLE, refreshed.updateObservation)
-        coVerify(exactly = 1) { gateway.updatePending("product") }
+        coVerify(exactly = 1) { gateway.refreshUpdates(any()) }
     }
 
     @Test
-    fun amazonObservedRefreshConcurrencyRemainsBoundedAcrossOverlappingWaves() = runTest {
+    fun amazonObservedStorageRetainsFifteenHundredInstalledCopies() = runTest {
+        val games = (1..1_500).map { id ->
+            AmazonGame(
+                appId = id,
+                productId = "product-$id",
+                versionId = "v1",
+                isInstalled = true,
+            )
+        }
+        val queried = mutableSetOf<String>()
+        val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
+        coEvery { gateway.refreshUpdates(any()) } answers {
+            (invocation.args[0] as List<*>)
+                .filterIsInstance<UpdateObservationRequest<String, String>>()
+                .associate { request ->
+                    queried += request.key
+                    request.key to UpdateRefreshOutcome.Observed(updateAvailable = false)
+                }
+        }
+        val observed = AmazonObservedUpdateState(gateway, backgroundScope) { 0L }
+
+        observed.snapshot(UpdateObservationOwner(scope, 1L), games)
+        runCurrent()
+
+        assertEquals(1_500, queried.size)
+    }
+
+    @Test
+    fun amazonObservedRefreshUsesSequentialBoundedBatchWaves() = runTest {
         val games = (1..40).map { id ->
             AmazonGame(
                 appId = id,
@@ -2442,33 +2764,29 @@ class OwnedCopyRuntimeAdapterTest {
             )
         }
         val gate = CompletableDeferred<Unit>()
-        val active = AtomicInteger()
-        val maximumActive = AtomicInteger()
+        val waveSizes = mutableListOf<Int>()
         val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
-        coEvery { gateway.updatePending(any()) } coAnswers {
-            val current = active.incrementAndGet()
-            maximumActive.updateAndGet { maximum -> maxOf(maximum, current) }
-            try {
-                gate.await()
-                false
-            } finally {
-                active.decrementAndGet()
+        coEvery { gateway.refreshUpdates(any()) } coAnswers {
+            val requests = (invocation.args[0] as List<*>)
+                .filterIsInstance<UpdateObservationRequest<String, String>>()
+            waveSizes += requests.size
+            if (waveSizes.size == 1) gate.await()
+            requests.associate { request ->
+                request.key to UpdateRefreshOutcome.Observed(updateAvailable = false)
             }
         }
         val observed = AmazonObservedUpdateState(gateway, backgroundScope) { 0L }
         val owner = UpdateObservationOwner(scope, 0L)
 
-        try {
-            observed.snapshot(owner, games)
-            observed.snapshot(owner, games)
-            runCurrent()
+        observed.snapshot(owner, games)
+        observed.snapshot(owner, games)
+        runCurrent()
+        assertEquals(listOf(32), waveSizes)
 
-            assertTrue(maximumActive.get() <= 4)
-        } finally {
-            gate.complete(Unit)
-            runCurrent()
-        }
-        coVerify(exactly = 40) { gateway.updatePending(any()) }
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf(32, 8), waveSizes)
+        coVerify(exactly = 2) { gateway.refreshUpdates(any()) }
     }
 
     @Test
@@ -2485,7 +2803,13 @@ class OwnedCopyRuntimeAdapterTest {
         val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
         coEvery { gateway.activeDownloadProductIds() } returns emptySet()
         coEvery { gateway.partialDownloadProductIds() } returns emptySet()
-        coEvery { gateway.updatePending("product") } answers { results.removeFirst() }
+        coEvery { gateway.refreshUpdates(any()) } answers {
+            (invocation.args[0] as List<*>)
+                .filterIsInstance<UpdateObservationRequest<String, String>>()
+                .associate { request ->
+                    request.key to UpdateRefreshOutcome.Observed(results.removeFirst())
+                }
+        }
         val observed = AmazonObservedUpdateState(gateway, backgroundScope) { 0L }
         val runtimeState = AmazonOwnedCopyRuntimeState(gateway, observed)
 
@@ -2514,7 +2838,7 @@ class OwnedCopyRuntimeAdapterTest {
             runtimeState.readBatch(listOf(versionC), scope, 0L).getValue(1).updateObservation,
         )
 
-        coVerify(exactly = 3) { gateway.updatePending("product") }
+        coVerify(exactly = 3) { gateway.refreshUpdates(any()) }
     }
 
     @Test
@@ -2785,6 +3109,8 @@ class OwnedCopyRuntimeAdapterTest {
             File(soleFolder, ".gamenative").writeText("{\"appId\":9}")
             val soleSubfolder = File(soleFolder, "assets").apply { mkdirs() }
             val soleIcon = File(soleSubfolder, "art.ico").apply { writeText("icon") }
+            File(soleFolder, "unrelated.jpg").writeText("artwork")
+            File(soleSubfolder, "unrelated.webp").writeText("artwork")
 
             setCustomFolders(
                 linkedSetOf(
@@ -2971,18 +3297,322 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
-    fun coldObservedUpdateRefreshPublishesAuthoritativeTrueAndInvalidates() = runTest {
-        val clock = MutableRuntimeClock()
+    fun steamObservedUpdateRechecksAccountAuthorityBeforeProviderIo() = runTest {
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>(relaxed = true)
+        val owner = UpdateObservationOwner(scope, 1L)
+        var authoritative = true
+        val observed = SteamObservedUpdateState(
+            gateway = gateway,
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            isOwnerCurrent = { authoritative },
+        )
+        val app = SteamApp(id = 7, name = "Installed")
+
+        assertEquals(
+            UpdateObservation.UNKNOWN,
+            observed.snapshot(owner, listOf(app), SteamRuntimeInputs(emptySet(), emptyMap(), emptyMap(), emptyMap()))[7],
+        )
+        authoritative = false
+        runCurrent()
+
+        coVerify(exactly = 0) { gateway.refreshUpdates(any()) }
+    }
+
+    @Test
+    fun steamLifecycleRetirementCancelsActiveObservedProviderIo() = runTest {
+        val gateway = mockk<SteamOwnedCopyRuntimeGateway>()
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        coEvery { gateway.refreshUpdates(any()) } coAnswers {
+            started.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                cancelled.complete(Unit)
+            }
+        }
+        val retirements = MutableSharedFlow<Long>(extraBufferCapacity = 1)
+        val observed = SteamObservedUpdateState(
+            gateway = gateway,
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            isOwnerCurrent = { true },
+            retirements = retirements,
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+        val app = SteamApp(id = 7, name = "Installed")
+
+        observed.snapshot(owner, listOf(app), SteamRuntimeInputs(emptySet(), emptyMap(), emptyMap(), emptyMap()))
+        runCurrent()
+        assertEquals(Unit, started.await())
+        retirements.emit(2L)
+        runCurrent()
+
+        assertEquals(Unit, cancelled.await())
+    }
+
+    @Test
+    fun staleRetirementCannotClearNewerObservedOwnerState() = runTest {
         val refreshes = AtomicInteger()
         val store = ObservedUpdateStateStore<Int, String>(
             scope = backgroundScope,
-            nowEpochMs = clock::now,
+            nowMonotonicMs = { testScheduler.currentTime },
             ttlMs = 100L,
             retryDelayMs = 10L,
             maxEntries = 8,
             refresh = { requests ->
                 refreshes.incrementAndGet()
-                requests.associate { it.key to true }
+                requests.associate { request ->
+                    request.key to UpdateRefreshOutcome.Observed(updateAvailable = false)
+                }
+            },
+        )
+        val newerOwner = UpdateObservationOwner(scope, 2L)
+
+        store.snapshot(newerOwner, mapOf(7 to "v1"))
+        runCurrent()
+        assertEquals(UpdateObservation.CURRENT, store.snapshot(newerOwner, mapOf(7 to "v1"))[7])
+
+        store.retire(1L)
+
+        assertEquals(UpdateObservation.CURRENT, store.snapshot(newerOwner, mapOf(7 to "v1"))[7])
+        assertEquals(1, refreshes.get())
+    }
+
+    @Test
+    fun observedRetirementCancelsAutonomousRetryTimer() = runTest {
+        val attempts = AtomicInteger()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            ttlMs = 100L,
+            retryDelayMs = 10L,
+            maxEntries = 8,
+            refresh = { requests ->
+                attempts.incrementAndGet()
+                requests.associate { request ->
+                    request.key to UpdateRefreshOutcome.Failed(SensitiveFailure::class)
+                }
+            },
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+
+        store.snapshot(owner, mapOf(7 to "v1"))
+        runCurrent()
+        assertEquals(1, attempts.get())
+
+        store.retire(owner.generation)
+        advanceTimeBy(1_000L)
+        runCurrent()
+
+        assertEquals(1, attempts.get())
+    }
+
+    @Test
+    fun observedUpdateRejectsCompletionAfterOwnerLosesAuthority() = runTest {
+        var authoritative = true
+        val completion = CompletableDeferred<Unit>()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            ttlMs = 100L,
+            retryDelayMs = 10L,
+            maxEntries = 8,
+            isOwnerCurrent = { authoritative },
+            refresh = { requests ->
+                completion.await()
+                requests.associate { request ->
+                    request.key to UpdateRefreshOutcome.Observed(updateAvailable = false)
+                }
+            },
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+
+        store.snapshot(owner, mapOf(7 to "v1"))
+        runCurrent()
+        authoritative = false
+        completion.complete(Unit)
+        runCurrent()
+
+        assertEquals(UpdateObservation.UNKNOWN, store.snapshot(owner, mapOf(7 to "v1"))[7])
+    }
+
+    @Test
+    fun observedUpdateFailureRetriesAutonomouslyWithoutAnotherSnapshot() = runTest {
+        val attempts = AtomicInteger()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            ttlMs = 100L,
+            retryDelayMs = 10L,
+            maxEntries = 8,
+            refresh = { requests ->
+                val outcome = if (attempts.getAndIncrement() == 0) {
+                    UpdateRefreshOutcome.Failed(SensitiveFailure::class)
+                } else {
+                    UpdateRefreshOutcome.Observed(updateAvailable = true)
+                }
+                requests.associate { it.key to outcome }
+            },
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+
+        assertEquals(UpdateObservation.UNKNOWN, store.snapshot(owner, mapOf(7 to "v1"))[7])
+        runCurrent()
+        assertEquals(1, attempts.get())
+
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(2, attempts.get())
+        assertEquals(UpdateObservation.UPDATE_AVAILABLE, store.snapshot(owner, mapOf(7 to "v1"))[7])
+    }
+
+    @Test
+    fun observedUpdateExpiryRefreshesAutonomouslyWithoutAnotherSnapshot() = runTest {
+        val attempts = AtomicInteger()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            ttlMs = 100L,
+            retryDelayMs = 10L,
+            maxEntries = 8,
+            refresh = { requests ->
+                val updateAvailable = attempts.getAndIncrement() == 0
+                requests.associate { request ->
+                    request.key to UpdateRefreshOutcome.Observed(updateAvailable)
+                }
+            },
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+
+        store.snapshot(owner, mapOf(7 to "v1"))
+        runCurrent()
+        assertEquals(1, attempts.get())
+        assertEquals(UpdateObservation.UPDATE_AVAILABLE, store.snapshot(owner, mapOf(7 to "v1"))[7])
+
+        advanceTimeBy(100L)
+        runCurrent()
+
+        assertEquals(2, attempts.get())
+        assertEquals(UpdateObservation.CURRENT, store.snapshot(owner, mapOf(7 to "v1"))[7])
+    }
+
+    @Test
+    fun observedUpdateAdmissionIsStableAboveCapacityAndDoesNotRotateLiveKeys() = runTest {
+        val providerCalls = mutableListOf<Int>()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            ttlMs = 100L,
+            retryDelayMs = 1_000L,
+            maxEntries = 2,
+            maxRefreshBatch = 2,
+            refresh = { requests ->
+                providerCalls += requests.map(UpdateObservationRequest<Int, String>::key)
+                requests.associate { request ->
+                    request.key to if (request.key == 3) {
+                        UpdateRefreshOutcome.Failed(SensitiveFailure::class)
+                    } else {
+                        UpdateRefreshOutcome.Observed(updateAvailable = false)
+                    }
+                }
+            },
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+        val requested = linkedMapOf(1 to "v", 2 to "v", 3 to "v")
+
+        store.snapshot(owner, requested)
+        runCurrent()
+        store.snapshot(owner, requested)
+        runCurrent()
+
+        assertEquals(listOf(1, 2), providerCalls)
+        assertEquals(UpdateObservation.CURRENT, store.snapshot(owner, requested)[1])
+        assertEquals(UpdateObservation.CURRENT, store.snapshot(owner, requested)[2])
+        assertEquals(UpdateObservation.UNKNOWN, store.snapshot(owner, requested)[3])
+    }
+
+    @Test
+    fun observedUpdateWavesAreGloballySequentialAndBoundQueuedWork() = runTest {
+        val firstWave = CompletableDeferred<Unit>()
+        val startedWaves = mutableListOf<List<Int>>()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            ttlMs = 100L,
+            retryDelayMs = 10L,
+            maxEntries = 8,
+            maxRefreshBatch = 1,
+            refresh = { requests ->
+                startedWaves += requests.map(UpdateObservationRequest<Int, String>::key)
+                if (requests.single().key == 1) firstWave.await()
+                requests.associate {
+                    it.key to UpdateRefreshOutcome.Observed(updateAvailable = false)
+                }
+            },
+        )
+        val owner = UpdateObservationOwner(scope, 1L)
+
+        store.snapshot(owner, mapOf(1 to "v"))
+        runCurrent()
+        store.snapshot(owner, linkedMapOf(1 to "v", 2 to "v"))
+        runCurrent()
+        assertEquals(listOf(listOf(1)), startedWaves)
+
+        firstWave.complete(Unit)
+        runCurrent()
+        assertEquals(listOf(listOf(1), listOf(2)), startedWaves)
+    }
+
+    @Test
+    fun retiredObservedOwnerCannotReclaimStateOrStartQueuedProviderIo() = runTest {
+        val oldOwner = UpdateObservationOwner(scope, 1L)
+        val newOwner = UpdateObservationOwner(otherScope, 2L)
+        var authoritativeOwner = oldOwner
+        val providerCalls = mutableListOf<Int>()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = { testScheduler.currentTime },
+            ttlMs = 100L,
+            retryDelayMs = 10L,
+            maxEntries = 8,
+            isOwnerCurrent = { owner -> owner == authoritativeOwner },
+            refresh = { requests ->
+                providerCalls += requests.map(UpdateObservationRequest<Int, String>::key)
+                requests.associate { request ->
+                    request.key to UpdateRefreshOutcome.Observed(updateAvailable = false)
+                }
+            },
+        )
+
+        assertEquals(UpdateObservation.UNKNOWN, store.snapshot(oldOwner, mapOf(1 to "old"))[1])
+        authoritativeOwner = newOwner
+        assertEquals(UpdateObservation.UNKNOWN, store.snapshot(newOwner, mapOf(2 to "new"))[2])
+        runCurrent()
+
+        assertEquals(listOf(2), providerCalls)
+        assertEquals(UpdateObservation.UNKNOWN, store.snapshot(oldOwner, mapOf(1 to "old"))[1])
+        runCurrent()
+        assertEquals(listOf(2), providerCalls)
+    }
+
+    @Test
+    fun coldObservedUpdateRefreshPublishesAuthoritativeTrueAndInvalidates() = runTest {
+        val clock = MutableRuntimeClock()
+        val refreshes = AtomicInteger()
+        val store = ObservedUpdateStateStore<Int, String>(
+            scope = backgroundScope,
+            nowMonotonicMs = clock::now,
+            ttlMs = 100L,
+            retryDelayMs = 10L,
+            maxEntries = 8,
+            refresh = { requests ->
+                refreshes.incrementAndGet()
+                requests.associate {
+                    it.key to UpdateRefreshOutcome.Observed(updateAvailable = true)
+                }
             },
         )
         val owner = UpdateObservationOwner(scope, 1L)
@@ -3010,11 +3640,15 @@ class OwnedCopyRuntimeAdapterTest {
         val results = ArrayDeque(listOf(true, false, true))
         val store = ObservedUpdateStateStore<Int, String>(
             scope = backgroundScope,
-            nowEpochMs = clock::now,
+            nowMonotonicMs = clock::now,
             ttlMs = 100L,
             retryDelayMs = 10L,
             maxEntries = 8,
-            refresh = { requests -> requests.associate { it.key to results.removeFirst() } },
+            refresh = { requests ->
+                requests.associate {
+                    it.key to UpdateRefreshOutcome.Observed(results.removeFirst())
+                }
+            },
         )
         val owner = UpdateObservationOwner(scope, 1L)
 
@@ -3038,13 +3672,15 @@ class OwnedCopyRuntimeAdapterTest {
         val attempts = AtomicInteger()
         val store = ObservedUpdateStateStore<Int, String>(
             scope = backgroundScope,
-            nowEpochMs = clock::now,
+            nowMonotonicMs = clock::now,
             ttlMs = 100L,
             retryDelayMs = 10L,
             maxEntries = 8,
             refresh = { requests ->
                 if (attempts.getAndIncrement() == 0) throw SensitiveFailure()
-                requests.associate { it.key to true }
+                requests.associate {
+                    it.key to UpdateRefreshOutcome.Observed(updateAvailable = true)
+                }
             },
         )
         val firstGeneration = UpdateObservationOwner(scope, 1L)
@@ -3071,7 +3707,7 @@ class OwnedCopyRuntimeAdapterTest {
         val attempts = mutableListOf<Int>()
         val store = ObservedUpdateStateStore<Int, String>(
             scope = backgroundScope,
-            nowEpochMs = { 0L },
+            nowMonotonicMs = { 0L },
             ttlMs = 100L,
             retryDelayMs = 1_000L,
             maxEntries = 1,
@@ -3094,11 +3730,11 @@ class OwnedCopyRuntimeAdapterTest {
 
     @Test
     fun observedUpdateIgnoresStaleCompletionAfterOwnerGenerationSwitch() = runTest {
-        val firstCompletion = CompletableDeferred<Map<Int, Boolean>>()
+        val firstCompletion = CompletableDeferred<Map<Int, UpdateRefreshOutcome>>()
         val refreshCount = AtomicInteger()
         val store = ObservedUpdateStateStore<Int, String>(
             scope = backgroundScope,
-            nowEpochMs = { 0L },
+            nowMonotonicMs = { 0L },
             ttlMs = 100L,
             retryDelayMs = 10L,
             maxEntries = 8,
@@ -3106,7 +3742,9 @@ class OwnedCopyRuntimeAdapterTest {
                 if (refreshCount.getAndIncrement() == 0) {
                     firstCompletion.await()
                 } else {
-                    requests.associate { it.key to false }
+                    requests.associate {
+                        it.key to UpdateRefreshOutcome.Observed(updateAvailable = false)
+                    }
                 }
             },
         )
@@ -3119,7 +3757,9 @@ class OwnedCopyRuntimeAdapterTest {
         runCurrent()
         assertEquals(UpdateObservation.CURRENT, store.snapshot(newOwner, mapOf(7 to "v2"))[7])
 
-        firstCompletion.complete(mapOf(7 to true))
+        firstCompletion.complete(
+            mapOf(7 to UpdateRefreshOutcome.Observed(updateAvailable = true)),
+        )
         runCurrent()
 
         assertEquals(UpdateObservation.CURRENT, store.snapshot(newOwner, mapOf(7 to "v2"))[7])

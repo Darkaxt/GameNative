@@ -2,6 +2,7 @@ package app.gamenative.service
 
 import app.gamenative.data.DepotInfo
 import app.gamenative.data.ManifestInfo
+import app.gamenative.data.SteamApp
 import app.gamenative.enums.OS
 import app.gamenative.enums.OSArch
 import org.junit.Assert.*
@@ -35,9 +36,13 @@ class DepotFilteringTest {
         steamDeck = steamDeck,
     )
 
-    private fun manifest(size: Long = 1000L, download: Long = 800L) = ManifestInfo(
+    private fun manifest(
+        size: Long = 1000L,
+        download: Long = 800L,
+        gid: Long = 123L,
+    ) = ManifestInfo(
         name = "public",
-        gid = 123L,
+        gid = gid,
         size = size,
         download = download,
     )
@@ -145,6 +150,101 @@ class DepotFilteringTest {
     fun `deck depot passes when no non-deck windows depot exists`() {
         val d = depot(manifests = mapOf("public" to manifest()), steamDeck = true)
         assertTrue(SteamService.filterForDownloadableDepots(d, true, false, "english", null))
+    }
+
+    @Test
+    fun `batch update detects changed manifest owned only by indirect DLC`() {
+        val mainDepot = depot(
+            depotId = 100,
+            manifests = mapOf("public" to manifest(gid = 1L)),
+        )
+        val localDlcDepot = depot(
+            depotId = 200,
+            manifests = mapOf("public" to manifest(gid = 10L)),
+        )
+        val remoteDlcDepot = localDlcDepot.copy(
+            manifests = mapOf("public" to manifest(gid = 11L)),
+        )
+        val localMain = SteamApp(id = 1, name = "Main", depots = mapOf(100 to mainDepot))
+        val remoteMain = localMain.copy()
+        val localDlc = SteamApp(id = 2, name = "DLC", depots = mapOf(200 to localDlcDepot))
+        val remoteDlc = localDlc.copy(depots = mapOf(200 to remoteDlcDepot))
+
+        assertTrue(
+            SteamService.isUpdatePendingFromSnapshots(
+                localApp = localMain,
+                branch = "public",
+                preferredLanguage = "english",
+                ownedDlcApps = listOf(localDlc),
+                licensedDepotIds = mapOf(1 to setOf(100), 2 to setOf(200)),
+                installedDepotIds = setOf(100, 200),
+                remoteApps = mapOf(1 to remoteMain, 2 to remoteDlc),
+            ),
+        )
+    }
+
+    @Test
+    fun `batch update detects changed direct DLC depot owned by DLC app`() {
+        val localDlcDepot = depot(
+            depotId = 200,
+            dlcAppId = 2,
+            manifests = mapOf("public" to manifest(gid = 10L)),
+        )
+        val remoteDlcDepot = localDlcDepot.copy(
+            manifests = mapOf("public" to manifest(gid = 11L)),
+        )
+        val localMain = SteamApp(id = 1, name = "Main", depots = mapOf(200 to localDlcDepot))
+        val remoteMain = localMain.copy(depots = mapOf(200 to remoteDlcDepot))
+        val localDlc = SteamApp(id = 2, name = "DLC")
+
+        assertTrue(
+            SteamService.isUpdatePendingFromSnapshots(
+                localApp = localMain,
+                branch = "public",
+                preferredLanguage = "english",
+                ownedDlcApps = listOf(localDlc),
+                licensedDepotIds = mapOf(1 to setOf(200)),
+                installedDepotIds = setOf(200),
+                remoteApps = mapOf(1 to remoteMain, 2 to localDlc),
+            ),
+        )
+    }
+
+    @Test
+    fun `batch update retains installed depot after language selection changes`() {
+        val englishDepot = depot(
+            depotId = 100,
+            language = "english",
+            manifests = mapOf("public" to manifest(gid = 1L)),
+        )
+        val localFrenchDepot = depot(
+            depotId = 200,
+            language = "french",
+            manifests = mapOf("public" to manifest(gid = 10L)),
+        )
+        val remoteFrenchDepot = localFrenchDepot.copy(
+            manifests = mapOf("public" to manifest(gid = 11L)),
+        )
+        val localMain = SteamApp(
+            id = 1,
+            name = "Main",
+            depots = mapOf(100 to englishDepot, 200 to localFrenchDepot),
+        )
+        val remoteMain = localMain.copy(
+            depots = mapOf(100 to englishDepot, 200 to remoteFrenchDepot),
+        )
+
+        assertTrue(
+            SteamService.isUpdatePendingFromSnapshots(
+                localApp = localMain,
+                branch = "public",
+                preferredLanguage = "english",
+                ownedDlcApps = emptyList(),
+                licensedDepotIds = mapOf(1 to setOf(100, 200)),
+                installedDepotIds = setOf(100, 200),
+                remoteApps = mapOf(1 to remoteMain),
+            ),
+        )
     }
 
     @Test
