@@ -1222,6 +1222,7 @@
     <string name="library_cloud_sync_up_to_date">Save files are already up to date</string>
     <string name="library_cloud_sync_failed">Cloud sync failed</string>
     <string name="library_cloud_sync_error">Cloud sync error: %1$s</string>
+    <string name="library_refresh_failed">Library refresh failed. Check your connection and try again.</string>
 
     <!-- LibraryAppScreen: UI Labels -->
     <string name="library_need_internet">Need internet to install</string>

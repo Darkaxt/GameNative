@@ -410,6 +410,21 @@ private class CanonicalAssemblyFailure : IllegalStateException()
 private class CanonicalCollectionStopped : CancellationException()
 private class LibraryStatsRefreshUnavailable : IllegalStateException()
 
+private enum class RefreshStage {
+    COMPATIBILITY_CACHE_CLEAR,
+    DEVICE_STATS_CACHE_CLEAR,
+    GPU_STATS_CACHE_CLEAR,
+    STEAM_SYNC,
+    GOG_SYNC,
+    AMAZON_SYNC,
+    INITIAL_RENDER,
+    DEVICE_STATS_REFRESH,
+    GPU_STATS_REFRESH,
+    DEVICE_STATS_READ,
+    GPU_STATS_READ,
+    FINAL_RENDER,
+}
+
 private sealed interface LibraryRenderMode {
     data class Legacy(val failure: CanonicalPublicFailure?) : LibraryRenderMode
     data class Canonical(val collectorEpoch: Long) : LibraryRenderMode
@@ -935,19 +950,31 @@ class LibraryViewModel @Inject constructor(
             val currentRefreshEpoch = refreshEpoch.incrementAndGet()
             val initialRequest = supersedeRenderForPendingInput(
                 paginationPageLocked = { 0 },
+                updateInputLocked = { paginationCurrentPage = 0 },
                 transformState = { current -> current.copy(isRefreshing = true) },
             )
             lateinit var job: Job
             job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+                var refreshStage = RefreshStage.COMPATIBILITY_CACHE_CLEAR
+                var compatibilityCleared = false
+                var deviceStatsCleared = false
+                var gpuStatsCleared = false
                 try {
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    refreshStage = RefreshStage.COMPATIBILITY_CACHE_CLEAR
                     GameCompatibilityCache.clear()
+                    compatibilityCleared = true
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    refreshStage = RefreshStage.DEVICE_STATS_CACHE_CLEAR
                     DeviceGameStatsCache.clear()
+                    deviceStatsCleared = true
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    refreshStage = RefreshStage.GPU_STATS_CACHE_CLEAR
                     GpuGameStatsCache.clear()
+                    gpuStatsCleared = true
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
 
+                    refreshStage = RefreshStage.STEAM_SYNC
                     val newApps = SteamService.refreshOwnedGamesFromServer()
                     if (newApps > 0) {
                         Timber.tag("LibraryViewModel").i("Queued $newApps newly owned games for PICS sync")
@@ -955,20 +982,24 @@ class LibraryViewModel @Inject constructor(
                         Timber.tag("LibraryViewModel").d("No newly owned games discovered during refresh")
                     }
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    refreshStage = RefreshStage.GOG_SYNC
                     if (GOGService.hasStoredCredentials(context)) {
                         Timber.tag("LibraryViewModel").i("Triggering GOG library refresh")
                         GOGService.triggerLibrarySync(context)
                     }
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    refreshStage = RefreshStage.AMAZON_SYNC
                     if (AmazonService.hasStoredCredentials(context)) {
                         Timber.tag("LibraryViewModel").i("Triggering Amazon library refresh")
                         AmazonService.triggerLibrarySync(context)
                     }
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
 
+                    refreshStage = RefreshStage.INITIAL_RENDER
                     onFilterApps(initialRequest).join()
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
                     if (gpuName != "Unknown GPU") {
+                        refreshStage = RefreshStage.DEVICE_STATS_REFRESH
                         val deviceStatsAvailable = DeviceGameStatsCache.refreshIfStale(
                             deviceModel = HardwareUtils.getMachineName(),
                             gpuName = gpuName,
@@ -976,6 +1007,7 @@ class LibraryViewModel @Inject constructor(
                         )
                         if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
                         if (!deviceStatsAvailable) throw LibraryStatsRefreshUnavailable()
+                        refreshStage = RefreshStage.GPU_STATS_REFRESH
                         val gpuStatsAvailable = GpuGameStatsCache.refreshIfStale(
                             gpuName = gpuName,
                             modernBuild = BuildConfig.MODERN_ANDROID,
@@ -983,10 +1015,13 @@ class LibraryViewModel @Inject constructor(
                         if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
                         if (!gpuStatsAvailable) throw LibraryStatsRefreshUnavailable()
                     }
+                    refreshStage = RefreshStage.DEVICE_STATS_READ
                     val freshDeviceStats = DeviceGameStatsCache.getAll()
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    refreshStage = RefreshStage.GPU_STATS_READ
                     val freshGpuStats = GpuGameStatsCache.getAll()
                     if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    refreshStage = RefreshStage.FINAL_RENDER
                     val completionRequest = supersedeRenderForPendingInputInternal(
                         expectedInputRevision = null,
                         expectedPublishedToken = null,
@@ -1004,7 +1039,18 @@ class LibraryViewModel @Inject constructor(
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Exception) {
-                    recordRefreshFailure(error)
+                    if (isRefreshAuthoritative(currentRefreshEpoch)) {
+                        recordRefreshFailure(refreshStage, error)
+                        SnackbarManager.show(context.getString(R.string.library_refresh_failed))
+                        if (compatibilityCleared || deviceStatsCleared || gpuStatsCleared) {
+                            rerenderAfterRefreshFailure(
+                                expectedRefreshEpoch = currentRefreshEpoch,
+                                compatibilityCleared = compatibilityCleared,
+                                deviceStatsCleared = deviceStatsCleared,
+                                gpuStatsCleared = gpuStatsCleared,
+                            )
+                        }
+                    }
                 } finally {
                     finishRefresh(currentRefreshEpoch, job)
                 }
@@ -1022,6 +1068,29 @@ class LibraryViewModel @Inject constructor(
         activeRenderToken?.paginationPage
             ?: latestPublishedToken?.paginationPage
             ?: paginationCurrentPage
+
+    private fun rerenderAfterRefreshFailure(
+        expectedRefreshEpoch: Long,
+        compatibilityCleared: Boolean,
+        deviceStatsCleared: Boolean,
+        gpuStatsCleared: Boolean,
+    ) {
+        val recoveryRequest = supersedeRenderForPendingInputInternal(
+            expectedInputRevision = null,
+            expectedPublishedToken = null,
+            paginationPageLocked = { latestRequestedPaginationPageLocked() },
+            updateInputLocked = {},
+            transformState = { current ->
+                current.copy(
+                    compatibilityMap = if (compatibilityCleared) emptyMap() else current.compatibilityMap,
+                    deviceGameStats = if (deviceStatsCleared) emptyMap() else current.deviceGameStats,
+                    gpuGameStats = if (gpuStatsCleared) emptyMap() else current.gpuGameStats,
+                )
+            },
+            expectedRefreshEpoch = expectedRefreshEpoch,
+        )
+        recoveryRequest?.let(::onFilterApps)
+    }
 
     private fun finishRefresh(expectedRefreshEpoch: Long, job: Job) {
         synchronized(renderLock) {
@@ -1948,13 +2017,13 @@ class LibraryViewModel @Inject constructor(
         return request
     }
 
-    private fun recordRefreshFailure(error: Exception) {
+    private fun recordRefreshFailure(stage: RefreshStage, error: Exception) {
         FeatureDiagnostics.record(
             area = DiagnosticArea.LIBRARY_FILTER,
             name = DiagnosticEventName.LIBRARY_FILTER,
             outcome = DiagnosticOutcome.FAILED,
             attributes = mapOf(
-                DiagnosticAttribute.OPERATION to "REFRESH",
+                DiagnosticAttribute.REASON to stage.name,
                 DiagnosticAttribute.ERROR_TYPE to error.javaClass.simpleName,
             ),
         )

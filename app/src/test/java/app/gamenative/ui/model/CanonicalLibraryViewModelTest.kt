@@ -12,6 +12,7 @@ import app.gamenative.data.GOGGame
 import app.gamenative.data.HeroResponse
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.RecommendationRepository
+import app.gamenative.data.SteamApp
 import app.gamenative.data.SteamCollection
 import app.gamenative.data.SteamCollectionRepository
 import app.gamenative.data.canonical.AccountScope
@@ -54,10 +55,12 @@ import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.LibraryTab
 import app.gamenative.ui.enums.SortOption
+import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.utils.CustomGameScanner
 import app.gamenative.utils.DeviceGameStatsCache
 import app.gamenative.utils.DeviceGameStatsService.DeviceGameStats
 import app.gamenative.utils.GameCompatibilityCache
+import app.gamenative.utils.GameCompatibilityService
 import app.gamenative.utils.GpuGameStatsCache
 import io.mockk.clearAllMocks
 import io.mockk.clearMocks
@@ -169,12 +172,15 @@ class CanonicalLibraryViewModelTest {
         mockkObject(RecommendationRepository)
         coEvery { RecommendationRepository.getHero(any()) } returns HeroResponse()
         mockkObject(DeviceGameStatsCache)
+        every { DeviceGameStatsCache.clear() } just runs
         coEvery { DeviceGameStatsCache.refreshIfStale(any(), any(), any()) } returns true
         every { DeviceGameStatsCache.getAll() } returns emptyMap()
         mockkObject(GpuGameStatsCache)
+        every { GpuGameStatsCache.clear() } just runs
         coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } returns true
         every { GpuGameStatsCache.getAll() } returns emptyMap()
         mockkObject(GameCompatibilityCache)
+        every { GameCompatibilityCache.clear() } just runs
         every { GameCompatibilityCache.getCached(any()) } returns null
     }
 
@@ -1904,12 +1910,145 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
+    fun `refresh page zero intent survives DAO emission that supersedes initial render`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val steamRows = MutableStateFlow<List<SteamApp>>(emptyList())
+        val refreshStarted = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val cards = (0 until 105).map { index ->
+            card(
+                canonicalId = canonicalId(500 + index),
+                name = "Refresh Page ${index.toString().padStart(3, '0')}",
+                copyKeys = listOf(key(GameSource.STEAM, "refresh-page-$index")),
+            )
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(cards)),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                steamRows = steamRows,
+                ioDispatcher = io,
+            )
+            awaitState { state -> state.cards.size == 50 && state.currentPaginationPage == 1 && !state.isLoading }
+            vm.onPageChange(1)
+            awaitState { state -> state.cards.size == 100 && state.currentPaginationPage == 2 && !state.isLoading }
+            coEvery { SteamService.refreshOwnedGamesFromServer() } coAnswers {
+                refreshStarted.complete(Unit)
+                releaseRefresh.await()
+                0
+            }
+
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue("refresh did not start", refreshStarted.isCompleted)
+            steamRows.value = listOf(mockk(relaxed = true))
+            assertTrue(
+                "DAO emission inherited the page published before refresh",
+                awaitCondition(timeoutMs = 4_000L) {
+                    scheduler.runCurrent()
+                    val state = vm.state.value
+                    state.isRefreshing &&
+                        !state.isLoading &&
+                        state.currentPaginationPage == 1 &&
+                        state.cards.size == 50
+                },
+            )
+
+            releaseRefresh.complete(Unit)
+            assertTrue(
+                "DAO emission restored the page published before refresh",
+                awaitCondition(timeoutMs = 4_000L) {
+                    scheduler.runCurrent()
+                    val state = vm.state.value
+                    !state.isRefreshing &&
+                        !state.isLoading &&
+                        state.currentPaginationPage == 1 &&
+                        state.cards.size == 50
+                },
+            )
+        } finally {
+            releaseRefresh.complete(Unit)
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `post clear source failure rerenders compatible filter from cleared cache`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val compatibilityCleared = AtomicBoolean(false)
+        val refetchQueued = AtomicBoolean(false)
+        val cachedCompatibility = GameCompatibilityService.GameCompatibilityResponse(
+            gameName = "Recovery Compatible",
+            totalPlayableCount = 1,
+            gpuPlayableCount = 0,
+            avgRating = 5f,
+            hasBeenTried = true,
+            isNotWorking = false,
+        )
+        every { GameCompatibilityCache.clear() } answers {
+            compatibilityCleared.set(true)
+            Unit
+        }
+        every { GameCompatibilityCache.getCached(any()) } answers {
+            cachedCompatibility.takeUnless { compatibilityCleared.get() }
+        }
+        mockkObject(GameCompatibilityService)
+        coEvery { GameCompatibilityService.fetchCompatibility(any(), any()) } coAnswers {
+            refetchQueued.set(true)
+            null
+        }
+        mockkObject(SnackbarManager)
+        every { SnackbarManager.show(any()) } just runs
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(listOf(card(name = "Recovery Compatible")))),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { state -> state.cards.map { it.name } == listOf("Recovery Compatible") && !state.isLoading }
+            setLazyStringField(vm, "gpuName", "Test GPU")
+            vm.onFilterChanged(AppFilter.COMPATIBLE)
+            awaitState { state ->
+                state.appInfoSortType.contains(AppFilter.COMPATIBLE) &&
+                    state.cards.singleOrNull()?.compatibilityStatus == GameCompatibilityStatus.COMPATIBLE &&
+                    !state.isLoading
+            }
+            coEvery { SteamService.refreshOwnedGamesFromServer() } throws IllegalStateException("private source failure")
+
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue(
+                "post-clear failure retained stale compatibility or skipped refetch",
+                awaitCondition(timeoutMs = 4_000L) {
+                    scheduler.runCurrent()
+                    val state = vm.state.value
+                    !state.isRefreshing &&
+                        !state.isLoading &&
+                        state.cards.map { it.name } == listOf("Recovery Compatible") &&
+                        state.cards.single().compatibilityStatus == null &&
+                        refetchQueued.get()
+                },
+            )
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
     fun `ordinary failures across refresh boundaries clear indicator without merging stats`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
         val freshDeviceStats = mapOf(GameSource.STEAM to mapOf("Fresh Device" to stats(1, 60, 1, 60)))
         val freshGpuStats = mapOf(GameSource.STEAM to mapOf("Fresh GPU" to stats(2, 60, 2, 60)))
         mockkObject(FeatureDiagnostics)
         every { FeatureDiagnostics.record(any(), any(), any(), any(), any()) } just runs
+        mockkObject(SnackbarManager)
+        every { SnackbarManager.show(any()) } just runs
 
         try {
             RefreshFailureBoundary.entries.forEach { boundary ->
@@ -1928,7 +2067,7 @@ class CanonicalLibraryViewModelTest {
                 }
                 setLazyStringField(vm, "gpuName", "Test GPU")
                 stubSuccessfulRefreshPipeline(freshDeviceStats, freshGpuStats)
-                clearMocks(FeatureDiagnostics, answers = false)
+                clearMocks(FeatureDiagnostics, SnackbarManager, answers = false)
                 val failure = IllegalStateException("private ${boundary.name} refresh failure")
                 when (boundary) {
                     RefreshFailureBoundary.COMPATIBILITY_CLEAR ->
@@ -1981,10 +2120,13 @@ class CanonicalLibraryViewModelTest {
                         outcome = DiagnosticOutcome.FAILED,
                         durationMs = null,
                         attributes = mapOf(
-                            DiagnosticAttribute.OPERATION to "REFRESH",
+                            DiagnosticAttribute.REASON to boundary.stage,
                             DiagnosticAttribute.ERROR_TYPE to "IllegalStateException",
                         ),
                     )
+                }
+                verify(exactly = 1) {
+                    SnackbarManager.show("Library refresh failed. Check your connection and try again.")
                 }
                 viewModelStore.clear()
                 viewModelStore = ViewModelStore()
@@ -2002,6 +2144,8 @@ class CanonicalLibraryViewModelTest {
         val freshGpuStats = mapOf(GameSource.STEAM to mapOf("Fresh GPU" to stats(2, 60, 2, 60)))
         mockkObject(FeatureDiagnostics)
         every { FeatureDiagnostics.record(any(), any(), any(), any(), any()) } just runs
+        mockkObject(SnackbarManager)
+        every { SnackbarManager.show(any()) } just runs
 
         try {
             listOf("DEVICE", "GPU").forEach { unavailableCache ->
@@ -2025,7 +2169,7 @@ class CanonicalLibraryViewModelTest {
                 } else {
                     coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } returns false
                 }
-                clearMocks(FeatureDiagnostics, answers = false)
+                clearMocks(FeatureDiagnostics, SnackbarManager, answers = false)
 
                 vm.onRefresh()
                 scheduler.runCurrent()
@@ -2047,10 +2191,13 @@ class CanonicalLibraryViewModelTest {
                         outcome = DiagnosticOutcome.FAILED,
                         durationMs = null,
                         attributes = mapOf(
-                            DiagnosticAttribute.OPERATION to "REFRESH",
+                            DiagnosticAttribute.REASON to "${unavailableCache}_STATS_REFRESH",
                             DiagnosticAttribute.ERROR_TYPE to "LibraryStatsRefreshUnavailable",
                         ),
                     )
+                }
+                verify(exactly = 1) {
+                    SnackbarManager.show("Library refresh failed. Check your connection and try again.")
                 }
                 viewModelStore.clear()
                 viewModelStore = ViewModelStore()
@@ -2070,6 +2217,8 @@ class CanonicalLibraryViewModelTest {
         val freshGpuStats = mapOf(GameSource.STEAM to mapOf("Cancelled GPU" to stats(2, 60, 2, 60)))
         mockkObject(FeatureDiagnostics)
         every { FeatureDiagnostics.record(any(), any(), any(), any(), any()) } just runs
+        mockkObject(SnackbarManager)
+        every { SnackbarManager.show(any()) } just runs
 
         try {
             val vm = viewModel(
@@ -2085,7 +2234,7 @@ class CanonicalLibraryViewModelTest {
                 releaseRefresh.await()
                 0
             }
-            clearMocks(FeatureDiagnostics, answers = false)
+            clearMocks(FeatureDiagnostics, SnackbarManager, answers = false)
 
             vm.onRefresh()
             scheduler.runCurrent()
@@ -2112,6 +2261,7 @@ class CanonicalLibraryViewModelTest {
                     attributes = any(),
                 )
             }
+            verify(exactly = 0) { SnackbarManager.show(any()) }
         } finally {
             releaseRefresh.complete(Unit)
             viewModelStore.clear()
@@ -2466,19 +2616,19 @@ class CanonicalLibraryViewModelTest {
         every { GpuGameStatsCache.getAll() } returns gpuStats
     }
 
-    private enum class RefreshFailureBoundary {
-        COMPATIBILITY_CLEAR,
-        DEVICE_CLEAR,
-        GPU_CLEAR,
-        STEAM_SYNC,
-        GOG_CREDENTIALS,
-        GOG_SYNC,
-        AMAZON_CREDENTIALS,
-        AMAZON_SYNC,
-        DEVICE_REFRESH,
-        GPU_REFRESH,
-        DEVICE_READ,
-        GPU_READ,
+    private enum class RefreshFailureBoundary(val stage: String) {
+        COMPATIBILITY_CLEAR("COMPATIBILITY_CACHE_CLEAR"),
+        DEVICE_CLEAR("DEVICE_STATS_CACHE_CLEAR"),
+        GPU_CLEAR("GPU_STATS_CACHE_CLEAR"),
+        STEAM_SYNC("STEAM_SYNC"),
+        GOG_CREDENTIALS("GOG_SYNC"),
+        GOG_SYNC("GOG_SYNC"),
+        AMAZON_CREDENTIALS("AMAZON_SYNC"),
+        AMAZON_SYNC("AMAZON_SYNC"),
+        DEVICE_REFRESH("DEVICE_STATS_REFRESH"),
+        GPU_REFRESH("GPU_STATS_REFRESH"),
+        DEVICE_READ("DEVICE_STATS_READ"),
+        GPU_READ("GPU_STATS_READ"),
     }
 
     private fun project(
@@ -2507,6 +2657,7 @@ class CanonicalLibraryViewModelTest {
         gateEnabled: Boolean,
         readiness: CanonicalProjectionReadiness,
         runtimeRegistry: OwnedCopyRuntimeRegistry = mockk(relaxed = true),
+        steamRows: Flow<List<SteamApp>> = emptyFlow(),
         gogRows: Flow<List<GOGGame>> = emptyFlow(),
         gate: CanonicalPublicLibraryGate = CanonicalPublicLibraryGate { gateEnabled },
         ioDispatcher: CoroutineDispatcher = dispatcher,
@@ -2514,7 +2665,7 @@ class CanonicalLibraryViewModelTest {
         val history = mockk<LibraryPlayHistoryDao>(relaxed = true)
         every { history.getAll() } returns emptyFlow()
         val steam = mockk<SteamAppDao>(relaxed = true)
-        every { steam.getAllOwnedApps(any(), any()) } returns emptyFlow()
+        every { steam.getAllOwnedApps(any(), any()) } returns steamRows
         val gog = mockk<GOGGameDao>(relaxed = true)
         every { gog.getAll() } returns gogRows
         val epic = mockk<EpicGameDao>(relaxed = true)
