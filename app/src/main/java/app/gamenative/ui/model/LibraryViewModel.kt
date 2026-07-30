@@ -91,9 +91,9 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -102,7 +102,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import timber.log.Timber
 
 private const val PLAYABLE_FPS_THRESHOLD = 30
@@ -413,26 +412,43 @@ private class CanonicalCollectionStopped : CancellationException()
 private sealed interface LibraryRenderMode {
     data class Legacy(val failure: CanonicalPublicFailure?) : LibraryRenderMode
     data class Canonical(val collectorEpoch: Long) : LibraryRenderMode
-    data object WaitingCanonical : LibraryRenderMode
+    data class WaitingCanonical(val collectorEpoch: Long) : LibraryRenderMode
     data object PendingInput : LibraryRenderMode
 }
 
 private data class LibraryRenderToken(
     val generation: Long,
+    val inputRevision: Long,
     val mode: LibraryRenderMode,
     val state: LibraryState,
     val paginationPage: Int,
 )
 
+private data class FilterRenderRequest(
+    val inputRevision: Long,
+    val state: LibraryState,
+    val paginationPage: Int,
+)
+
+private data class LegacyRenderRequest(
+    val failure: CanonicalPublicFailure?,
+    val filter: FilterRenderRequest,
+    val completion: CompletableDeferred<Unit> = CompletableDeferred(),
+)
+
 private sealed interface RenderPublicationOutcome {
-    data object Published : RenderPublicationOutcome
-    data object Superseded : RenderPublicationOutcome
-    data class Failed(val error: Exception) : RenderPublicationOutcome
+    val token: LibraryRenderToken
+
+    data class Published(override val token: LibraryRenderToken) : RenderPublicationOutcome
+    data class Superseded(override val token: LibraryRenderToken) : RenderPublicationOutcome
+    data class Failed(
+        override val token: LibraryRenderToken,
+        val error: Exception,
+    ) : RenderPublicationOutcome
 }
 
 private const val MIN_CANONICAL_RETRY_DELAY_MS = 1_000L
 private const val MAX_CANONICAL_RETRY_DELAY_MS = 60_000L
-private const val LEGACY_RENDER_TIMEOUT_MS = 5_000L
 private const val MIN_LEGACY_RETRY_DELAY_MS = 1_000L
 private const val MAX_LEGACY_RETRY_DELAY_MS = 60_000L
 
@@ -458,17 +474,19 @@ class LibraryViewModel @Inject constructor(
     var listState: LazyGridState by mutableStateOf(LazyGridState(0, 0))
 
     private val onInstallStatusChanged: (AndroidEvent.LibraryInstallStatusChanged) -> Unit = { event ->
-        supersedeRenderForPendingInput()
+        val request = supersedeRenderForPendingInput()
         runtimeRegistry.notifyVolatileStateChanged(event.source)
-        onFilterApps(paginationCurrentPage)
+        onFilterApps(request)
     }
 
     private val onCustomGameImagesFetched: (AndroidEvent.CustomGameImagesFetched) -> Unit = {
         runtimeRegistry.notifyVolatileStateChanged(GameSource.CUSTOM_GAME)
-        supersedeRenderForPendingInput()
-        // Increment refresh counter and refresh the library list to pick up newly fetched images
-        _state.update { it.copy(imageRefreshCounter = it.imageRefreshCounter + 1) }
-        onFilterApps(paginationCurrentPage)
+        val request = supersedeRenderForPendingInput(
+            transformState = { current ->
+                current.copy(imageRefreshCounter = current.imageRefreshCounter + 1)
+            },
+        )
+        onFilterApps(request)
     }
 
     private val onRecommendationToggleChanged: (AndroidEvent.RecommendationToggleChanged) -> Unit = {
@@ -480,15 +498,28 @@ class LibraryViewModel @Inject constructor(
     @Volatile private var lastPageInCurrentFilter: Int = 0
     private val renderLock = Any()
     private val renderGeneration = AtomicLong(0L)
+    private val filterInputRevision = AtomicLong(0L)
     @Volatile private var activeRenderToken: LibraryRenderToken? = null
+    @Volatile private var latestPublishedToken: LibraryRenderToken? = null
     private var renderJob: Job? = null
+
+    private var legacyPhysicalJob: Job? = null
+    private var legacyPhysicalToken: LibraryRenderToken? = null
+    private var legacyPhysicalRequest: LegacyRenderRequest? = null
+    private var pendingLegacyRequest: LegacyRenderRequest? = null
     private var legacyRetryJob: Job? = null
+    private var legacyRetryDeadlineElapsedMs: Long = 0L
     private var legacyRetryDelayMs = MIN_LEGACY_RETRY_DELAY_MS
+
     @Volatile private var latestCanonicalCards: List<CanonicalLibraryCard>? = null
     @Volatile private var canonicalCollectionHealthy: Boolean = false
     @Volatile private var canonicalCollectionFailure: CanonicalPublicFailure? = null
+    private var canonicalSnapshotEpoch: Long = 0L
     private var canonicalCollectorEpoch: Long = 0L
     private var canonicalCollectionJob: Job? = null
+    private var canonicalRetryJob: Job? = null
+    private var canonicalRetryDeadlineElapsedMs: Long = 0L
+    private var canonicalRetryDelayMs: Long = MIN_CANONICAL_RETRY_DELAY_MS
 
     // Complete and unfiltered app list
     private var appList: List<SteamApp> = emptyList()
@@ -532,7 +563,7 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch(canonicalDispatcher) {
             canonicalProjectionReadiness.isReady.collect {
                 if (canonicalPublicLibraryGate.isEnabled()) {
-                    onFilterApps(paginationCurrentPage)
+                    onFilterApps(supersedeRenderForPendingInput())
                 }
             }
         }
@@ -551,15 +582,16 @@ class LibraryViewModel @Inject constructor(
             } else {
                 Timber.tag("LibraryViewModel").w("Skipping device/GPU game stats fetch - GPU name is unknown")
             }
-            supersedeRenderForPendingInput()
-            _state.update {
-                it.copy(
-                    deviceGameStats = DeviceGameStatsCache.getAll(),
-                    gpuGameStats = GpuGameStatsCache.getAll(),
-                )
-            }
+            val request = supersedeRenderForPendingInput(
+                transformState = { current ->
+                    current.copy(
+                        deviceGameStats = DeviceGameStatsCache.getAll(),
+                        gpuGameStats = GpuGameStatsCache.getAll(),
+                    )
+                },
+            )
             // Rebuild typed cards now that their display stats are available.
-            onFilterApps(paginationCurrentPage)
+            onFilterApps(request)
         }
 
         @OptIn(ExperimentalCoroutinesApi::class)
@@ -576,9 +608,10 @@ class LibraryViewModel @Inject constructor(
                     Timber.tag("LibraryViewModel").d("Collecting ${apps.size} apps")
                     // Check if the list has actually changed before triggering a re-filter
                     if (appList != apps) {
-                        supersedeRenderForPendingInput()
-                        appList = apps
-                        onFilterApps(paginationCurrentPage)
+                        val request = supersedeRenderForPendingInput(
+                            updateInputLocked = { appList = apps },
+                        )
+                        onFilterApps(request)
                     }
                 }
         }
@@ -587,9 +620,10 @@ class LibraryViewModel @Inject constructor(
             libraryPlayHistoryDao.getAll().collect { entries ->
                 val playHistory = entries.associate { it.appId to it.lastPlayed }
                 if (playHistoryByAppId != playHistory) {
-                    supersedeRenderForPendingInput()
-                    playHistoryByAppId = playHistory
-                    onFilterApps(paginationCurrentPage)
+                    val request = supersedeRenderForPendingInput(
+                        updateInputLocked = { playHistoryByAppId = playHistory },
+                    )
+                    onFilterApps(request)
                 }
             }
         }
@@ -600,9 +634,10 @@ class LibraryViewModel @Inject constructor(
                 Timber.tag("LibraryViewModel").d("Collecting ${games.size} GOG games")
                 // Check if the list has actually changed before triggering a re-filter
                 if (gogGameList != games) {
-                    supersedeRenderForPendingInput()
-                    gogGameList = games
-                    onFilterApps(paginationCurrentPage)
+                    val request = supersedeRenderForPendingInput(
+                        updateInputLocked = { gogGameList = games },
+                    )
+                    onFilterApps(request)
                 }
             }
         }
@@ -613,9 +648,10 @@ class LibraryViewModel @Inject constructor(
 
                 val hasChanges = epicGameList.size != games.size || epicGameList != games
                 if (hasChanges) {
-                    supersedeRenderForPendingInput()
-                    epicGameList = games
-                    onFilterApps(paginationCurrentPage)
+                    val request = supersedeRenderForPendingInput(
+                        updateInputLocked = { epicGameList = games },
+                    )
+                    onFilterApps(request)
                 }
             }
         }
@@ -625,9 +661,10 @@ class LibraryViewModel @Inject constructor(
                 Timber.tag("LibraryViewModel").d("Collecting ${games.size} Amazon games")
                 val hasChanges = amazonGameList.size != games.size || amazonGameList != games
                 if (hasChanges) {
-                    supersedeRenderForPendingInput()
-                    amazonGameList = games
-                    onFilterApps(paginationCurrentPage)
+                    val request = supersedeRenderForPendingInput(
+                        updateInputLocked = { amazonGameList = games },
+                    )
+                    onFilterApps(request)
                 }
             }
         }
@@ -636,24 +673,28 @@ class LibraryViewModel @Inject constructor(
         SteamCollectionRepository.loadFromCache()
         viewModelScope.launch(canonicalDispatcher) {
             SteamCollectionRepository.collections.collect { collections ->
-                supersedeRenderForPendingInput()
-                steamCollections = collections
-                // Reconcile the persisted selection against freshly-loaded collections.
-                val current = _state.value.selectedSteamCollectionIds
-                val recon = SteamCollectionFilter.reconcile(current, collections)
-                if (recon.removedAny) {
-                    PrefManager.librarySteamCollections = recon.cleaned
-                }
-                _state.update {
-                    it.copy(
-                        steamCollections = collections,
-                        selectedSteamCollectionIds = recon.cleaned,
-                    )
-                }
-                if (recon.removedAny) {
+                var removedAny = false
+                val request = supersedeRenderForPendingInput(
+                    updateInputLocked = { steamCollections = collections },
+                    transformState = { current ->
+                        val recon = SteamCollectionFilter.reconcile(
+                            current.selectedSteamCollectionIds,
+                            collections,
+                        )
+                        removedAny = recon.removedAny
+                        if (recon.removedAny) {
+                            PrefManager.librarySteamCollections = recon.cleaned
+                        }
+                        current.copy(
+                            steamCollections = collections,
+                            selectedSteamCollectionIds = recon.cleaned,
+                        )
+                    },
+                )
+                if (removedAny) {
                     SnackbarManager.show(context.getString(R.string.steam_collections_removed))
                 }
-                onFilterApps(paginationCurrentPage)
+                onFilterApps(request)
             }
         }
         viewModelScope.launch(canonicalDispatcher) {
@@ -698,12 +739,28 @@ class LibraryViewModel @Inject constructor(
 
     override fun onCleared() {
         searchDebounceJob?.cancel()
-        synchronized(renderLock) {
-            renderJob?.cancel()
-            legacyRetryJob?.cancel()
-            canonicalCollectionJob?.cancel()
+        val jobsToCancel = synchronized(renderLock) {
             canonicalCollectorEpoch += 1L
+            val jobs = listOfNotNull(
+                renderJob,
+                legacyPhysicalJob,
+                legacyRetryJob,
+                canonicalCollectionJob,
+                canonicalRetryJob,
+            )
+            renderJob = null
+            legacyPhysicalJob = null
+            legacyPhysicalToken = null
+            legacyPhysicalRequest = null
+            pendingLegacyRequest?.completion?.complete(Unit)
+            pendingLegacyRequest = null
+            legacyRetryJob = null
+            canonicalCollectionJob = null
+            canonicalRetryJob = null
+            activeRenderToken = null
+            jobs
         }
+        jobsToCancel.forEach(Job::cancel)
         PluviaApp.events.off<AndroidEvent.LibraryInstallStatusChanged, Unit>(onInstallStatusChanged)
         PluviaApp.events.off<AndroidEvent.CustomGameImagesFetched, Unit>(onCustomGameImagesFetched)
         PluviaApp.events.off<AndroidEvent.RecommendationToggleChanged, Unit>(onRecommendationToggleChanged)
@@ -722,44 +779,50 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun onSourceToggle(source: GameSource) {
-        supersedeRenderForPendingInput()
-        val current = _state.value
-        when (source) {
-            GameSource.STEAM -> {
-                val newValue = !current.showSteamInLibrary
-                PrefManager.showSteamInLibrary = newValue
-                _state.update { it.copy(showSteamInLibrary = newValue) }
-            }
+        val request = supersedeRenderForPendingInput(
+            transformState = { current ->
+                when (source) {
+                    GameSource.STEAM -> {
+                        val newValue = !current.showSteamInLibrary
+                        PrefManager.showSteamInLibrary = newValue
+                        current.copy(showSteamInLibrary = newValue)
+                    }
 
-            GameSource.CUSTOM_GAME -> {
-                val newValue = !current.showCustomGamesInLibrary
-                PrefManager.showCustomGamesInLibrary = newValue
-                _state.update { it.copy(showCustomGamesInLibrary = newValue) }
-            }
-            GameSource.GOG -> {
-                val newValue = !current.showGOGInLibrary
-                PrefManager.showGOGInLibrary = newValue
-                _state.update { it.copy(showGOGInLibrary = newValue) }
-            }
-            GameSource.EPIC -> {
-                val newValue = !current.showEpicInLibrary
-                PrefManager.showEpicInLibrary = newValue
-                _state.update { it.copy(showEpicInLibrary = newValue) }
-            }
-            GameSource.AMAZON -> {
-                val newValue = !current.showAmazonInLibrary
-                PrefManager.showAmazonInLibrary = newValue
-                _state.update { it.copy(showAmazonInLibrary = newValue) }
-            }
-        }
-        onFilterApps(paginationCurrentPage)
+                    GameSource.CUSTOM_GAME -> {
+                        val newValue = !current.showCustomGamesInLibrary
+                        PrefManager.showCustomGamesInLibrary = newValue
+                        current.copy(showCustomGamesInLibrary = newValue)
+                    }
+                    GameSource.GOG -> {
+                        val newValue = !current.showGOGInLibrary
+                        PrefManager.showGOGInLibrary = newValue
+                        current.copy(showGOGInLibrary = newValue)
+                    }
+                    GameSource.EPIC -> {
+                        val newValue = !current.showEpicInLibrary
+                        PrefManager.showEpicInLibrary = newValue
+                        current.copy(showEpicInLibrary = newValue)
+                    }
+                    GameSource.AMAZON -> {
+                        val newValue = !current.showAmazonInLibrary
+                        PrefManager.showAmazonInLibrary = newValue
+                        current.copy(showAmazonInLibrary = newValue)
+                    }
+                }
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onSortOptionChanged(sortOption: SortOption) {
-        supersedeRenderForPendingInput()
-        PrefManager.librarySortOption = sortOption
-        _state.update { it.copy(currentSortOption = sortOption) }
-        onFilterApps()
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                PrefManager.librarySortOption = sortOption
+                current.copy(currentSortOption = sortOption)
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onOptionsPanelToggle(isOpen: Boolean) {
@@ -767,35 +830,42 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun onTabChanged(tab: LibraryTab) {
-        supersedeRenderForPendingInput()
-        _state.update { it.copy(currentTab = tab) }
-        onFilterApps(0) // Reset to first page and refresh
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current -> current.copy(currentTab = tab) },
+        )
+        onFilterApps(request)
     }
 
     fun onNextTab() {
-        supersedeRenderForPendingInput()
-        _state.update { currentState ->
-            val nextTab = currentState.currentTab.next()
-            Timber.tag("LibraryViewModel").d("Tab next via bumper: ${currentState.currentTab} -> $nextTab")
-            currentState.copy(currentTab = nextTab)
-        }
-        onFilterApps(0)
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                val nextTab = current.currentTab.next()
+                Timber.tag("LibraryViewModel").d("Tab next via bumper: ${current.currentTab} -> $nextTab")
+                current.copy(currentTab = nextTab)
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onPreviousTab() {
-        supersedeRenderForPendingInput()
-        _state.update { currentState ->
-            val previousTab = currentState.currentTab.previous()
-            Timber.tag("LibraryViewModel").d("Tab previous via bumper: ${currentState.currentTab} -> $previousTab")
-            currentState.copy(currentTab = previousTab)
-        }
-        onFilterApps(0)
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                val previousTab = current.currentTab.previous()
+                Timber.tag("LibraryViewModel").d("Tab previous via bumper: ${current.currentTab} -> $previousTab")
+                current.copy(currentTab = previousTab)
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onSearchQuery(value: String) {
-        supersedeRenderForPendingInput()
-        // Update UI immediately for responsive typing
-        _state.update { it.copy(searchQuery = value) }
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current -> current.copy(searchQuery = value) },
+        )
 
         // Cancel previous debounce job
         searchDebounceJob?.cancel()
@@ -804,63 +874,64 @@ class LibraryViewModel @Inject constructor(
         searchDebounceJob = viewModelScope.launch {
             delay(SEARCH_DEBOUNCE_MS)
             // Only trigger filter after user stops typing
-            onFilterApps()
+            onFilterApps(request)
         }
     }
 
     // TODO: include other sort types
     fun onFilterChanged(value: AppFilter) {
-        supersedeRenderForPendingInput()
-        _state.update { currentState ->
-            val updatedFilter = EnumSet.copyOf(currentState.appInfoSortType)
-
-            if (updatedFilter.contains(value)) {
-                updatedFilter.remove(value)
-            } else {
-                updatedFilter.add(value)
-            }
-
-            PrefManager.libraryFilter = updatedFilter
-
-            currentState.copy(appInfoSortType = updatedFilter)
-        }
-
-        onFilterApps()
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                val updatedFilter = EnumSet.copyOf(current.appInfoSortType)
+                if (!updatedFilter.remove(value)) updatedFilter.add(value)
+                PrefManager.libraryFilter = updatedFilter
+                current.copy(appInfoSortType = updatedFilter)
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onSteamCollectionToggle(id: String) {
-        supersedeRenderForPendingInput()
-        _state.update { currentState ->
-            val updated = currentState.selectedSteamCollectionIds.toMutableSet()
-            if (!updated.add(id)) updated.remove(id)
-            PrefManager.librarySteamCollections = updated
-            currentState.copy(selectedSteamCollectionIds = updated)
-        }
-        onFilterApps()
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                val updated = current.selectedSteamCollectionIds.toMutableSet()
+                if (!updated.add(id)) updated.remove(id)
+                PrefManager.librarySteamCollections = updated
+                current.copy(selectedSteamCollectionIds = updated)
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onClearSteamCollections() {
-        supersedeRenderForPendingInput()
-        _state.update { currentState ->
-            PrefManager.librarySteamCollections = emptySet()
-            currentState.copy(selectedSteamCollectionIds = emptySet())
-        }
-        onFilterApps()
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                PrefManager.librarySteamCollections = emptySet()
+                current.copy(selectedSteamCollectionIds = emptySet())
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onPageChange(pageIncrement: Int) {
-        val toPage = synchronized(renderLock) {
-            val requestedPage = activeRenderToken?.paginationPage ?: paginationCurrentPage
-            min(max(0, requestedPage + pageIncrement), lastPageInCurrentFilter)
-        }
-        onFilterApps(toPage)
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = {
+                val requestedPage = activeRenderToken?.paginationPage ?: paginationCurrentPage
+                min(max(0, requestedPage + pageIncrement), lastPageInCurrentFilter)
+            },
+        )
+        onFilterApps(request)
     }
 
     fun onRefresh() {
-        supersedeRenderForPendingInput()
+        val initialRequest = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current -> current.copy(isRefreshing = true) },
+        )
         viewModelScope.launch {
-            _state.update { it.copy(isRefreshing = true) }
-
             // Clear compatibility cache on manual refresh to get fresh data
             GameCompatibilityCache.clear()
             DeviceGameStatsCache.clear()
@@ -881,30 +952,38 @@ class LibraryViewModel @Inject constructor(
                     Timber.tag("LibraryViewModel").i("Triggering Amazon library refresh")
                     AmazonService.triggerLibrarySync(context)
                 }
-            } catch (e: Exception) {
-                Timber.tag("LibraryViewModel").e(e, "Failed to refresh owned games from server")
-            } finally {
-                onFilterApps(0).join()
-                if (gpuName != "Unknown GPU") {
-                    DeviceGameStatsCache.refreshIfStale(
-                        deviceModel = HardwareUtils.getMachineName(),
-                        gpuName = gpuName,
-                        modernBuild = BuildConfig.MODERN_ANDROID,
-                    )
-                    GpuGameStatsCache.refreshIfStale(
-                        gpuName = gpuName,
-                        modernBuild = BuildConfig.MODERN_ANDROID,
-                    )
-                }
-                supersedeRenderForPendingInput()
-                _state.update {
-                    it.copy(
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Timber.tag("LibraryViewModel").e(error, "Failed to refresh owned games from server")
+            }
+
+            onFilterApps(initialRequest).join()
+            if (gpuName != "Unknown GPU") {
+                DeviceGameStatsCache.refreshIfStale(
+                    deviceModel = HardwareUtils.getMachineName(),
+                    gpuName = gpuName,
+                    modernBuild = BuildConfig.MODERN_ANDROID,
+                )
+                GpuGameStatsCache.refreshIfStale(
+                    gpuName = gpuName,
+                    modernBuild = BuildConfig.MODERN_ANDROID,
+                )
+            }
+            val completionRequest = supersedeRenderIfInputCurrent(
+                expectedInputRevision = initialRequest.inputRevision,
+                transformState = { current ->
+                    current.copy(
                         isRefreshing = false,
                         deviceGameStats = DeviceGameStatsCache.getAll(),
                         gpuGameStats = GpuGameStatsCache.getAll(),
                     )
-                }
-                onFilterApps(paginationCurrentPage)
+                },
+            )
+            if (completionRequest == null) {
+                _state.update { current -> current.copy(isRefreshing = false) }
+            } else {
+                onFilterApps(completionRequest)
             }
         }
     }
@@ -924,9 +1003,9 @@ class LibraryViewModel @Inject constructor(
                 PrefManager.customGameManualFolders = manualFolders
             }
 
-            supersedeRenderForPendingInput()
+            val request = supersedeRenderForPendingInput()
             CustomGameScanner.invalidateCache()
-            onFilterApps(paginationCurrentPage)
+            onFilterApps(request)
         }
     }
 
@@ -958,54 +1037,56 @@ class LibraryViewModel @Inject constructor(
         return true
     }
 
-    private fun onFilterApps(paginationPage: Int = 0): Job {
-        val currentState = _state.value
+    private fun onFilterApps(paginationPage: Int = 0): Job =
+        onFilterApps(captureFilterRequest(paginationPage))
+
+    private fun onFilterApps(request: FilterRenderRequest): Job {
         if (!canonicalPublicLibraryGate.isEnabled()) {
-            stopCanonicalCollection(clearCards = true)
-            return requestLegacyRender(null, paginationPage, currentState)
+            stopCanonicalCollection(request.inputRevision)
+            return requestLegacyRender(null, request)
         }
         if (!canonicalProjectionReadiness.isReady.value) {
-            stopCanonicalCollection(clearCards = true)
-            return requestLegacyRender(
-                CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE,
-                paginationPage,
-                currentState,
-            )
+            stopCanonicalCollection(request.inputRevision)
+            return requestLegacyRender(CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE, request)
         }
-        canonicalUnsupportedFailure(currentState)?.let { failure ->
-            stopCanonicalCollection(clearCards = false)
-            return requestLegacyRender(failure, paginationPage, currentState)
+        canonicalUnsupportedFailure(request.state)?.let { failure ->
+            stopCanonicalCollection(request.inputRevision)
+            return requestLegacyRender(failure, request)
         }
 
-        val collectorEpoch = ensureCanonicalCollection()
-        val snapshot: List<CanonicalLibraryCard>?
-        val failure: CanonicalPublicFailure?
-        synchronized(renderLock) {
-            snapshot = latestCanonicalCards
-            failure = canonicalCollectionFailure
-        }
-        return when {
-            failure != null -> requestLegacyRender(failure, paginationPage, currentState)
-            snapshot != null -> requestCanonicalRender(
-                snapshot = snapshot,
-                collectorEpoch = collectorEpoch,
-                paginationPage = paginationPage,
-                state = currentState,
-                observeOutcome = true,
-            )
-            else -> requestWaitingCanonical(paginationPage, currentState)
-        }
+        ensureCanonicalCollection(request.inputRevision)
+        return requestCanonicalActivation(request)
     }
 
-    private fun ensureCanonicalCollection(): Long {
+    private fun captureFilterRequest(paginationPage: Int): FilterRenderRequest = synchronized(renderLock) {
+        FilterRenderRequest(
+            inputRevision = filterInputRevision.get(),
+            state = _state.value,
+            paginationPage = paginationPage,
+        )
+    }
+
+    private fun ensureCanonicalCollection(expectedInputRevision: Long? = null): Long {
         var jobToStart: Job? = null
         val epoch = synchronized(renderLock) {
+            if (expectedInputRevision != null && filterInputRevision.get() != expectedInputRevision) {
+                return@synchronized canonicalCollectorEpoch
+            }
             val current = canonicalCollectionJob
             if (current != null && !current.isCompleted) {
                 canonicalCollectorEpoch
+            } else if (
+                canonicalRetryJob?.isCompleted == false ||
+                canonicalRetryDeadlineElapsedMs > SystemClock.elapsedRealtime()
+            ) {
+                canonicalSnapshotEpoch.takeIf { it != 0L } ?: canonicalCollectorEpoch
             } else {
                 canonicalCollectorEpoch += 1L
                 val newEpoch = canonicalCollectorEpoch
+                canonicalSnapshotEpoch = newEpoch
+                latestCanonicalCards = null
+                canonicalCollectionHealthy = false
+                canonicalCollectionFailure = null
                 val job = viewModelScope.launch(
                     context = canonicalDispatcher,
                     start = CoroutineStart.LAZY,
@@ -1013,6 +1094,9 @@ class LibraryViewModel @Inject constructor(
                     collectCanonicalCards(newEpoch)
                 }
                 canonicalCollectionJob = job
+                job.invokeOnCompletion { cause ->
+                    handleCanonicalCollectorCompletion(newEpoch, job, cause)
+                }
                 jobToStart = job
                 newEpoch
             }
@@ -1022,8 +1106,8 @@ class LibraryViewModel @Inject constructor(
     }
 
     private suspend fun collectCanonicalCards(collectorEpoch: Long) {
-        var retryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
         while (isCollectorActive(collectorEpoch)) {
+            var failed = false
             try {
                 canonicalLibraryRepository.observeCards().collect { emitted ->
                     if (!isCollectorActive(collectorEpoch)) throw CanonicalCollectionStopped()
@@ -1031,16 +1115,16 @@ class LibraryViewModel @Inject constructor(
                     CanonicalLibraryCardValidator.failureOrNull(frozen)?.let { failure ->
                         throw InvalidCanonicalCardList(failure)
                     }
-                    val handle = launchCanonicalRender(
-                        snapshot = frozen,
-                        collectorEpoch = collectorEpoch,
-                        paginationPage = paginationCurrentPage,
-                        state = _state.value,
-                    )
+                    val handle = launchCanonicalRenderFromEmission(frozen, collectorEpoch)
                     when (val outcome = handle.outcome.await()) {
-                        RenderPublicationOutcome.Published -> retryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
-                        RenderPublicationOutcome.Superseded -> Unit
-                        is RenderPublicationOutcome.Failed -> throw outcome.error
+                        is RenderPublicationOutcome.Published -> Unit
+                        is RenderPublicationOutcome.Superseded -> Unit
+                        is RenderPublicationOutcome.Failed -> {
+                            if (acceptCanonicalRenderFailure(outcome)) {
+                                failed = true
+                            }
+                            throw outcome.error
+                        }
                     }
                 }
                 if (!isCollectorActive(collectorEpoch)) return
@@ -1050,43 +1134,88 @@ class LibraryViewModel @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: InvalidCanonicalCardList) {
-                handleCanonicalFailure(collectorEpoch, error.failure, error)
+                failed = handleCanonicalCollectionFailure(collectorEpoch, error.failure, error)
             } catch (error: Exception) {
-                handleCanonicalFailure(
-                    collectorEpoch = collectorEpoch,
-                    failure = CanonicalPublicFailure.ASSEMBLY_FAILED,
-                    error = error,
-                )
+                if (!failed) {
+                    failed = handleCanonicalCollectionFailure(
+                        collectorEpoch = collectorEpoch,
+                        failure = CanonicalPublicFailure.ASSEMBLY_FAILED,
+                        error = error,
+                    )
+                }
             }
+            if (!failed) continue
+            val retryDelayMs = beginCanonicalRetryCooldown(collectorEpoch) ?: return
             delay(retryDelayMs)
-            retryDelayMs = (retryDelayMs * 2).coerceAtMost(MAX_CANONICAL_RETRY_DELAY_MS)
         }
     }
 
-    private fun handleCanonicalFailure(
+    private fun handleCanonicalCollectionFailure(
         collectorEpoch: Long,
         failure: CanonicalPublicFailure,
         error: Exception,
-        restartCollector: Boolean = false,
-    ) {
-        val accepted = synchronized(renderLock) {
+    ): Boolean {
+        val request = synchronized(renderLock) {
             if (!isCollectorActiveLocked(collectorEpoch) || !canonicalModeEligible(_state.value)) {
-                false
+                null
             } else {
                 canonicalCollectionHealthy = false
+                canonicalSnapshotEpoch = collectorEpoch
                 canonicalCollectionFailure = failure
-                true
+                captureFilterRequestLocked(paginationCurrentPage)
             }
+        } ?: return false
+        recordRenderFailure(error)
+        requestLegacyRender(failure, request)
+        return true
+    }
+
+    private fun beginCanonicalRetryCooldown(collectorEpoch: Long): Long? = synchronized(renderLock) {
+        if (!isCollectorActiveLocked(collectorEpoch) || !canonicalModeEligible(_state.value)) {
+            null
+        } else {
+            val retryDelayMs = canonicalRetryDelayMs
+            canonicalRetryDelayMs = (canonicalRetryDelayMs * 2).coerceAtMost(MAX_CANONICAL_RETRY_DELAY_MS)
+            canonicalRetryDeadlineElapsedMs = SystemClock.elapsedRealtime() + retryDelayMs
+            retryDelayMs
         }
-        if (!accepted) return
-        FeatureDiagnostics.record(
-            area = DiagnosticArea.LIBRARY_FILTER,
-            name = DiagnosticEventName.LIBRARY_FILTER,
-            outcome = DiagnosticOutcome.FAILED,
-            attributes = mapOf(DiagnosticAttribute.ERROR_TYPE to error.javaClass.simpleName),
-        )
-        requestLegacyRender(failure, paginationCurrentPage, _state.value)
-        if (restartCollector) scheduleCanonicalCollectorRestart(collectorEpoch, failure)
+    }
+
+    private fun handleCanonicalCollectorCompletion(
+        collectorEpoch: Long,
+        completedJob: Job,
+        cause: Throwable?,
+    ) {
+        if (cause !is CancellationException || cause is CanonicalCollectionStopped) return
+        val retryLaunch: Job?
+        val request: FilterRenderRequest?
+        synchronized(renderLock) {
+            val parentActive = viewModelScope.coroutineContext[Job]?.isActive == true
+            if (
+                !parentActive ||
+                canonicalCollectorEpoch != collectorEpoch ||
+                canonicalCollectionJob !== completedJob ||
+                !canonicalModeEligible(_state.value)
+            ) {
+                return
+            }
+            canonicalCollectionJob = null
+            canonicalCollectionHealthy = false
+            canonicalSnapshotEpoch = collectorEpoch
+            canonicalCollectionFailure = CanonicalPublicFailure.ASSEMBLY_FAILED
+            retireActiveCollectorTokenLocked(collectorEpoch)
+            _state.update { current ->
+                current.copy(
+                    isLoading = false,
+                    canonicalPublicFailure = CanonicalPublicFailure.ASSEMBLY_FAILED,
+                )
+            }
+            request = captureFilterRequestLocked(paginationCurrentPage)
+            retryLaunch = scheduleCanonicalRetryLocked(collectorEpoch)
+        }
+        recordRenderFailure(cause)
+        request?.let { requestLegacyRender(CanonicalPublicFailure.ASSEMBLY_FAILED, it) }
+        retryLaunch?.start()
     }
 
     private fun scheduleCanonicalCollectorRestart(
@@ -1094,33 +1223,80 @@ class LibraryViewModel @Inject constructor(
         failure: CanonicalPublicFailure,
     ) {
         val collectorToCancel: Job?
+        val retryToStart: Job?
         synchronized(renderLock) {
-            if (canonicalCollectorEpoch != failedCollectorEpoch || canonicalCollectionFailure != failure) return
-            canonicalCollectorEpoch += 1L
+            if (
+                canonicalSnapshotEpoch != failedCollectorEpoch ||
+                canonicalCollectionFailure != failure ||
+                !canonicalModeEligible(_state.value)
+            ) {
+                return
+            }
             collectorToCancel = canonicalCollectionJob
             canonicalCollectionJob = null
+            retryToStart = scheduleCanonicalRetryLocked(failedCollectorEpoch)
         }
-        collectorToCancel?.cancel()
-        viewModelScope.launch(canonicalDispatcher) {
-            delay(MIN_CANONICAL_RETRY_DELAY_MS)
+        collectorToCancel?.cancel(CanonicalCollectionStopped())
+        retryToStart?.start()
+    }
+
+    private fun scheduleCanonicalRetryLocked(failedCollectorEpoch: Long): Job? {
+        if (canonicalRetryJob?.isCompleted == false) return null
+        val retryDelayMs = canonicalRetryDelayMs
+        canonicalRetryDelayMs = (canonicalRetryDelayMs * 2).coerceAtMost(MAX_CANONICAL_RETRY_DELAY_MS)
+        canonicalRetryDeadlineElapsedMs = SystemClock.elapsedRealtime() + retryDelayMs
+        lateinit var retry: Job
+        retry = viewModelScope.launch(
+            context = canonicalDispatcher,
+            start = CoroutineStart.LAZY,
+        ) {
+            delay(retryDelayMs)
             val shouldRestart = synchronized(renderLock) {
-                canonicalCollectionFailure == failure && canonicalModeEligible(_state.value)
+                if (
+                    canonicalRetryJob !== retry ||
+                    canonicalSnapshotEpoch != failedCollectorEpoch ||
+                    !canonicalModeEligible(_state.value)
+                ) {
+                    false
+                } else {
+                    canonicalRetryJob = null
+                    canonicalRetryDeadlineElapsedMs = 0L
+                    true
+                }
             }
             if (shouldRestart) ensureCanonicalCollection()
         }
+        canonicalRetryJob = retry
+        return retry
     }
 
-    private fun stopCanonicalCollection(clearCards: Boolean) {
-        val job = synchronized(renderLock) {
+    private fun stopCanonicalCollection(expectedInputRevision: Long) {
+        val collectorToCancel: Job?
+        val retryToCancel: Job?
+        synchronized(renderLock) {
+            if (filterInputRevision.get() != expectedInputRevision) return
             canonicalCollectorEpoch += 1L
-            val current = canonicalCollectionJob
+            collectorToCancel = canonicalCollectionJob
             canonicalCollectionJob = null
+            retryToCancel = canonicalRetryJob
+            canonicalRetryJob = null
+            canonicalRetryDeadlineElapsedMs = 0L
+            canonicalRetryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
+            canonicalSnapshotEpoch = canonicalCollectorEpoch
+            latestCanonicalCards = null
             canonicalCollectionHealthy = false
             canonicalCollectionFailure = null
-            if (clearCards) latestCanonicalCards = null
-            current
+            val active = activeRenderToken
+            if (
+                active?.mode is LibraryRenderMode.Canonical ||
+                active?.mode is LibraryRenderMode.WaitingCanonical
+            ) {
+                activeRenderToken = null
+                renderJob = null
+            }
         }
-        job?.cancel()
+        collectorToCancel?.cancel(CanonicalCollectionStopped())
+        retryToCancel?.cancel()
     }
 
     private fun isCollectorActive(collectorEpoch: Long): Boolean = synchronized(renderLock) {
@@ -1135,259 +1311,480 @@ class LibraryViewModel @Inject constructor(
             canonicalProjectionReadiness.isReady.value &&
             canonicalUnsupportedFailure(state) == null
 
+    private fun requestCanonicalActivation(request: FilterRenderRequest): Job {
+        var canonicalHandle: CanonicalRenderHandle? = null
+        var waitingJob: Job? = null
+        var previousRender: Job? = null
+        var fallback: CanonicalPublicFailure? = null
+        synchronized(renderLock) {
+            if (!isFilterRequestCurrentLocked(request) || !canonicalModeEligible(request.state)) {
+                return completedRenderJob()
+            }
+            val collectorEpoch = canonicalCollectorEpoch
+            val collectorActive = isCollectorActiveLocked(collectorEpoch)
+            val snapshotCurrent = canonicalSnapshotEpoch == collectorEpoch
+            val snapshot = latestCanonicalCards.takeIf { snapshotCurrent }
+            val failure = canonicalCollectionFailure.takeIf { snapshotCurrent }
+            when {
+                failure != null -> fallback = failure
+                snapshot != null && collectorActive -> {
+                    canonicalHandle = launchCanonicalRenderLocked(snapshot, collectorEpoch, request)
+                    previousRender = canonicalHandle?.previousJob
+                }
+                collectorActive && snapshot == null -> {
+                    val token = newRenderTokenLocked(
+                        mode = LibraryRenderMode.WaitingCanonical(collectorEpoch),
+                        request = request,
+                    )
+                    previousRender = renderJob
+                    renderJob = null
+                    activeRenderToken = token
+                    retirePendingLegacyLocked()
+                    _state.update { current -> current.copy(isLoading = true, canonicalPublicFailure = null) }
+                    waitingJob = completedRenderJob()
+                }
+                else -> {
+                    _state.update { current -> current.copy(isLoading = false) }
+                    waitingJob = completedRenderJob()
+                }
+            }
+        }
+        previousRender?.cancel()
+        canonicalHandle?.let { handle ->
+            handle.job.start()
+            observeDirectCanonicalOutcome(handle)
+            return handle.job
+        }
+        fallback?.let { return requestLegacyRender(it, request) }
+        return waitingJob ?: completedRenderJob()
+    }
+
+    // Kept as a narrow activation boundary so a delayed waiting request rechecks the snapshot atomically.
     private fun requestWaitingCanonical(
         paginationPage: Int,
         state: LibraryState,
-    ): Job = launchRender(
-        mode = LibraryRenderMode.WaitingCanonical,
-        paginationPage = paginationPage,
-        state = state,
-    ) { token ->
-        guardedStateUpdate(token) { current ->
-            current.copy(isLoading = true, canonicalPublicFailure = null)
+    ): Job {
+        val request = synchronized(renderLock) {
+            FilterRenderRequest(filterInputRevision.get(), state, paginationPage)
         }
+        ensureCanonicalCollection(request.inputRevision)
+        return requestCanonicalActivation(request)
     }
 
     private fun requestLegacyRender(
         failure: CanonicalPublicFailure?,
         paginationPage: Int,
         state: LibraryState,
-    ): Job = launchRender(
-        mode = LibraryRenderMode.Legacy(failure),
-        paginationPage = paginationPage,
-        state = state,
-    ) { token ->
-        if (!guardedStateUpdate(token) { current ->
-                current.copy(isLoading = true, canonicalPublicFailure = failure)
-            }
-        ) return@launchRender
+    ): Job = requestLegacyRender(
+        failure,
+        synchronized(renderLock) {
+            FilterRenderRequest(filterInputRevision.get(), state, paginationPage)
+        },
+    )
 
-        val worker = viewModelScope.async(canonicalDispatcher) { runLegacyRender(token) }
-        try {
-            when (withTimeout(LEGACY_RENDER_TIMEOUT_MS) { worker.await() }) {
-                RenderPublicationOutcome.Published -> synchronized(renderLock) {
-                    if (isTokenActiveLocked(token)) legacyRetryDelayMs = MIN_LEGACY_RETRY_DELAY_MS
-                }
-                RenderPublicationOutcome.Superseded -> Unit
-                is RenderPublicationOutcome.Failed -> error("legacy worker returned an impossible failure outcome")
+    private fun requestLegacyRender(
+        failure: CanonicalPublicFailure?,
+        filter: FilterRenderRequest,
+    ): Job {
+        val request = LegacyRenderRequest(failure, filter)
+        var launch: LegacyWorkerLaunch? = null
+        var previousRender: Job? = null
+        synchronized(renderLock) {
+            if (!isFilterRequestCurrentLocked(filter) || !legacyModeEligible(failure, filter.state)) {
+                request.completion.complete(Unit)
+                return request.completion
             }
-        } catch (error: TimeoutCancellationException) {
-            worker.cancel()
-            handleLegacyFailure(token, error)
+            previousRender = renderJob
+            renderJob = null
+            if (
+                legacyPhysicalJob?.isCompleted == false ||
+                legacyRetryJob?.isCompleted == false ||
+                legacyRetryDeadlineElapsedMs > SystemClock.elapsedRealtime()
+            ) {
+                replacePendingLegacyLocked(request)
+                installPendingTokenLocked(filter)
+                _state.update { current ->
+                    current.copy(
+                        isLoading = legacyPhysicalJob?.isCompleted == false,
+                        canonicalPublicFailure = failure,
+                    )
+                }
+            } else {
+                launch = startLegacyWorkerLocked(request)
+            }
+        }
+        previousRender?.cancel()
+        launch?.job?.start()
+        return request.completion
+    }
+
+    private fun startLegacyWorkerLocked(request: LegacyRenderRequest): LegacyWorkerLaunch? {
+        if (!isFilterRequestCurrentLocked(request.filter) || !legacyModeEligible(request.failure, request.filter.state)) {
+            request.completion.complete(Unit)
+            return null
+        }
+        val token = newRenderTokenLocked(LibraryRenderMode.Legacy(request.failure), request.filter)
+        activeRenderToken = token
+        latestPublishedToken = null
+        _state.update { current ->
+            current.copy(isLoading = true, canonicalPublicFailure = request.failure)
+        }
+        lateinit var job: Job
+        job = viewModelScope.launch(
+            context = canonicalDispatcher,
+            start = CoroutineStart.LAZY,
+        ) {
+            executeLegacyWorker(job, token, request)
+        }
+        legacyPhysicalJob = job
+        legacyPhysicalToken = token
+        legacyPhysicalRequest = request
+        job.invokeOnCompletion { cause ->
+            if (cause is CancellationException) {
+                finishLegacyWorker(job, token, request, null, cause)
+            }
+        }
+        return LegacyWorkerLaunch(job)
+    }
+
+    private suspend fun executeLegacyWorker(
+        owningJob: Job,
+        token: LibraryRenderToken,
+        request: LegacyRenderRequest,
+    ) {
+        try {
+            val outcome = runLegacyRender(token)
+            currentCoroutineContext().ensureActive()
+            finishLegacyWorker(owningJob, token, request, outcome, null)
         } catch (error: CancellationException) {
-            worker.cancel()
+            finishLegacyWorker(owningJob, token, request, null, error)
             throw error
         } catch (error: Exception) {
-            worker.cancel()
-            handleLegacyFailure(token, error)
+            finishLegacyWorker(
+                owningJob,
+                token,
+                request,
+                RenderPublicationOutcome.Failed(token, error),
+                error,
+            )
+        } catch (error: Throwable) {
+            finishLegacyWorker(owningJob, token, request, null, error)
+            throw error
         }
     }
 
-    private fun handleLegacyFailure(token: LibraryRenderToken, error: Exception) {
-        val safeToken: LibraryRenderToken
-        val retryDelayMs: Long
+    private fun finishLegacyWorker(
+        owningJob: Job,
+        token: LibraryRenderToken,
+        request: LegacyRenderRequest,
+        outcome: RenderPublicationOutcome?,
+        error: Throwable?,
+    ) {
+        var nextLaunch: LegacyWorkerLaunch? = null
+        var retryToStart: Job? = null
+        var recordError: Exception? = null
         synchronized(renderLock) {
-            if (!isTokenActiveLocked(token) || !renderModeEligible(token.mode, _state.value)) return
-            safeToken = token.copy(generation = renderGeneration.incrementAndGet())
-            activeRenderToken = safeToken
-            retryDelayMs = legacyRetryDelayMs
-            legacyRetryDelayMs = (legacyRetryDelayMs * 2).coerceAtMost(MAX_LEGACY_RETRY_DELAY_MS)
-            _state.update { current ->
-                current.copy(
-                    isLoading = false,
-                    canonicalPublicFailure = (safeToken.mode as LibraryRenderMode.Legacy).failure,
+            if (
+                legacyPhysicalJob !== owningJob ||
+                legacyPhysicalToken != token ||
+                legacyPhysicalRequest !== request
+            ) {
+                return
+            }
+            legacyPhysicalJob = null
+            legacyPhysicalToken = null
+            legacyPhysicalRequest = null
+            request.completion.complete(Unit)
+
+            val independentlyFailed = error is Exception &&
+                error !is CanonicalCollectionStopped &&
+                activeRenderToken == token &&
+                token.inputRevision == filterInputRevision.get() &&
+                renderModeEligible(token.mode, _state.value) &&
+                viewModelScope.coroutineContext[Job]?.isActive == true
+            if (independentlyFailed) {
+                activeRenderToken = null
+                _state.update { current ->
+                    current.copy(
+                        isLoading = false,
+                        canonicalPublicFailure = (token.mode as LibraryRenderMode.Legacy).failure,
+                    )
+                }
+                recordError = error as Exception
+                replacePendingLegacyLocked(
+                    LegacyRenderRequest(
+                        failure = (token.mode as LibraryRenderMode.Legacy).failure,
+                        filter = captureFilterRequestLocked(token.paginationPage),
+                    ),
                 )
+                retryToStart = scheduleLegacyRetryLocked()
+            } else if (outcome is RenderPublicationOutcome.Published) {
+                legacyRetryDelayMs = MIN_LEGACY_RETRY_DELAY_MS
+                legacyRetryDeadlineElapsedMs = 0L
+            }
+
+            if (retryToStart == null && legacyRetryJob?.isCompleted != false) {
+                val pending = pendingLegacyRequest
+                pendingLegacyRequest = null
+                if (pending != null) nextLaunch = startLegacyWorkerLocked(pending)
             }
         }
-        FeatureDiagnostics.record(
-            area = DiagnosticArea.LIBRARY_FILTER,
-            name = DiagnosticEventName.LIBRARY_FILTER,
-            outcome = DiagnosticOutcome.FAILED,
-            attributes = mapOf(DiagnosticAttribute.ERROR_TYPE to error.javaClass.simpleName),
-        )
-        val retry = viewModelScope.launch(
+        recordError?.let(::recordRenderFailure)
+        retryToStart?.start()
+        nextLaunch?.job?.start()
+    }
+
+    private fun scheduleLegacyRetryLocked(): Job? {
+        if (legacyRetryJob?.isCompleted == false) return null
+        val retryDelayMs = legacyRetryDelayMs
+        legacyRetryDelayMs = (legacyRetryDelayMs * 2).coerceAtMost(MAX_LEGACY_RETRY_DELAY_MS)
+        legacyRetryDeadlineElapsedMs = SystemClock.elapsedRealtime() + retryDelayMs
+        lateinit var retry: Job
+        retry = viewModelScope.launch(
             context = canonicalDispatcher,
             start = CoroutineStart.LAZY,
         ) {
             delay(retryDelayMs)
-            if (isTokenActive(safeToken)) onFilterApps(safeToken.paginationPage)
-        }
-        val shouldStart = synchronized(renderLock) {
-            if (isTokenActiveLocked(safeToken)) {
-                legacyRetryJob?.cancel()
-                legacyRetryJob = retry
-                true
-            } else {
-                false
+            var launch: LegacyWorkerLaunch? = null
+            synchronized(renderLock) {
+                if (legacyRetryJob !== retry) return@synchronized
+                legacyRetryJob = null
+                legacyRetryDeadlineElapsedMs = 0L
+                val pending = pendingLegacyRequest
+                pendingLegacyRequest = null
+                if (pending != null) launch = startLegacyWorkerLocked(pending)
             }
+            launch?.job?.start()
         }
-        if (shouldStart) retry.start() else retry.cancel()
+        legacyRetryJob = retry
+        return retry
     }
 
-    private fun requestCanonicalRender(
-        snapshot: List<CanonicalLibraryCard>,
-        collectorEpoch: Long,
-        paginationPage: Int,
-        state: LibraryState,
-        observeOutcome: Boolean,
-    ): Job {
-        val handle = launchCanonicalRender(snapshot, collectorEpoch, paginationPage, state)
-        if (observeOutcome) {
-            viewModelScope.launch(canonicalDispatcher) {
-                when (val outcome = handle.outcome.await()) {
-                    is RenderPublicationOutcome.Failed -> handleCanonicalFailure(
-                        collectorEpoch = collectorEpoch,
-                        failure = CanonicalPublicFailure.ASSEMBLY_FAILED,
-                        error = outcome.error,
-                        restartCollector = true,
-                    )
-                    RenderPublicationOutcome.Published,
-                    RenderPublicationOutcome.Superseded,
-                    -> Unit
-                }
-            }
-        }
-        return handle.job
+    private fun replacePendingLegacyLocked(request: LegacyRenderRequest) {
+        pendingLegacyRequest?.completion?.complete(Unit)
+        pendingLegacyRequest = request
     }
 
-    private fun launchCanonicalRender(
+    private fun retirePendingLegacyLocked() {
+        pendingLegacyRequest?.completion?.complete(Unit)
+        pendingLegacyRequest = null
+    }
+
+    private fun installPendingTokenLocked(filter: FilterRenderRequest) {
+        activeRenderToken = newRenderTokenLocked(LibraryRenderMode.PendingInput, filter)
+        latestPublishedToken = null
+    }
+
+    private fun launchCanonicalRenderFromEmission(
         snapshot: List<CanonicalLibraryCard>,
         collectorEpoch: Long,
-        paginationPage: Int,
-        state: LibraryState,
-    ): CanonicalRenderHandle = synchronized(renderLock) {
+    ): CanonicalRenderHandle {
+        val handle: CanonicalRenderHandle
+        synchronized(renderLock) {
+            val request = captureFilterRequestLocked(paginationCurrentPage)
+            handle = launchCanonicalRenderLocked(snapshot, collectorEpoch, request)
+                ?: supersededCanonicalHandleLocked(collectorEpoch, request)
+        }
+        handle.previousJob?.cancel()
+        handle.job.start()
+        return handle
+    }
+
+    private fun launchCanonicalRenderLocked(
+        snapshot: List<CanonicalLibraryCard>,
+        collectorEpoch: Long,
+        request: FilterRenderRequest,
+    ): CanonicalRenderHandle? {
         if (
+            !isFilterRequestCurrentLocked(request) ||
             !isCollectorActiveLocked(collectorEpoch) ||
-            !canonicalModeEligible(state) ||
-            !canonicalModeEligible(_state.value)
+            !canonicalModeEligible(request.state)
         ) {
-            return@synchronized CanonicalRenderHandle(
-                job = CompletableDeferred(Unit),
-                outcome = CompletableDeferred<RenderPublicationOutcome>(RenderPublicationOutcome.Superseded),
-            )
+            return null
         }
-
+        val token = newRenderTokenLocked(LibraryRenderMode.Canonical(collectorEpoch), request)
         val outcome = CompletableDeferred<RenderPublicationOutcome>()
-        val job = launchRender(
-            mode = LibraryRenderMode.Canonical(collectorEpoch),
-            paginationPage = paginationPage,
-            state = state,
-            onActivatedLocked = { token ->
-                if (renderModeEligible(token.mode, _state.value)) {
-                    latestCanonicalCards = snapshot
-                    canonicalCollectionFailure = null
-                }
-            },
-        ) { token ->
+        val previousJob = renderJob
+        activeRenderToken = token
+        latestPublishedToken = null
+        canonicalSnapshotEpoch = collectorEpoch
+        latestCanonicalCards = snapshot
+        canonicalCollectionFailure = null
+        retirePendingLegacyLocked()
+        val job = viewModelScope.launch(
+            context = canonicalDispatcher,
+            start = CoroutineStart.LAZY,
+        ) {
             try {
                 outcome.complete(publishCanonicalCards(token, snapshot))
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                outcome.complete(
-                    if (isTokenActive(token)) RenderPublicationOutcome.Failed(error)
-                    else RenderPublicationOutcome.Superseded,
-                )
+                outcome.complete(RenderPublicationOutcome.Failed(token, error))
             }
         }
+        renderJob = job
         job.invokeOnCompletion { error ->
             if (!outcome.isCompleted) {
                 if (error == null || error is CancellationException) {
-                    outcome.complete(RenderPublicationOutcome.Superseded)
+                    outcome.complete(RenderPublicationOutcome.Superseded(token))
                 } else if (error is Exception) {
-                    outcome.complete(RenderPublicationOutcome.Failed(error))
+                    outcome.complete(RenderPublicationOutcome.Failed(token, error))
                 } else {
                     outcome.completeExceptionally(error)
                 }
             }
         }
-        CanonicalRenderHandle(job, outcome)
+        return CanonicalRenderHandle(job, outcome, previousJob)
+    }
+
+    private fun supersededCanonicalHandleLocked(
+        collectorEpoch: Long,
+        request: FilterRenderRequest,
+    ): CanonicalRenderHandle {
+        val token = LibraryRenderToken(
+            generation = renderGeneration.get(),
+            inputRevision = request.inputRevision,
+            mode = LibraryRenderMode.Canonical(collectorEpoch),
+            state = request.state,
+            paginationPage = request.paginationPage,
+        )
+        return CanonicalRenderHandle(
+            job = CompletableDeferred(Unit),
+            outcome = CompletableDeferred<RenderPublicationOutcome>(RenderPublicationOutcome.Superseded(token)),
+            previousJob = null,
+        )
+    }
+
+    private fun observeDirectCanonicalOutcome(handle: CanonicalRenderHandle) {
+        viewModelScope.launch(canonicalDispatcher) {
+            when (val outcome = handle.outcome.await()) {
+                is RenderPublicationOutcome.Failed -> if (acceptCanonicalRenderFailure(outcome)) {
+                    val collectorEpoch = (outcome.token.mode as LibraryRenderMode.Canonical).collectorEpoch
+                    scheduleCanonicalCollectorRestart(collectorEpoch, CanonicalPublicFailure.ASSEMBLY_FAILED)
+                }
+                is RenderPublicationOutcome.Published,
+                is RenderPublicationOutcome.Superseded,
+                -> Unit
+            }
+        }
+    }
+
+    private fun acceptCanonicalRenderFailure(outcome: RenderPublicationOutcome.Failed): Boolean {
+        val request: FilterRenderRequest
+        val collectorEpoch: Long
+        synchronized(renderLock) {
+            val mode = outcome.token.mode as? LibraryRenderMode.Canonical ?: return false
+            if (!claimActiveTokenLocked(outcome.token)) return false
+            collectorEpoch = mode.collectorEpoch
+            canonicalSnapshotEpoch = collectorEpoch
+            canonicalCollectionHealthy = false
+            canonicalCollectionFailure = CanonicalPublicFailure.ASSEMBLY_FAILED
+            request = FilterRenderRequest(
+                outcome.token.inputRevision,
+                outcome.token.state,
+                outcome.token.paginationPage,
+            )
+        }
+        recordRenderFailure(outcome.error)
+        requestLegacyRender(CanonicalPublicFailure.ASSEMBLY_FAILED, request)
+        return true
     }
 
     private data class CanonicalRenderHandle(
         val job: Job,
         val outcome: CompletableDeferred<RenderPublicationOutcome>,
+        val previousJob: Job?,
     )
 
-    private fun launchRender(
+    private data class LegacyWorkerLaunch(val job: Job)
+
+    private fun newRenderTokenLocked(
         mode: LibraryRenderMode,
-        paginationPage: Int,
-        state: LibraryState,
-        onActivatedLocked: (LibraryRenderToken) -> Unit = {},
-        block: suspend (LibraryRenderToken) -> Unit,
-    ): Job {
-        val token: LibraryRenderToken
-        val previousJob: Job?
-        val previousRetry: Job?
-        val job: Job
-        synchronized(renderLock) {
-            token = LibraryRenderToken(
-                generation = renderGeneration.incrementAndGet(),
-                mode = mode,
-                state = state,
-                paginationPage = paginationPage,
-            )
-            previousJob = renderJob
-            previousRetry = legacyRetryJob
-            legacyRetryJob = null
-            activeRenderToken = token
-            onActivatedLocked(token)
-            job = viewModelScope.launch(
-                context = canonicalDispatcher,
-                start = CoroutineStart.LAZY,
-            ) { block(token) }
-            renderJob = job
+        request: FilterRenderRequest,
+    ): LibraryRenderToken = LibraryRenderToken(
+        generation = renderGeneration.incrementAndGet(),
+        inputRevision = request.inputRevision,
+        mode = mode,
+        state = request.state,
+        paginationPage = request.paginationPage,
+    )
+
+    private fun captureFilterRequestLocked(paginationPage: Int): FilterRenderRequest = FilterRenderRequest(
+        inputRevision = filterInputRevision.get(),
+        state = _state.value,
+        paginationPage = paginationPage,
+    )
+
+    private fun isFilterRequestCurrentLocked(request: FilterRenderRequest): Boolean =
+        request.inputRevision == filterInputRevision.get()
+
+    private fun claimActiveTokenLocked(token: LibraryRenderToken): Boolean {
+        if (
+            activeRenderToken != token ||
+            token.inputRevision != filterInputRevision.get() ||
+            !isLegacyOwnerActiveLocked(token) ||
+            !renderModeEligible(token.mode, _state.value)
+        ) {
+            return false
         }
-        previousJob?.cancel()
-        previousRetry?.cancel()
-        job.start()
-        return job
+        activeRenderToken = null
+        renderJob = null
+        latestPublishedToken = token
+        return true
     }
 
-    private fun supersedeRenderForPendingInput() {
-        val previousJob: Job?
-        val previousRetry: Job?
-        synchronized(renderLock) {
-            val token = LibraryRenderToken(
-                generation = renderGeneration.incrementAndGet(),
-                mode = LibraryRenderMode.PendingInput,
-                state = _state.value,
-                paginationPage = paginationCurrentPage,
-            )
-            previousJob = renderJob
-            previousRetry = legacyRetryJob
+    private fun retireActiveCollectorTokenLocked(collectorEpoch: Long) {
+        val mode = activeRenderToken?.mode
+        if (
+            (mode is LibraryRenderMode.Canonical && mode.collectorEpoch == collectorEpoch) ||
+            (mode is LibraryRenderMode.WaitingCanonical && mode.collectorEpoch == collectorEpoch)
+        ) {
+            activeRenderToken = null
             renderJob = null
-            legacyRetryJob = null
-            activeRenderToken = token
-            _state.update { current -> current.copy(isLoading = false) }
         }
-        previousJob?.cancel()
-        previousRetry?.cancel()
     }
+
+    private fun isLegacyOwnerActiveLocked(token: LibraryRenderToken): Boolean =
+        token.mode !is LibraryRenderMode.Legacy ||
+            (legacyPhysicalToken == token && legacyPhysicalJob?.isActive == true)
 
     private fun isTokenActive(token: LibraryRenderToken): Boolean = synchronized(renderLock) {
-        isTokenActiveLocked(token) && renderModeEligible(token.mode, _state.value)
+        activeRenderToken == token &&
+            token.inputRevision == filterInputRevision.get() &&
+            isLegacyOwnerActiveLocked(token) &&
+            renderModeEligible(token.mode, _state.value)
     }
 
-    private fun isTokenActiveLocked(token: LibraryRenderToken): Boolean =
-        activeRenderToken?.generation == token.generation
+    private fun isTokenCurrentForSideEffect(token: LibraryRenderToken): Boolean = synchronized(renderLock) {
+        latestPublishedToken == token &&
+            token.inputRevision == filterInputRevision.get() &&
+            renderModeEligible(token.mode, _state.value)
+    }
+
+    private fun legacyModeEligible(failure: CanonicalPublicFailure?, state: LibraryState): Boolean = when (failure) {
+        null -> !canonicalPublicLibraryGate.isEnabled()
+        CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE ->
+            canonicalPublicLibraryGate.isEnabled() && !canonicalProjectionReadiness.isReady.value
+        CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT ->
+            canonicalPublicLibraryGate.isEnabled() &&
+                canonicalProjectionReadiness.isReady.value &&
+                canonicalUnsupportedFailure(state) != null
+        CanonicalPublicFailure.ASSEMBLY_FAILED,
+        CanonicalPublicFailure.INVALID_CARD_STATE,
+        -> canonicalModeEligible(state) && canonicalCollectionFailure == failure
+    }
 
     private fun renderModeEligible(mode: LibraryRenderMode, state: LibraryState): Boolean = when (mode) {
-        is LibraryRenderMode.Legacy -> when (mode.failure) {
-            null -> !canonicalPublicLibraryGate.isEnabled()
-            CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE ->
-                canonicalPublicLibraryGate.isEnabled() && !canonicalProjectionReadiness.isReady.value
-            CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT ->
-                canonicalPublicLibraryGate.isEnabled() &&
-                    canonicalProjectionReadiness.isReady.value &&
-                    canonicalUnsupportedFailure(state) != null
-            CanonicalPublicFailure.ASSEMBLY_FAILED,
-            CanonicalPublicFailure.INVALID_CARD_STATE,
-            -> canonicalModeEligible(state) && canonicalCollectionFailure == mode.failure
-        }
+        is LibraryRenderMode.Legacy -> legacyModeEligible(mode.failure, state)
         is LibraryRenderMode.Canonical ->
             canonicalModeEligible(state) && isCollectorActiveLocked(mode.collectorEpoch)
-        LibraryRenderMode.WaitingCanonical -> canonicalModeEligible(state)
+        is LibraryRenderMode.WaitingCanonical ->
+            canonicalModeEligible(state) &&
+                isCollectorActiveLocked(mode.collectorEpoch) &&
+                canonicalSnapshotEpoch == mode.collectorEpoch &&
+                latestCanonicalCards == null &&
+                canonicalCollectionFailure == null
         LibraryRenderMode.PendingInput -> true
     }
 
@@ -1395,7 +1792,12 @@ class LibraryViewModel @Inject constructor(
         token: LibraryRenderToken,
         effect: () -> Unit,
     ): Boolean = synchronized(renderLock) {
-        if (!isTokenActiveLocked(token) || !renderModeEligible(token.mode, _state.value)) {
+        if (
+            activeRenderToken != token ||
+            token.inputRevision != filterInputRevision.get() ||
+            !isLegacyOwnerActiveLocked(token) ||
+            !renderModeEligible(token.mode, _state.value)
+        ) {
             false
         } else {
             effect()
@@ -1403,16 +1805,103 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    private fun guardedStateUpdate(
+    private fun guardedPublishedStateUpdate(
         token: LibraryRenderToken,
         transform: (LibraryState) -> LibraryState,
     ): Boolean = synchronized(renderLock) {
-        if (!isTokenActiveLocked(token) || !renderModeEligible(token.mode, _state.value)) {
+        if (
+            latestPublishedToken != token ||
+            token.inputRevision != filterInputRevision.get() ||
+            !renderModeEligible(token.mode, _state.value)
+        ) {
             false
         } else {
             _state.update(transform)
             true
         }
+    }
+
+    private fun completedRenderJob(): Job = CompletableDeferred(Unit)
+
+    private fun supersedeRenderForPendingInput(
+        paginationPageLocked: () -> Int = { paginationCurrentPage },
+        updateInputLocked: () -> Unit = {},
+        transformState: (LibraryState) -> LibraryState = { it },
+    ): FilterRenderRequest = requireNotNull(
+        supersedeRenderForPendingInputInternal(
+            expectedInputRevision = null,
+            expectedPublishedToken = null,
+            paginationPageLocked = paginationPageLocked,
+            updateInputLocked = updateInputLocked,
+            transformState = transformState,
+        ),
+    )
+
+    private fun supersedeRenderIfInputCurrent(
+        expectedInputRevision: Long,
+        paginationPageLocked: () -> Int = { paginationCurrentPage },
+        updateInputLocked: () -> Unit = {},
+        transformState: (LibraryState) -> LibraryState = { it },
+    ): FilterRenderRequest? = supersedeRenderForPendingInputInternal(
+        expectedInputRevision = expectedInputRevision,
+        expectedPublishedToken = null,
+        paginationPageLocked = paginationPageLocked,
+        updateInputLocked = updateInputLocked,
+        transformState = transformState,
+    )
+
+    private fun supersedeRenderForPublishedToken(
+        token: LibraryRenderToken,
+    ): FilterRenderRequest? = supersedeRenderForPendingInputInternal(
+        expectedInputRevision = token.inputRevision,
+        expectedPublishedToken = token,
+        paginationPageLocked = { paginationCurrentPage },
+        updateInputLocked = {},
+        transformState = { it },
+    )
+
+    private fun supersedeRenderForPendingInputInternal(
+        expectedInputRevision: Long?,
+        expectedPublishedToken: LibraryRenderToken?,
+        paginationPageLocked: () -> Int,
+        updateInputLocked: () -> Unit,
+        transformState: (LibraryState) -> LibraryState,
+    ): FilterRenderRequest? {
+        val previousRender: Job?
+        val request: FilterRenderRequest
+        synchronized(renderLock) {
+            if (
+                (expectedInputRevision != null && filterInputRevision.get() != expectedInputRevision) ||
+                (expectedPublishedToken != null && latestPublishedToken != expectedPublishedToken)
+            ) {
+                return null
+            }
+            val paginationPage = paginationPageLocked()
+            val revision = filterInputRevision.incrementAndGet()
+            previousRender = renderJob
+            renderJob = null
+            latestPublishedToken = null
+            retirePendingLegacyLocked()
+            updateInputLocked()
+            _state.update { current -> transformState(current).copy(isLoading = false) }
+            request = FilterRenderRequest(
+                inputRevision = revision,
+                state = _state.value,
+                paginationPage = paginationPage,
+            )
+            activeRenderToken = newRenderTokenLocked(LibraryRenderMode.PendingInput, request)
+        }
+        previousRender?.cancel()
+        return request
+    }
+
+    private fun recordRenderFailure(error: Throwable) {
+        FeatureDiagnostics.record(
+            area = DiagnosticArea.LIBRARY_FILTER,
+            name = DiagnosticEventName.LIBRARY_FILTER,
+            outcome = DiagnosticOutcome.FAILED,
+            attributes = mapOf(DiagnosticAttribute.ERROR_TYPE to error.javaClass.simpleName),
+        )
     }
 
     private suspend fun publishCanonicalCards(
@@ -1429,9 +1918,7 @@ class LibraryViewModel @Inject constructor(
                 DiagnosticAttribute.FILTER_GROUPS to diagnosticFilterGroups(currentState),
             ),
         )
-        if (!guardedStateUpdate(token) { state -> state.copy(isLoading = true) }) {
-            return RenderPublicationOutcome.Superseded
-        }
+        if (!isTokenActive(token)) return RenderPublicationOutcome.Superseded(token)
         val page = CanonicalLibraryFilter.project(
             cards = snapshot,
             state = currentState,
@@ -1448,16 +1935,22 @@ class LibraryViewModel @Inject constructor(
                 )
             },
         )
+        var retryToCancel: Job? = null
         val committed = synchronized(renderLock) {
-            if (!isTokenActiveLocked(token) || !renderModeEligible(token.mode, _state.value)) {
+            if (!claimActiveTokenLocked(token)) {
                 false
             } else {
                 paginationCurrentPage = page.paginationPage
                 lastPageInCurrentFilter = page.lastPage
                 if (isFirstLoad) isFirstLoad = false
                 canonicalCollectionHealthy = true
+                canonicalSnapshotEpoch = (token.mode as LibraryRenderMode.Canonical).collectorEpoch
                 canonicalCollectionFailure = null
                 latestCanonicalCards = snapshot
+                canonicalRetryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
+                canonicalRetryDeadlineElapsedMs = 0L
+                retryToCancel = canonicalRetryJob
+                canonicalRetryJob = null
                 _state.update { state ->
                     state.copy(
                         cards = page.cards,
@@ -1498,7 +1991,8 @@ class LibraryViewModel @Inject constructor(
                 true
             }
         }
-        if (!committed) return RenderPublicationOutcome.Superseded
+        retryToCancel?.cancel()
+        if (!committed) return RenderPublicationOutcome.Superseded(token)
 
         fetchCompatibilityForPage(page.compatibilityRequestNames, token)
         FeatureDiagnostics.record(
@@ -1515,7 +2009,7 @@ class LibraryViewModel @Inject constructor(
                 DiagnosticAttribute.CUSTOM_COUNT to page.sourceCounts.getValue(GameSource.CUSTOM_GAME).toString(),
             ),
         )
-        return RenderPublicationOutcome.Published
+        return RenderPublicationOutcome.Published(token)
     }
 
     private fun canonicalPromotionItem(): LibraryItem? {
@@ -1572,7 +2066,7 @@ class LibraryViewModel @Inject constructor(
                 DiagnosticAttribute.FILTER_GROUPS to diagnosticFilterGroups(currentState),
             ),
         )
-        if (!isTokenActive(token)) return RenderPublicationOutcome.Superseded
+        if (!isTokenActive(token)) return RenderPublicationOutcome.Superseded(token)
 
             val currentFilter = AppFilter.getAppType(currentState.appInfoSortType)
 
@@ -2028,13 +2522,18 @@ class LibraryViewModel @Inject constructor(
             val hasGog = GOGService.hasStoredCredentials(context)
             val hasEpic = EpicService.hasStoredCredentials(context)
             val hasAmazon = AmazonService.hasStoredCredentials(context)
+            var retryToCancel: Job? = null
             val published = synchronized(renderLock) {
-                if (!isTokenActiveLocked(token) || !renderModeEligible(token.mode, _state.value)) {
+                if (!claimActiveTokenLocked(token)) {
                     false
                 } else {
                     paginationCurrentPage = safePage
                     lastPageInCurrentFilter = lastPage
                     if (isFirstLoad) isFirstLoad = false
+                    legacyRetryDelayMs = MIN_LEGACY_RETRY_DELAY_MS
+                    legacyRetryDeadlineElapsedMs = 0L
+                    retryToCancel = legacyRetryJob
+                    legacyRetryJob = null
                     _state.update {
                         it.copy(
                             cards = cards,
@@ -2058,7 +2557,8 @@ class LibraryViewModel @Inject constructor(
                     true
                 }
             }
-            if (!published) return RenderPublicationOutcome.Superseded
+            retryToCancel?.cancel()
+            if (!published) return RenderPublicationOutcome.Superseded(token)
 
             fetchCompatibilityForPage(cards.map { it.name }, token)
             FeatureDiagnostics.record(
@@ -2075,7 +2575,7 @@ class LibraryViewModel @Inject constructor(
                     DiagnosticAttribute.CUSTOM_COUNT to customEntries.size.toString(),
                 ),
             )
-            return RenderPublicationOutcome.Published
+            return RenderPublicationOutcome.Published(token)
     }
 
     /**
@@ -2094,7 +2594,7 @@ class LibraryViewModel @Inject constructor(
         gameNames: List<String>,
         token: LibraryRenderToken,
     ) {
-        if (gameNames.isEmpty() || !isTokenActive(token)) {
+        if (gameNames.isEmpty() || !isTokenCurrentForSideEffect(token)) {
             Timber.tag("LibraryViewModel").d("fetchCompatibilityForPage: No game names provided")
             return
         }
@@ -2109,7 +2609,7 @@ class LibraryViewModel @Inject constructor(
 
         viewModelScope.launch(canonicalDispatcher) {
             try {
-                if (!isTokenActive(token)) return@launch
+                if (!isTokenCurrentForSideEffect(token)) return@launch
                 // Separate cached and uncached games
                 val uncachedGames = mutableListOf<String>()
                 val cachedResults = mutableMapOf<String, GameCompatibilityService.GameCompatibilityResponse>()
@@ -2142,7 +2642,7 @@ class LibraryViewModel @Inject constructor(
                 val fetchedResults = mutableMapOf<String, GameCompatibilityService.GameCompatibilityResponse>()
 
                 for (i in uncachedGames.indices step batchSize) {
-                    if (!isTokenActive(token)) return@launch
+                    if (!isTokenCurrentForSideEffect(token)) return@launch
                     val batch = uncachedGames.subList(i, min(i + batchSize, uncachedGames.size))
                     Timber.tag("LibraryViewModel").d("Fetching batch ${i / batchSize + 1} with ${batch.size} games")
                     val batchResults = GameCompatibilityService.fetchCompatibility(batch, gpuName)
@@ -2160,11 +2660,13 @@ class LibraryViewModel @Inject constructor(
                 // Update state with newly fetched results
                 if (fetchedResults.isNotEmpty()) {
                     updateCompatibilityState(fetchedResults, token)
-                    // Re-apply list filtering once new compatibility data is available
-                    if (isTokenActive(token) && _state.value.appInfoSortType.contains(AppFilter.COMPATIBLE)) {
-                        onFilterApps(paginationCurrentPage)
+                    // Re-apply list filtering once new compatibility data is available.
+                    if (token.state.appInfoSortType.contains(AppFilter.COMPATIBLE)) {
+                        supersedeRenderForPublishedToken(token)?.let(::onFilterApps)
                     }
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (e: Exception) {
                 Timber.tag("LibraryViewModel").e(e, "Error fetching compatibility data: ${e.message}")
                 e.printStackTrace()
@@ -2184,7 +2686,7 @@ class LibraryViewModel @Inject constructor(
         }
 
         // Update state with compatibility map (merge with existing)
-        guardedStateUpdate(token) { currentState ->
+        guardedPublishedStateUpdate(token) { currentState ->
             val mergedMap = currentState.compatibilityMap.toMutableMap()
             mergedMap.putAll(compatibilityMap)
             val updatedCards = currentState.cards.map { card ->

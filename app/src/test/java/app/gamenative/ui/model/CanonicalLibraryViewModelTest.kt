@@ -72,13 +72,16 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestDispatcher
@@ -352,19 +355,21 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `canonical cancellation remains cancellation and does not publish fallback`() = runTest(dispatcher) {
+    fun `canonical parent cancellation does not restart collection`() = runTest(dispatcher) {
         val repository = mockk<CanonicalLibraryRepository>()
-        every { repository.observeCards() } returns flow { throw CancellationException("stop") }
+        every { repository.observeCards() } returns flow { awaitCancellation() }
         val readiness = CanonicalProjectionReadiness().apply { markSucceeded() }
         val vm = viewModel(repository, gateEnabled = true, readiness = readiness)
         runCurrent()
 
         assertNull(vm.state.value.canonicalPublicFailure)
         verify(exactly = 1) { repository.observeCards() }
+        viewModelStore.clear()
         advanceTimeBy(60_000)
         runCurrent()
+
         verify(exactly = 1) { repository.observeCards() }
-        viewModelStore.clear()
+        assertNull(vm.state.value.canonicalPublicFailure)
     }
 
     @Test
@@ -1116,6 +1121,467 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
+    fun `delayed failed generation cannot replace newer canonical success`() {
+        val executor = Executors.newFixedThreadPool(8)
+        val delegate = executor.asCoroutineDispatcher()
+        val holdNextDispatch = AtomicBoolean(false)
+        val failedObserverHeld = CountDownLatch(1)
+        val releaseFailedObserver = CountDownLatch(1)
+        val gatedDispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+                if (holdNextDispatch.compareAndSet(true, false)) {
+                    failedObserverHeld.countDown()
+                    releaseFailedObserver.await(10, TimeUnit.SECONDS)
+                }
+                delegate.dispatch(context, block)
+            }
+        }
+        val failNextProjection = AtomicBoolean(false)
+        val emissions = MutableStateFlow(listOf(card(name = "Generation Zero")))
+
+        try {
+            val vm = viewModel(
+                repository = repository(emissions),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = gatedDispatcher,
+            )
+            awaitState { it.cards.map { card -> card.name } == listOf("Generation Zero") }
+            every { GameCompatibilityCache.getCached(any()) } answers {
+                if (failNextProjection.compareAndSet(true, false)) {
+                    holdNextDispatch.set(true)
+                    throw IllegalStateException("fixed projection failure")
+                }
+                null
+            }
+
+            failNextProjection.set(true)
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitLatch(failedObserverHeld, "delayed failed generation observer")
+
+            emissions.value = listOf(card(canonicalId = canonicalId(74), name = "Generation One"))
+            awaitState { state ->
+                state.cards.map { it.name } == listOf("Generation One") &&
+                    state.canonicalPublicFailure == null &&
+                    !state.isLoading
+            }
+
+            releaseFailedObserver.countDown()
+            assertFalse(
+                "stale failed outcome replaced the newer publication",
+                awaitCondition(timeoutMs = 2_000L) {
+                    val state = vm.state.value
+                    state.canonicalPublicFailure != null || state.cards.map { it.name } != listOf("Generation One")
+                },
+            )
+        } finally {
+            releaseFailedObserver.countDown()
+            viewModelStore.clear()
+            delegate.close()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `delayed waiting request preserves sole initial canonical snapshot`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val collectorStarted = CountDownLatch(1)
+        val releaseInitialSnapshot = CountDownLatch(1)
+        val initialCards = object : Flow<List<CanonicalLibraryCard>> {
+            override suspend fun collect(collector: FlowCollector<List<CanonicalLibraryCard>>) {
+                collectorStarted.countDown()
+                releaseInitialSnapshot.await(10, TimeUnit.SECONDS)
+                collector.emit(listOf(card(name = "Sole Initial Snapshot")))
+                awaitCancellation()
+            }
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository(initialCards),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitLatch(collectorStarted, "initial canonical collector")
+            val delayedState = vm.state.value
+
+            releaseInitialSnapshot.countDown()
+            awaitState { state ->
+                state.cards.map { it.name } == listOf("Sole Initial Snapshot") && !state.isLoading
+            }
+
+            invokeWaitingRequest(vm, delayedState).joinOnCurrentThread()
+            assertFalse(
+                "delayed waiting request canceled the sole canonical publication",
+                awaitCondition(timeoutMs = 1_500L) {
+                    val state = vm.state.value
+                    state.isLoading || state.cards.map { it.name } != listOf("Sole Initial Snapshot")
+                },
+            )
+        } finally {
+            releaseInitialSnapshot.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `older gate-blocked All callback cannot replace newer Steam input`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val gateBlocked = CountDownLatch(1)
+        val releaseOldGate = CountDownLatch(1)
+        val blockNextGate = AtomicBoolean(false)
+        val gate = CanonicalPublicLibraryGate {
+            if (blockNextGate.compareAndSet(true, false)) {
+                gateBlocked.countDown()
+                releaseOldGate.await(10, TimeUnit.SECONDS)
+            }
+            true
+        }
+        val steam = card(canonicalId = canonicalId(75), name = "Steam Current", copyKeys = listOf(steamKey))
+        val gogOnly = card(
+            canonicalId = canonicalId(76),
+            name = "GOG Stale All",
+            copyKeys = listOf(key(GameSource.GOG, "gog-stale")),
+        )
+        val oldDone = CountDownLatch(1)
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(listOf(steam, gogOnly))),
+                gateEnabled = true,
+                gate = gate,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { it.cards.size == 2 }
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitState { it.cards.map { card -> card.name } == listOf("Steam Current") }
+
+            blockNextGate.set(true)
+            Thread {
+                try {
+                    vm.onTabChanged(LibraryTab.ALL)
+                } finally {
+                    oldDone.countDown()
+                }
+            }.start()
+            awaitLatch(gateBlocked, "old All callback gate")
+
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitState { state ->
+                state.currentTab == LibraryTab.STEAM &&
+                    state.cards.map { it.name } == listOf("Steam Current")
+            }
+            releaseOldGate.countDown()
+            awaitLatch(oldDone, "old All callback completion")
+
+            assertFalse(
+                "older All input became the newest render",
+                awaitCondition(timeoutMs = 1_500L) {
+                    vm.state.value.cards.any { it.name == "GOG Stale All" }
+                },
+            )
+        } finally {
+            releaseOldGate.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `unsupported lifecycle clears account-bound canonical snapshot before restart`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val observeCalls = AtomicInteger(0)
+        val secondCollectorStarted = CountDownLatch(1)
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            if (observeCalls.incrementAndGet() == 1) {
+                MutableStateFlow(listOf(card(name = "Account A Card")))
+            } else {
+                flow<List<CanonicalLibraryCard>> {
+                    secondCollectorStarted.countDown()
+                    awaitCancellation()
+                }
+            }
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository,
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { it.cards.map { card -> card.name } == listOf("Account A Card") }
+
+            vm.onTabChanged(LibraryTab.RECOMMENDED)
+            awaitState { state ->
+                state.canonicalPublicFailure == CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT &&
+                    !state.isLoading
+            }
+            vm.onTabChanged(LibraryTab.ALL)
+            awaitLatch(secondCollectorStarted, "post-account-change collector")
+
+            assertFalse(
+                "retained account A snapshot was republished in the new collector epoch",
+                awaitCondition(timeoutMs = 1_500L) {
+                    vm.state.value.cards.any { it.name == "Account A Card" }
+                },
+            )
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `legacy render longer than five seconds completes without timeout`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val legacyStarted = CountDownLatch(1)
+        val releaseLegacy = CountDownLatch(1)
+        val attempts = AtomicInteger(0)
+        every { DownloadService.getDownloadDirectoryApps() } answers {
+            attempts.incrementAndGet()
+            legacyStarted.countDown()
+            releaseLegacy.await(15, TimeUnit.SECONDS)
+            mutableListOf()
+        }
+        every { GOGService.hasStoredCredentials(any()) } returns true
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(emptyList())),
+                gateEnabled = false,
+                readiness = CanonicalProjectionReadiness(),
+                gogRows = MutableStateFlow(listOf(GOGGame(id = "slow-legacy", title = "Slow Legacy Success", isInstalled = true))),
+                ioDispatcher = io,
+            )
+            awaitLatch(legacyStarted, "long legacy computation")
+            Thread.sleep(5_500L)
+            assertEquals("long legacy work timed out or overlapped", 1, attempts.get())
+
+            releaseLegacy.countDown()
+            assertTrue(
+                "long legacy computation did not publish",
+                awaitCondition(timeoutMs = 5_000L) {
+                    attempts.get() == 1 &&
+                        vm.state.value.cards.map { it.name } == listOf("Slow Legacy Success") &&
+                        !vm.state.value.isLoading
+                },
+            )
+            assertEquals("long legacy work was retried after the timeout", 1, attempts.get())
+        } finally {
+            releaseLegacy.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `blocked legacy worker stays single-flight and runs only latest pending input`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val firstLegacyStarted = CountDownLatch(1)
+        val releaseFirstLegacy = CountDownLatch(1)
+        val attempts = AtomicInteger(0)
+        val gateEnabled = AtomicBoolean(true)
+        val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
+        every { DownloadService.getDownloadDirectoryApps() } returns mutableListOf()
+        every { GOGService.hasStoredCredentials(any()) } returns true
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(emptyList())),
+                gateEnabled = true,
+                gate = gate,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                gogRows = MutableStateFlow(listOf(GOGGame(id = "pending-gog", title = "Latest Pending GOG", isInstalled = true))),
+                ioDispatcher = io,
+            )
+            awaitState { !it.isLoading }
+            every { DownloadService.getDownloadDirectoryApps() } answers {
+                attempts.incrementAndGet()
+                mutableListOf()
+            }
+            val blockFirstCredentialCheck = AtomicBoolean(true)
+            every { GOGService.hasStoredCredentials(any()) } answers {
+                if (blockFirstCredentialCheck.compareAndSet(true, false)) {
+                    firstLegacyStarted.countDown()
+                    awaitUninterruptibly(releaseFirstLegacy)
+                }
+                true
+            }
+
+            gateEnabled.set(false)
+            vm.onTabChanged(LibraryTab.ALL)
+            awaitLatch(firstLegacyStarted, "first blocked legacy worker")
+            vm.onTabChanged(LibraryTab.GOG)
+            Thread.sleep(500L)
+            assertEquals("superseded requests launched overlapping legacy workers", 1, attempts.get())
+
+            releaseFirstLegacy.countDown()
+            assertTrue(
+                "latest pending legacy input did not run after the physical worker",
+                awaitCondition(timeoutMs = 5_000L) {
+                    attempts.get() == 2 &&
+                        vm.state.value.currentTab == LibraryTab.GOG &&
+                        vm.state.value.cards.map { it.name } == listOf("Latest Pending GOG") &&
+                        !vm.state.value.isLoading
+                },
+            )
+        } finally {
+            releaseFirstLegacy.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `independently cancelled canonical collector recovers without permanent loading`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val observeCalls = AtomicInteger(0)
+        val cancellationReached = CountDownLatch(1)
+        val gateEnabled = AtomicBoolean(false)
+        val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            if (observeCalls.incrementAndGet() == 1) {
+                flow {
+                    cancellationReached.countDown()
+                    throw CancellationException("independent upstream cancellation")
+                }
+            } else {
+                MutableStateFlow(listOf(card(name = "Collector Cancellation Recovery")))
+            }
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository,
+                gateEnabled = false,
+                gate = gate,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { !it.isLoading }
+            gateEnabled.set(true)
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitLatch(cancellationReached, "upstream collector cancellation")
+            assertTrue(
+                "cancelled canonical collector did not recover",
+                awaitCondition(timeoutMs = 5_000L) {
+                    observeCalls.get() >= 2 &&
+                        vm.state.value.cards.map { it.name } == listOf("Collector Cancellation Recovery") &&
+                        !vm.state.value.isLoading
+                },
+            )
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `independently cancelled legacy worker recovers without permanent loading`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val gateEnabled = AtomicBoolean(true)
+        val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
+        val attempts = AtomicInteger(0)
+        val cancelledWorkerStarted = CountDownLatch(1)
+        val releaseCancelledWorker = CountDownLatch(1)
+        every { GOGService.hasStoredCredentials(any()) } returns true
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(emptyList())),
+                gateEnabled = true,
+                gate = gate,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                gogRows = MutableStateFlow(listOf(GOGGame(id = "cancel-recovery", title = "Legacy Cancellation Recovery", isInstalled = true))),
+                ioDispatcher = io,
+            )
+            awaitState { !it.isLoading }
+            every { DownloadService.getDownloadDirectoryApps() } answers {
+                if (attempts.incrementAndGet() == 1) {
+                    cancelledWorkerStarted.countDown()
+                    awaitUninterruptibly(releaseCancelledWorker)
+                }
+                mutableListOf()
+            }
+
+            gateEnabled.set(false)
+            vm.onTabChanged(LibraryTab.GOG)
+            awaitLatch(cancelledWorkerStarted, "legacy worker before independent cancellation")
+            cancelJobField(vm, "legacyPhysicalJob")
+            releaseCancelledWorker.countDown()
+            assertTrue(
+                "cancelled legacy worker did not recover",
+                awaitCondition(timeoutMs = 5_000L) {
+                    attempts.get() >= 2 &&
+                        vm.state.value.cards.map { it.name } == listOf("Legacy Cancellation Recovery") &&
+                        !vm.state.value.isLoading
+                },
+            )
+        } finally {
+            releaseCancelledWorker.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `noisy callbacks cannot bypass canonical projection retry cooldown`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val observeCalls = AtomicInteger(0)
+        val emissions = MutableStateFlow(listOf(card(name = "Cooldown Canonical")))
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            observeCalls.incrementAndGet()
+            emissions
+        }
+        val failNextProjection = AtomicBoolean(false)
+
+        try {
+            val vm = viewModel(
+                repository = repository,
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { it.cards.map { card -> card.name } == listOf("Cooldown Canonical") }
+            every { GameCompatibilityCache.getCached(any()) } answers {
+                if (failNextProjection.compareAndSet(true, false)) {
+                    throw IllegalStateException("fixed cooldown projection failure")
+                }
+                null
+            }
+
+            failNextProjection.set(true)
+            vm.onTabChanged(LibraryTab.STEAM)
+            awaitState { it.canonicalPublicFailure == CanonicalPublicFailure.ASSEMBLY_FAILED }
+
+            repeat(12) {
+                PluviaApp.events.emit(AndroidEvent.CustomGameImagesFetched("private-noisy-payload-$it"))
+            }
+            Thread.sleep(700L)
+            assertEquals("ordinary callbacks bypassed the projection retry deadline", 1, observeCalls.get())
+
+            assertTrue(
+                "canonical projection did not retry after its cooldown",
+                awaitCondition(timeoutMs = 4_000L) {
+                    observeCalls.get() == 2 &&
+                        vm.state.value.cards.map { it.name } == listOf("Cooldown Canonical") &&
+                        vm.state.value.canonicalPublicFailure == null
+                },
+            )
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
     fun `concurrent eligible triggers create one collector and unsupported context rejects later emissions`() {
         val executor = Executors.newFixedThreadPool(16)
         val delegate = executor.asCoroutineDispatcher()
@@ -1450,6 +1916,24 @@ class CanonicalLibraryViewModelTest {
     private fun stats(runs: Int, fps: Int, reviews: Int, session: Int): DeviceGameStats =
         DeviceGameStats(runs, fps, reviews, session)
 
+    private fun invokeWaitingRequest(vm: LibraryViewModel, state: LibraryState): Job {
+        val method = LibraryViewModel::class.java.getDeclaredMethod(
+            "requestWaitingCanonical",
+            Int::class.javaPrimitiveType,
+            LibraryState::class.java,
+        )
+        method.isAccessible = true
+        return method.invoke(vm, 0, state) as Job
+    }
+
+    private fun cancelJobField(vm: LibraryViewModel, name: String) {
+        val field = LibraryViewModel::class.java.getDeclaredField(name)
+        field.isAccessible = true
+        (field.get(vm) as Job).cancel()
+    }
+
+    private fun Job.joinOnCurrentThread() = runBlocking { join() }
+
     private fun awaitPreference(condition: () -> Boolean) {
         repeat(200) {
             if (condition()) return
@@ -1476,6 +1960,16 @@ class CanonicalLibraryViewModelTest {
 
     private fun awaitLatch(latch: CountDownLatch, name: String, timeoutMs: Long = 5_000L) {
         assertTrue("Timed out waiting for $name", latch.await(timeoutMs, TimeUnit.MILLISECONDS))
+    }
+
+    private fun awaitUninterruptibly(latch: CountDownLatch) {
+        while (latch.count > 0L) {
+            try {
+                latch.await(100L, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                // Model source-native work that cannot honor coroutine cancellation.
+            }
+        }
     }
 
     private companion object {
