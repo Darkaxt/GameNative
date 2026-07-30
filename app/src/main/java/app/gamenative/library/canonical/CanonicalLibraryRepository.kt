@@ -124,7 +124,7 @@ class CanonicalLibraryRepository @Inject constructor(
         val artwork = artwork(entries, game.primaryMetadataSource)
         val aliases = linkedSetOf<String>().apply {
             addName(displayName)
-            addName(game.displayName)
+            if (key is CanonicalCardKey.Grouped) addName(game.displayName)
             entries.forEach { entry ->
                 addName(entry.relationship.match.evidenceDisplayName)
                 entry.runtime?.let { runtime ->

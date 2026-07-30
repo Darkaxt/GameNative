@@ -139,6 +139,7 @@ class CanonicalLibraryRepositoryTest {
         assertEquals("Independent Runtime Title", reviewCard.displayName)
         assertEquals(CanonicalAppType.DEMO, reviewCard.appType)
         assertFalse(reviewCard.displayName.contains("Canonical Sibling"))
+        assertFalse("Canonical Sibling" in reviewCard.aliases)
         assertEquals(
             setOf(
                 CanonicalCardKey.Independent(review.key()),
@@ -147,6 +148,46 @@ class CanonicalLibraryRepositoryTest {
             ),
             cards.map { it.key }.filterIsInstance<CanonicalCardKey.Independent>().toSet(),
         )
+    }
+
+    @Test
+    fun independentAliasesExcludeCanonicalTitleAndHiddenTrustedSiblingEvidence() = runTest {
+        val game = game(ID_A, displayName = "Hidden Trusted Canonical")
+        val hiddenTrusted = match(
+            game,
+            GameSource.STEAM,
+            "12",
+            MatchConfidence.VERIFIED,
+            evidenceName = "Hidden Trusted Evidence",
+        )
+        val independent = match(
+            game,
+            GameSource.GOG,
+            "13",
+            MatchConfidence.REVIEW_REQUIRED,
+            evidenceName = "Independent Evidence",
+        )
+        val harness = harness(
+            listOf(aggregate(game, listOf(hiddenTrusted, independent))),
+            mapOf(
+                hiddenTrusted.key() to OwnedCopyRuntimeResult.Hidden,
+                independent.key() to available(
+                    independent.key(),
+                    nativeTitle = "Independent Native",
+                    aliases = setOf("Independent Runtime Alias"),
+                ),
+            ),
+        )
+
+        val card = harness.repository.observeCards().first().single()
+
+        assertEquals(CanonicalCardKey.Independent(independent.key()), card.key)
+        assertEquals(
+            setOf("Independent Native", "Independent Evidence", "Independent Runtime Alias"),
+            card.aliases,
+        )
+        assertFalse("Hidden Trusted Canonical" in card.aliases)
+        assertFalse("Hidden Trusted Evidence" in card.aliases)
     }
 
     @Test
