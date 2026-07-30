@@ -13,10 +13,12 @@ import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CanonicalProjectionEngine
 import app.gamenative.library.canonical.CanonicalProjectionGate
 import app.gamenative.library.canonical.CanonicalProjectionRunner
+import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CanonicalResolver
 import app.gamenative.library.canonical.DefaultAccountScopeProvider
 import app.gamenative.library.canonical.FeatureCanonicalEventRecorder
 import app.gamenative.library.canonical.PrefManagerCanonicalProjectionGate
+import app.gamenative.library.canonical.PrefManagerCanonicalPublicLibraryGate
 import app.gamenative.library.canonical.RoomCanonicalMutationRepository
 import app.gamenative.library.canonical.SharedPreferencesAccountLifecycleState
 import app.gamenative.library.canonical.SystemCanonicalProjectionClock
@@ -87,6 +89,12 @@ abstract class CanonicalLibraryModule {
     abstract fun bindProjectionGate(
         implementation: PrefManagerCanonicalProjectionGate,
     ): CanonicalProjectionGate
+
+    @Binds
+    @Singleton
+    abstract fun bindPublicLibraryGate(
+        implementation: PrefManagerCanonicalPublicLibraryGate,
+    ): CanonicalPublicLibraryGate
 
     @Binds
     @Singleton

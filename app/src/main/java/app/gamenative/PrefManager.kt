@@ -163,6 +163,14 @@ object PrefManager {
             setPref(CANONICAL_PROJECTION_ENABLED, value)
         }
 
+    private val CANONICAL_PUBLIC_LIBRARY_ENABLED =
+        booleanPreferencesKey("canonical_public_library_enabled")
+    var canonicalPublicLibraryEnabled: Boolean
+        get() = getPref(CANONICAL_PUBLIC_LIBRARY_ENABLED, false)
+        set(value) {
+            setPref(CANONICAL_PUBLIC_LIBRARY_ENABLED, value)
+        }
+
     /* Manifest Cache */
     private val COMPONENT_MANIFEST_JSON = stringPreferencesKey("component_manifest_json")
     var componentManifestJson: String
