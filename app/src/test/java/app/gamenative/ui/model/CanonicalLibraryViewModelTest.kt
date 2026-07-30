@@ -60,6 +60,7 @@ import app.gamenative.utils.DeviceGameStatsService.DeviceGameStats
 import app.gamenative.utils.GameCompatibilityCache
 import app.gamenative.utils.GpuGameStatsCache
 import io.mockk.clearAllMocks
+import io.mockk.clearMocks
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.just
@@ -82,14 +83,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -170,10 +169,10 @@ class CanonicalLibraryViewModelTest {
         mockkObject(RecommendationRepository)
         coEvery { RecommendationRepository.getHero(any()) } returns HeroResponse()
         mockkObject(DeviceGameStatsCache)
-        coEvery { DeviceGameStatsCache.refreshIfStale(any(), any(), any()) } just runs
+        coEvery { DeviceGameStatsCache.refreshIfStale(any(), any(), any()) } returns true
         every { DeviceGameStatsCache.getAll() } returns emptyMap()
         mockkObject(GpuGameStatsCache)
-        coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } just runs
+        coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } returns true
         every { GpuGameStatsCache.getAll() } returns emptyMap()
         mockkObject(GameCompatibilityCache)
         every { GameCompatibilityCache.getCached(any()) } returns null
@@ -1192,25 +1191,26 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `superseded collector render failure cannot replace newer emission or start cooldown`() {
+    fun `superseded collector render failure cannot replace newer input or start cooldown`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
         val firstProjectionStarted = CountDownLatch(1)
         val releaseFirstProjection = CountDownLatch(1)
         val blockFirstProjection = AtomicBoolean(true)
         val observeCalls = AtomicInteger(0)
-        val emissions = object : Flow<List<CanonicalLibraryCard>> {
-            override suspend fun collect(collector: FlowCollector<List<CanonicalLibraryCard>>) {
-                observeCalls.incrementAndGet()
-                coroutineScope {
-                    val first = launch {
-                        collector.emit(listOf(card(name = "Collector A")))
-                    }
-                    awaitLatch(firstProjectionStarted, "blocked collector render A")
-                    collector.emit(listOf(card(canonicalId = canonicalId(77), name = "Collector B")))
-                    first.join()
-                    awaitCancellation()
-                }
-            }
+        val emissions = MutableStateFlow(
+            listOf(
+                card(name = "Collector A"),
+                card(
+                    canonicalId = canonicalId(77),
+                    name = "Collector B",
+                    copyKeys = listOf(gogKey),
+                ),
+            ),
+        )
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } answers {
+            observeCalls.incrementAndGet()
+            emissions
         }
         every { GameCompatibilityCache.getCached(any()) } answers {
             if (blockFirstProjection.compareAndSet(true, false)) {
@@ -1223,23 +1223,27 @@ class CanonicalLibraryViewModelTest {
 
         try {
             val vm = viewModel(
-                repository = repository(emissions),
+                repository = repository,
                 gateEnabled = true,
                 readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
                 ioDispatcher = io,
             )
+            awaitLatch(firstProjectionStarted, "blocked collector render")
+            vm.onTabChanged(LibraryTab.GOG)
             awaitState { state ->
-                state.cards.map { it.name } == listOf("Collector B") &&
+                state.currentTab == LibraryTab.GOG &&
+                    state.cards.map { it.name } == listOf("Collector B") &&
                     state.canonicalPublicFailure == null &&
                     !state.isLoading
             }
 
             releaseFirstProjection.countDown()
             assertFalse(
-                "superseded collector failure replaced B or published fallback",
+                "superseded collector failure replaced the newer input or published fallback",
                 awaitCondition(timeoutMs = 750L) {
                     val state = vm.state.value
-                    state.cards.map { it.name } != listOf("Collector B") ||
+                    state.currentTab != LibraryTab.GOG ||
+                        state.cards.map { it.name } != listOf("Collector B") ||
                         state.canonicalPublicFailure != null ||
                         state.isLoading
                 },
@@ -1831,6 +1835,330 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
+    fun `refresh completion preserves latest pending page reset`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val refreshStarted = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val pendingRenderStarted = CountDownLatch(1)
+        val releasePendingRender = CountDownLatch(1)
+        val blockNextProjection = AtomicBoolean(false)
+        val cards = (0 until 105).map { index ->
+            card(
+                canonicalId = canonicalId(300 + index),
+                name = "Paged ${index.toString().padStart(3, '0')}",
+                copyKeys = listOf(key(GameSource.STEAM, "paged-$index")),
+            )
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(cards)),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { state -> state.cards.size == 50 && state.currentPaginationPage == 1 && !state.isLoading }
+            vm.onPageChange(1)
+            awaitState { state -> state.cards.size == 100 && state.currentPaginationPage == 2 && !state.isLoading }
+            coEvery { SteamService.refreshOwnedGamesFromServer() } coAnswers {
+                refreshStarted.complete(Unit)
+                releaseRefresh.await()
+                0
+            }
+            every { GameCompatibilityCache.getCached(any()) } answers {
+                if (blockNextProjection.compareAndSet(true, false)) {
+                    pendingRenderStarted.countDown()
+                    awaitUninterruptibly(releasePendingRender)
+                }
+                null
+            }
+
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue("refresh did not reach blocked source work", refreshStarted.isCompleted)
+            blockNextProjection.set(true)
+            vm.onSearchQuery("Paged")
+            scheduler.advanceTimeBy(500L)
+            scheduler.runCurrent()
+            awaitLatch(pendingRenderStarted, "latest page-resetting filter render")
+
+            releaseRefresh.complete(Unit)
+            assertTrue(
+                "refresh completion restored the last published page",
+                awaitCondition(timeoutMs = 4_000L) {
+                    scheduler.runCurrent()
+                    val state = vm.state.value
+                    !state.isRefreshing &&
+                        !state.isLoading &&
+                        state.searchQuery == "Paged" &&
+                        state.currentPaginationPage == 1 &&
+                        state.cards.size == 50
+                },
+            )
+        } finally {
+            releaseRefresh.complete(Unit)
+            releasePendingRender.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `ordinary failures across refresh boundaries clear indicator without merging stats`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val freshDeviceStats = mapOf(GameSource.STEAM to mapOf("Fresh Device" to stats(1, 60, 1, 60)))
+        val freshGpuStats = mapOf(GameSource.STEAM to mapOf("Fresh GPU" to stats(2, 60, 2, 60)))
+        mockkObject(FeatureDiagnostics)
+        every { FeatureDiagnostics.record(any(), any(), any(), any(), any()) } just runs
+
+        try {
+            RefreshFailureBoundary.entries.forEach { boundary ->
+                stubSuccessfulRefreshPipeline(emptyMap(), emptyMap())
+                val vm = viewModel(
+                    repository = repository(MutableStateFlow(listOf(card(name = "Safe Refresh Failure")))),
+                    gateEnabled = true,
+                    readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                    ioDispatcher = io,
+                )
+                awaitState { state ->
+                    state.cards.map { it.name } == listOf("Safe Refresh Failure") &&
+                        state.deviceGameStats.isEmpty() &&
+                        state.gpuGameStats.isEmpty() &&
+                        !state.isLoading
+                }
+                setLazyStringField(vm, "gpuName", "Test GPU")
+                stubSuccessfulRefreshPipeline(freshDeviceStats, freshGpuStats)
+                clearMocks(FeatureDiagnostics, answers = false)
+                val failure = IllegalStateException("private ${boundary.name} refresh failure")
+                when (boundary) {
+                    RefreshFailureBoundary.COMPATIBILITY_CLEAR ->
+                        every { GameCompatibilityCache.clear() } throws failure
+                    RefreshFailureBoundary.DEVICE_CLEAR ->
+                        every { DeviceGameStatsCache.clear() } throws failure
+                    RefreshFailureBoundary.GPU_CLEAR ->
+                        every { GpuGameStatsCache.clear() } throws failure
+                    RefreshFailureBoundary.STEAM_SYNC ->
+                        coEvery { SteamService.refreshOwnedGamesFromServer() } throws failure
+                    RefreshFailureBoundary.GOG_CREDENTIALS ->
+                        every { GOGService.hasStoredCredentials(any()) } throws failure
+                    RefreshFailureBoundary.GOG_SYNC -> {
+                        every { GOGService.hasStoredCredentials(any()) } returns true
+                        every { GOGService.triggerLibrarySync(any()) } throws failure
+                    }
+                    RefreshFailureBoundary.AMAZON_CREDENTIALS ->
+                        every { AmazonService.hasStoredCredentials(any()) } throws failure
+                    RefreshFailureBoundary.AMAZON_SYNC -> {
+                        every { AmazonService.hasStoredCredentials(any()) } returns true
+                        every { AmazonService.triggerLibrarySync(any()) } throws failure
+                    }
+                    RefreshFailureBoundary.DEVICE_REFRESH ->
+                        coEvery { DeviceGameStatsCache.refreshIfStale(any(), any(), any()) } throws failure
+                    RefreshFailureBoundary.GPU_REFRESH ->
+                        coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } throws failure
+                    RefreshFailureBoundary.DEVICE_READ ->
+                        every { DeviceGameStatsCache.getAll() } throws failure
+                    RefreshFailureBoundary.GPU_READ ->
+                        every { GpuGameStatsCache.getAll() } throws failure
+                }
+
+                vm.onRefresh()
+                scheduler.runCurrent()
+                assertTrue(
+                    "$boundary left refresh active or merged partial stats",
+                    awaitCondition(timeoutMs = 2_000L) {
+                        scheduler.runCurrent()
+                        val state = vm.state.value
+                        !state.isRefreshing &&
+                            state.deviceGameStats.isEmpty() &&
+                            state.gpuGameStats.isEmpty() &&
+                            state.cards.map { it.name } == listOf("Safe Refresh Failure")
+                    },
+                )
+                verify(exactly = 1) {
+                    FeatureDiagnostics.record(
+                        area = DiagnosticArea.LIBRARY_FILTER,
+                        name = DiagnosticEventName.LIBRARY_FILTER,
+                        outcome = DiagnosticOutcome.FAILED,
+                        durationMs = null,
+                        attributes = mapOf(
+                            DiagnosticAttribute.OPERATION to "REFRESH",
+                            DiagnosticAttribute.ERROR_TYPE to "IllegalStateException",
+                        ),
+                    )
+                }
+                viewModelStore.clear()
+                viewModelStore = ViewModelStore()
+            }
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `unavailable stats retrieval clears refresh without merging cached values`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val freshDeviceStats = mapOf(GameSource.STEAM to mapOf("Fresh Device" to stats(1, 60, 1, 60)))
+        val freshGpuStats = mapOf(GameSource.STEAM to mapOf("Fresh GPU" to stats(2, 60, 2, 60)))
+        mockkObject(FeatureDiagnostics)
+        every { FeatureDiagnostics.record(any(), any(), any(), any(), any()) } just runs
+
+        try {
+            listOf("DEVICE", "GPU").forEach { unavailableCache ->
+                stubSuccessfulRefreshPipeline(emptyMap(), emptyMap())
+                val vm = viewModel(
+                    repository = repository(MutableStateFlow(listOf(card(name = "Safe Stats Retrieval")))),
+                    gateEnabled = true,
+                    readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                    ioDispatcher = io,
+                )
+                awaitState { state ->
+                    state.cards.map { it.name } == listOf("Safe Stats Retrieval") &&
+                        state.deviceGameStats.isEmpty() &&
+                        state.gpuGameStats.isEmpty() &&
+                        !state.isLoading
+                }
+                setLazyStringField(vm, "gpuName", "Test GPU")
+                stubSuccessfulRefreshPipeline(freshDeviceStats, freshGpuStats)
+                if (unavailableCache == "DEVICE") {
+                    coEvery { DeviceGameStatsCache.refreshIfStale(any(), any(), any()) } returns false
+                } else {
+                    coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } returns false
+                }
+                clearMocks(FeatureDiagnostics, answers = false)
+
+                vm.onRefresh()
+                scheduler.runCurrent()
+                assertTrue(
+                    "$unavailableCache retrieval rejection merged cached stats",
+                    awaitCondition(timeoutMs = 2_000L) {
+                        scheduler.runCurrent()
+                        val state = vm.state.value
+                        !state.isRefreshing &&
+                            state.deviceGameStats.isEmpty() &&
+                            state.gpuGameStats.isEmpty() &&
+                            state.cards.map { it.name } == listOf("Safe Stats Retrieval")
+                    },
+                )
+                verify(exactly = 1) {
+                    FeatureDiagnostics.record(
+                        area = DiagnosticArea.LIBRARY_FILTER,
+                        name = DiagnosticEventName.LIBRARY_FILTER,
+                        outcome = DiagnosticOutcome.FAILED,
+                        durationMs = null,
+                        attributes = mapOf(
+                            DiagnosticAttribute.OPERATION to "REFRESH",
+                            DiagnosticAttribute.ERROR_TYPE to "LibraryStatsRefreshUnavailable",
+                        ),
+                    )
+                }
+                viewModelStore.clear()
+                viewModelStore = ViewModelStore()
+            }
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `independently cancelled refresh clears indicator without diagnostics or merge`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val refreshStarted = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+        val freshDeviceStats = mapOf(GameSource.STEAM to mapOf("Cancelled Device" to stats(1, 60, 1, 60)))
+        val freshGpuStats = mapOf(GameSource.STEAM to mapOf("Cancelled GPU" to stats(2, 60, 2, 60)))
+        mockkObject(FeatureDiagnostics)
+        every { FeatureDiagnostics.record(any(), any(), any(), any(), any()) } just runs
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(listOf(card(name = "Safe Before Refresh Cancel")))),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { state -> state.cards.map { it.name } == listOf("Safe Before Refresh Cancel") }
+            stubSuccessfulRefreshPipeline(freshDeviceStats, freshGpuStats)
+            coEvery { SteamService.refreshOwnedGamesFromServer() } coAnswers {
+                refreshStarted.complete(Unit)
+                releaseRefresh.await()
+                0
+            }
+            clearMocks(FeatureDiagnostics, answers = false)
+
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue("refresh did not start before independent cancellation", refreshStarted.isCompleted)
+            cancelJobField(vm, "refreshJob")
+            releaseRefresh.complete(Unit)
+            assertTrue(
+                "cancelled refresh left indicator active or merged stats",
+                awaitCondition(timeoutMs = 2_000L) {
+                    scheduler.runCurrent()
+                    val state = vm.state.value
+                    !state.isRefreshing &&
+                        state.deviceGameStats.isEmpty() &&
+                        state.gpuGameStats.isEmpty() &&
+                        state.cards.map { it.name } == listOf("Safe Before Refresh Cancel")
+                },
+            )
+            verify(exactly = 0) {
+                FeatureDiagnostics.record(
+                    area = any(),
+                    name = any(),
+                    outcome = DiagnosticOutcome.FAILED,
+                    durationMs = any(),
+                    attributes = any(),
+                )
+            }
+        } finally {
+            releaseRefresh.complete(Unit)
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `view model shutdown clears authoritative refresh indicator`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val refreshStarted = CompletableDeferred<Unit>()
+        val releaseRefresh = CompletableDeferred<Unit>()
+
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(listOf(card(name = "Safe Before Shutdown")))),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            awaitState { state -> state.cards.map { it.name } == listOf("Safe Before Shutdown") }
+            coEvery { SteamService.refreshOwnedGamesFromServer() } coAnswers {
+                refreshStarted.complete(Unit)
+                releaseRefresh.await()
+                0
+            }
+
+            vm.onRefresh()
+            scheduler.runCurrent()
+            assertTrue("refresh did not start before view model shutdown", refreshStarted.isCompleted)
+            viewModelStore.clear()
+            releaseRefresh.complete(Unit)
+            assertTrue(
+                "parent cancellation left refresh indicator active",
+                awaitCondition(timeoutMs = 2_000L) {
+                    scheduler.runCurrent()
+                    !vm.state.value.isRefreshing
+                },
+            )
+        } finally {
+            releaseRefresh.complete(Unit)
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
     fun `older refresh cannot clear or overwrite a newer refresh`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
         val firstRefreshStarted = CompletableDeferred<Unit>()
@@ -2120,6 +2448,39 @@ class CanonicalLibraryViewModelTest {
         }
     }
 
+    private fun stubSuccessfulRefreshPipeline(
+        deviceStats: Map<GameSource, Map<String, DeviceGameStats>>,
+        gpuStats: Map<GameSource, Map<String, DeviceGameStats>>,
+    ) {
+        every { GameCompatibilityCache.clear() } just runs
+        every { DeviceGameStatsCache.clear() } just runs
+        every { GpuGameStatsCache.clear() } just runs
+        coEvery { SteamService.refreshOwnedGamesFromServer() } returns 0
+        every { GOGService.hasStoredCredentials(any()) } returns false
+        every { GOGService.triggerLibrarySync(any()) } just runs
+        every { AmazonService.hasStoredCredentials(any()) } returns false
+        every { AmazonService.triggerLibrarySync(any()) } just runs
+        coEvery { DeviceGameStatsCache.refreshIfStale(any(), any(), any()) } returns true
+        coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } returns true
+        every { DeviceGameStatsCache.getAll() } returns deviceStats
+        every { GpuGameStatsCache.getAll() } returns gpuStats
+    }
+
+    private enum class RefreshFailureBoundary {
+        COMPATIBILITY_CLEAR,
+        DEVICE_CLEAR,
+        GPU_CLEAR,
+        STEAM_SYNC,
+        GOG_CREDENTIALS,
+        GOG_SYNC,
+        AMAZON_CREDENTIALS,
+        AMAZON_SYNC,
+        DEVICE_REFRESH,
+        GPU_REFRESH,
+        DEVICE_READ,
+        GPU_READ,
+    }
+
     private fun project(
         cards: List<CanonicalLibraryCard>,
         state: LibraryState,
@@ -2309,6 +2670,15 @@ class CanonicalLibraryViewModelTest {
         )
         method.isAccessible = true
         return method.invoke(vm, 0, state) as Job
+    }
+
+    private fun setLazyStringField(vm: LibraryViewModel, name: String, value: String) {
+        val delegateField = LibraryViewModel::class.java.getDeclaredField("${name}\$delegate")
+        delegateField.isAccessible = true
+        val delegate = delegateField.get(vm)
+        val valueField = delegate.javaClass.getDeclaredField("_value")
+        valueField.isAccessible = true
+        valueField.set(delegate, value)
     }
 
     private fun cancelJobField(vm: LibraryViewModel, name: String) {

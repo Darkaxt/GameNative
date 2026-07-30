@@ -408,6 +408,7 @@ private class InvalidCanonicalCardList(
 
 private class CanonicalAssemblyFailure : IllegalStateException()
 private class CanonicalCollectionStopped : CancellationException()
+private class LibraryStatsRefreshUnavailable : IllegalStateException()
 
 private sealed interface LibraryRenderMode {
     data class Legacy(val failure: CanonicalPublicFailure?) : LibraryRenderMode
@@ -500,6 +501,7 @@ class LibraryViewModel @Inject constructor(
     private val renderGeneration = AtomicLong(0L)
     private val filterInputRevision = AtomicLong(0L)
     private val refreshEpoch = AtomicLong(0L)
+    private var refreshJob: Job? = null
     @Volatile private var activeRenderToken: LibraryRenderToken? = null
     @Volatile private var latestPublishedToken: LibraryRenderToken? = null
     private var renderJob: Job? = null
@@ -743,6 +745,7 @@ class LibraryViewModel @Inject constructor(
         val jobsToCancel = synchronized(renderLock) {
             canonicalCollectorEpoch += 1L
             val jobs = listOfNotNull(
+                refreshJob,
                 renderJob,
                 legacyPhysicalJob,
                 legacyRetryJob,
@@ -928,67 +931,104 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun onRefresh() {
-        val currentRefreshEpoch = refreshEpoch.incrementAndGet()
-        val initialRequest = supersedeRenderForPendingInput(
-            paginationPageLocked = { 0 },
-            transformState = { current -> current.copy(isRefreshing = true) },
-        )
-        viewModelScope.launch {
-            // Clear compatibility cache on manual refresh to get fresh data
-            GameCompatibilityCache.clear()
-            DeviceGameStatsCache.clear()
-            GpuGameStatsCache.clear()
-
-            try {
-                val newApps = SteamService.refreshOwnedGamesFromServer()
-                if (newApps > 0) {
-                    Timber.tag("LibraryViewModel").i("Queued $newApps newly owned games for PICS sync")
-                } else {
-                    Timber.tag("LibraryViewModel").d("No newly owned games discovered during refresh")
-                }
-                if (app.gamenative.service.gog.GOGService.hasStoredCredentials(context)) {
-                    Timber.tag("LibraryViewModel").i("Triggering GOG library refresh")
-                    app.gamenative.service.gog.GOGService.triggerLibrarySync(context)
-                }
-                if (AmazonService.hasStoredCredentials(context)) {
-                    Timber.tag("LibraryViewModel").i("Triggering Amazon library refresh")
-                    AmazonService.triggerLibrarySync(context)
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Exception) {
-                Timber.tag("LibraryViewModel").e(error, "Failed to refresh owned games from server")
-            }
-
-            onFilterApps(initialRequest).join()
-            if (gpuName != "Unknown GPU") {
-                DeviceGameStatsCache.refreshIfStale(
-                    deviceModel = HardwareUtils.getMachineName(),
-                    gpuName = gpuName,
-                    modernBuild = BuildConfig.MODERN_ANDROID,
-                )
-                GpuGameStatsCache.refreshIfStale(
-                    gpuName = gpuName,
-                    modernBuild = BuildConfig.MODERN_ANDROID,
-                )
-            }
-            val freshDeviceStats = DeviceGameStatsCache.getAll()
-            val freshGpuStats = GpuGameStatsCache.getAll()
-            val completionRequest = supersedeRenderForPendingInputInternal(
-                expectedInputRevision = null,
-                expectedPublishedToken = null,
-                paginationPageLocked = { paginationCurrentPage },
-                updateInputLocked = {},
-                transformState = { current ->
-                    current.copy(
-                        isRefreshing = false,
-                        deviceGameStats = freshDeviceStats,
-                        gpuGameStats = freshGpuStats,
-                    )
-                },
-                expectedRefreshEpoch = currentRefreshEpoch,
+        val jobToStart = synchronized(renderLock) {
+            val currentRefreshEpoch = refreshEpoch.incrementAndGet()
+            val initialRequest = supersedeRenderForPendingInput(
+                paginationPageLocked = { 0 },
+                transformState = { current -> current.copy(isRefreshing = true) },
             )
-            completionRequest?.let(::onFilterApps)
+            lateinit var job: Job
+            job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    GameCompatibilityCache.clear()
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    DeviceGameStatsCache.clear()
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    GpuGameStatsCache.clear()
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+
+                    val newApps = SteamService.refreshOwnedGamesFromServer()
+                    if (newApps > 0) {
+                        Timber.tag("LibraryViewModel").i("Queued $newApps newly owned games for PICS sync")
+                    } else {
+                        Timber.tag("LibraryViewModel").d("No newly owned games discovered during refresh")
+                    }
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    if (GOGService.hasStoredCredentials(context)) {
+                        Timber.tag("LibraryViewModel").i("Triggering GOG library refresh")
+                        GOGService.triggerLibrarySync(context)
+                    }
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    if (AmazonService.hasStoredCredentials(context)) {
+                        Timber.tag("LibraryViewModel").i("Triggering Amazon library refresh")
+                        AmazonService.triggerLibrarySync(context)
+                    }
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+
+                    onFilterApps(initialRequest).join()
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    if (gpuName != "Unknown GPU") {
+                        val deviceStatsAvailable = DeviceGameStatsCache.refreshIfStale(
+                            deviceModel = HardwareUtils.getMachineName(),
+                            gpuName = gpuName,
+                            modernBuild = BuildConfig.MODERN_ANDROID,
+                        )
+                        if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                        if (!deviceStatsAvailable) throw LibraryStatsRefreshUnavailable()
+                        val gpuStatsAvailable = GpuGameStatsCache.refreshIfStale(
+                            gpuName = gpuName,
+                            modernBuild = BuildConfig.MODERN_ANDROID,
+                        )
+                        if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                        if (!gpuStatsAvailable) throw LibraryStatsRefreshUnavailable()
+                    }
+                    val freshDeviceStats = DeviceGameStatsCache.getAll()
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    val freshGpuStats = GpuGameStatsCache.getAll()
+                    if (!isRefreshAuthoritative(currentRefreshEpoch)) return@launch
+                    val completionRequest = supersedeRenderForPendingInputInternal(
+                        expectedInputRevision = null,
+                        expectedPublishedToken = null,
+                        paginationPageLocked = { latestRequestedPaginationPageLocked() },
+                        updateInputLocked = {},
+                        transformState = { current ->
+                            current.copy(
+                                deviceGameStats = freshDeviceStats,
+                                gpuGameStats = freshGpuStats,
+                            )
+                        },
+                        expectedRefreshEpoch = currentRefreshEpoch,
+                    )
+                    completionRequest?.let(::onFilterApps)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    recordRefreshFailure(error)
+                } finally {
+                    finishRefresh(currentRefreshEpoch, job)
+                }
+            }
+            refreshJob = job
+            job
+        }
+        jobToStart.start()
+    }
+
+    private fun isRefreshAuthoritative(expectedRefreshEpoch: Long): Boolean =
+        refreshEpoch.get() == expectedRefreshEpoch
+
+    private fun latestRequestedPaginationPageLocked(): Int =
+        activeRenderToken?.paginationPage
+            ?: latestPublishedToken?.paginationPage
+            ?: paginationCurrentPage
+
+    private fun finishRefresh(expectedRefreshEpoch: Long, job: Job) {
+        synchronized(renderLock) {
+            if (refreshJob === job) refreshJob = null
+            if (refreshEpoch.get() == expectedRefreshEpoch) {
+                _state.update { current -> current.copy(isRefreshing = false) }
+            }
         }
     }
 
@@ -1906,6 +1946,18 @@ class LibraryViewModel @Inject constructor(
         }
         previousRender?.cancel()
         return request
+    }
+
+    private fun recordRefreshFailure(error: Exception) {
+        FeatureDiagnostics.record(
+            area = DiagnosticArea.LIBRARY_FILTER,
+            name = DiagnosticEventName.LIBRARY_FILTER,
+            outcome = DiagnosticOutcome.FAILED,
+            attributes = mapOf(
+                DiagnosticAttribute.OPERATION to "REFRESH",
+                DiagnosticAttribute.ERROR_TYPE to error.javaClass.simpleName,
+            ),
+        )
     }
 
     private fun recordRenderFailure(error: Throwable) {
