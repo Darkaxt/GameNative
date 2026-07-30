@@ -25,6 +25,21 @@ interface StoreMatchDao {
     @Query(
         """
         SELECT * FROM store_match
+        WHERE account_scope = :accountScope
+          AND source = :source
+          AND stable_source_id = :stableSourceId
+          AND is_present = 1
+        """,
+    )
+    suspend fun getPresent(
+        accountScope: String,
+        source: GameSource,
+        stableSourceId: String,
+    ): StoreMatchEntity?
+
+    @Query(
+        """
+        SELECT * FROM store_match
         WHERE canonical_id = :canonicalId
         ORDER BY account_scope, source, stable_source_id
         """,

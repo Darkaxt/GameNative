@@ -1132,6 +1132,12 @@ class CanonicalGameResolverTest {
             stableSourceId: String,
         ): StoreMatchEntity? = rows[Key(accountScope, source, stableSourceId)]
 
+        override suspend fun getPresent(
+            accountScope: String,
+            source: GameSource,
+            stableSourceId: String,
+        ): StoreMatchEntity? = get(accountScope, source, stableSourceId)?.takeIf { it.isPresent }
+
         override suspend fun getByCanonicalId(canonicalId: String): List<StoreMatchEntity> =
             error("Resolver must not load canonical reference groups")
 
