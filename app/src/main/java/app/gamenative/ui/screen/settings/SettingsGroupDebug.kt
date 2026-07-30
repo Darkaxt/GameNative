@@ -89,6 +89,9 @@ fun SettingsGroupDebug() {
     var enableWineDebugPref by rememberSaveable {
         mutableStateOf(if (isPreview) false else PrefManager.enableWineDebug)
     }
+    var enableCanonicalPublicLibrary by rememberSaveable {
+        mutableStateOf(if (isPreview) false else PrefManager.canonicalPublicLibraryEnabled)
+    }
     var enableBox86Logs by rememberSaveable { mutableStateOf(
         if (isPreview) false else WinlatorPrefManager.getBoolean("enable_box86_64_logs", false)
     ) }
@@ -229,6 +232,18 @@ fun SettingsGroupDebug() {
                         R.string.settings_debug_feature_diagnostics_clear_failed
                     }
                     SnackbarManager.show(context.getString(message))
+                }
+            },
+        )
+        SettingsSwitch(
+            colors = settingsTileColorsAlt(),
+            state = enableCanonicalPublicLibrary,
+            title = { Text(text = stringResource(R.string.settings_debug_canonical_library_title)) },
+            subtitle = { Text(text = stringResource(R.string.settings_debug_canonical_library_subtitle)) },
+            onCheckedChange = {
+                enableCanonicalPublicLibrary = it
+                if (!isPreview) {
+                    PrefManager.canonicalPublicLibraryEnabled = it
                 }
             },
         )

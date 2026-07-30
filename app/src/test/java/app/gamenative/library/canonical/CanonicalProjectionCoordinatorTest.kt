@@ -138,22 +138,57 @@ class CanonicalProjectionCoordinatorTest {
     }
 
     @Test
-    fun `runner failure is recorded and later invalidation retries`() = runTest {
+    fun `readiness flips only after rebuild success and remains sticky`() = runTest {
         val adapter = FakeAdapter(completeBatch(GameSource.STEAM))
         val runner = RecordingRunner(failuresRemaining = 1)
         val diagnostics = RecordingDiagnostics()
-        val coordinator = coordinator(listOf(adapter), runner, diagnostics)
+        val readiness = CanonicalProjectionReadiness()
+        val coordinator = coordinator(
+            adapters = listOf(adapter),
+            runner = runner,
+            diagnostics = diagnostics,
+            readiness = readiness,
+        )
 
+        assertFalse(readiness.isReady.value)
         val job = coordinator.start(backgroundScope)
         runCurrent()
+        assertFalse(readiness.isReady.value)
         assertEquals(1, runner.batches.size)
         assertEquals(listOf(IllegalStateException::class), diagnostics.failed.map { it.errorClass })
 
         adapter.invalidate()
         runCurrent()
-
+        assertTrue(readiness.isReady.value)
         assertEquals(2, runner.batches.size)
         assertEquals(1, diagnostics.succeeded.size)
+
+        runner.failuresRemaining = 1
+        adapter.invalidate()
+        runCurrent()
+        assertTrue(readiness.isReady.value)
+        assertEquals(3, runner.batches.size)
+        assertTrue(job.isActive)
+        job.cancel()
+    }
+
+    @Test
+    fun `readiness is marked before successful projection diagnostics`() = runTest {
+        val adapter = FakeAdapter(completeBatch(GameSource.STEAM))
+        val diagnostics = RecordingDiagnostics(failIndexSucceeded = true)
+        val readiness = CanonicalProjectionReadiness()
+        val coordinator = coordinator(
+            adapters = listOf(adapter),
+            runner = RecordingRunner(),
+            diagnostics = diagnostics,
+            readiness = readiness,
+        )
+
+        val job = coordinator.start(backgroundScope)
+        runCurrent()
+
+        assertTrue(readiness.isReady.value)
+        assertEquals(listOf(IllegalStateException::class), diagnostics.failed.map { it.errorClass })
         assertTrue(job.isActive)
         job.cancel()
     }
@@ -361,6 +396,7 @@ class CanonicalProjectionCoordinatorTest {
         diagnostics: CanonicalDiagnosticSink,
         gate: CanonicalProjectionGate = CanonicalProjectionGate { true },
         accountLifecycleState: AccountLifecycleState = InMemoryAccountLifecycleState(),
+        readiness: CanonicalProjectionReadiness = CanonicalProjectionReadiness(),
     ): CanonicalProjectionCoordinator = CanonicalProjectionCoordinator(
         adapters = adapters.toSet(),
         runner = runner,
@@ -368,6 +404,7 @@ class CanonicalProjectionCoordinatorTest {
         gate = gate,
         clock = IncrementingClock(),
         accountLifecycleState = accountLifecycleState,
+        readiness = readiness,
     )
 
     private fun completeBatch(source: GameSource): SourceProjectionBatch = SourceProjectionBatch(
@@ -409,7 +446,7 @@ class CanonicalProjectionCoordinatorTest {
     }
 
     private open class RecordingRunner(
-        private var failuresRemaining: Int = 0,
+        var failuresRemaining: Int = 0,
     ) : CanonicalProjectionRunner {
         val batches = mutableListOf<List<SourceProjectionBatch>>()
 
@@ -450,7 +487,9 @@ class CanonicalProjectionCoordinatorTest {
         override fun nowEpochMs(): Long = now.also { now += 10 }
     }
 
-    private class RecordingDiagnostics : CanonicalDiagnosticSink {
+    private class RecordingDiagnostics(
+        private val failIndexSucceeded: Boolean = false,
+    ) : CanonicalDiagnosticSink {
         var started = 0
         val sources = mutableListOf<SourceCall>()
         val buckets = mutableListOf<Pair<MatchBucket, Int>>()
@@ -497,6 +536,7 @@ class CanonicalProjectionCoordinatorTest {
 
         override fun indexSucceeded(result: CanonicalProjectionResult, durationMs: Long) {
             succeeded += result to durationMs
+            if (failIndexSucceeded) error("private diagnostic failure")
         }
 
         override fun indexFailed(errorClass: KClass<out Throwable>, durationMs: Long) {

@@ -5,6 +5,8 @@ import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.SteamCollection
+import app.gamenative.library.canonical.CanonicalPublicFailure
+import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.utils.DeviceGameStatsService.DeviceGameStats
 import app.gamenative.ui.enums.LibraryTab
@@ -41,6 +43,9 @@ data class LibraryState(
 
     // Loading state for skeleton loaders
     val isLoading: Boolean = false,
+
+    // Fixed recovery reason while canonical cards are unavailable or unsupported.
+    val canonicalPublicFailure: CanonicalPublicFailure? = null,
 
     // Refresh counter that increments when custom game images are fetched
     // Used to trigger UI recomposition to show newly downloaded images
@@ -99,5 +104,18 @@ fun LibraryState.statsFor(source: GameSource, name: String): GameCardStats? {
         reviewsGpu = gpu?.fiveStarReviews ?: 0,
         fps = device?.medianFps,
         sessionSec = device?.medianSessionSec,
+    )
+}
+
+/** Component-wise maximum for the exact source/native-title tuples represented by a card. */
+fun LibraryState.statsFor(copies: List<OwnedCopySummary>): GameCardStats? {
+    val values = copies.mapNotNull { copy -> statsFor(copy.source, copy.nativeTitle) }
+    if (values.isEmpty()) return null
+    return GameCardStats(
+        runsGpu = values.maxOf(GameCardStats::runsGpu),
+        reviewsDevice = values.maxOf(GameCardStats::reviewsDevice),
+        reviewsGpu = values.maxOf(GameCardStats::reviewsGpu),
+        fps = values.mapNotNull(GameCardStats::fps).maxOrNull(),
+        sessionSec = values.mapNotNull(GameCardStats::sessionSec).maxOrNull(),
     )
 }

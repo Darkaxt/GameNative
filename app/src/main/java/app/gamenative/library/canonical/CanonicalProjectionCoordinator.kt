@@ -42,6 +42,7 @@ class CanonicalProjectionCoordinator @Inject constructor(
     private val gate: CanonicalProjectionGate,
     private val clock: CanonicalProjectionClock,
     private val accountLifecycleState: AccountLifecycleState,
+    private val readiness: CanonicalProjectionReadiness,
 ) {
     private val orderedAdapters = adapters.sortedBy { adapter -> sourceRank(adapter.source) }
 
@@ -100,6 +101,7 @@ class CanonicalProjectionCoordinator @Inject constructor(
                 batches = batches,
                 nowEpochMs = clock.nowEpochMs(),
             )
+            readiness.markSucceeded()
             result.matchCounts.entries
                 .sortedWith(
                     compareBy(

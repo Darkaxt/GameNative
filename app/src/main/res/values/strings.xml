@@ -1042,6 +1042,8 @@
     <string name="settings_debug_export_feature_diagnostics_subtitle" translatable="false">Save a privacy-filtered report for library, metadata, and launch troubleshooting</string>
     <string name="settings_debug_clear_feature_diagnostics_title" translatable="false">Clear feature diagnostics</string>
     <string name="settings_debug_clear_feature_diagnostics_subtitle" translatable="false">Delete locally stored feature events</string>
+    <string name="settings_debug_canonical_library_title" translatable="false">Canonical library cards</string>
+    <string name="settings_debug_canonical_library_subtitle" translatable="false">Requires Stage 1 projection. A library restart is required. Disable to restore source-native cards.</string>
     <string name="settings_debug_feature_diagnostics_exported" translatable="false">Diagnostic report saved</string>
     <string name="settings_debug_feature_diagnostics_cleared" translatable="false">Feature diagnostics cleared</string>
     <string name="settings_debug_feature_diagnostics_export_failed" translatable="false">Could not save diagnostic report</string>

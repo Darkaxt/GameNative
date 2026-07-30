@@ -36,6 +36,17 @@ import app.gamenative.diagnostics.DiagnosticAttribute
 import app.gamenative.diagnostics.DiagnosticEventName
 import app.gamenative.diagnostics.DiagnosticOutcome
 import app.gamenative.diagnostics.FeatureDiagnostics
+import app.gamenative.data.canonical.CanonicalAppType
+import app.gamenative.library.canonical.CanonicalCardKey
+import app.gamenative.library.canonical.CanonicalLibraryCard
+import app.gamenative.library.canonical.CanonicalLibraryRepository
+import app.gamenative.library.canonical.CanonicalProjectionReadiness
+import app.gamenative.library.canonical.CanonicalPublicFailure
+import app.gamenative.library.canonical.CanonicalPublicLibraryGate
+import app.gamenative.library.canonical.OwnedCopySummary
+import app.gamenative.library.canonical.runtime.CanonicalIoDispatcher
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
+import app.gamenative.library.canonical.stableComposeKey
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonArtwork
@@ -43,6 +54,7 @@ import app.gamenative.service.amazon.AmazonService
 import app.gamenative.service.epic.EpicService
 import app.gamenative.service.gog.GOGService
 import app.gamenative.steam.SteamCollectionFilter
+import app.gamenative.ui.data.GameCardStats
 import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.data.statsFor
@@ -65,12 +77,13 @@ import com.winlator.core.GPUInformation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.Collections
 import java.util.EnumSet
 import javax.inject.Inject
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -87,6 +100,297 @@ import timber.log.Timber
 private const val PLAYABLE_FPS_THRESHOLD = 30
 private const val PROVEN_RUNS_THRESHOLD = 5
 
+internal data class CanonicalLibraryPage(
+    val cards: List<LibraryCard>,
+    val totalCount: Int,
+    val paginationPage: Int,
+    val lastPage: Int,
+    val allCount: Int,
+    val sourceCounts: Map<GameSource, Int>,
+    val steamCollectionCounts: Map<String, Int>,
+    val compatibilityRequestNames: List<String>,
+)
+
+internal object CanonicalLibraryCardValidator {
+    fun failureOrNull(cards: List<CanonicalLibraryCard>): CanonicalPublicFailure? {
+        if (cards.map(CanonicalLibraryCard::key).toSet().size != cards.size) {
+            return CanonicalPublicFailure.INVALID_CARD_STATE
+        }
+        cards.forEach { card ->
+            if (card.copies.isEmpty()) return CanonicalPublicFailure.INVALID_CARD_STATE
+            if (card.copies.map(OwnedCopySummary::key).toSet().size != card.copies.size) {
+                return CanonicalPublicFailure.INVALID_CARD_STATE
+            }
+            if (card.copies.any { copy -> copy.source != copy.key.source }) {
+                return CanonicalPublicFailure.INVALID_CARD_STATE
+            }
+            if (card.ownedSources != card.copies.mapTo(linkedSetOf(), OwnedCopySummary::source)) {
+                return CanonicalPublicFailure.INVALID_CARD_STATE
+            }
+            when (val key = card.key) {
+                is CanonicalCardKey.Grouped -> if (key.canonicalId != card.canonicalId) {
+                    return CanonicalPublicFailure.INVALID_CARD_STATE
+                }
+                is CanonicalCardKey.Independent -> if (
+                    card.copies.size != 1 || card.copies.single().key != key.copyKey
+                ) {
+                    return CanonicalPublicFailure.INVALID_CARD_STATE
+                }
+            }
+        }
+        return null
+    }
+}
+
+internal fun canonicalUnsupportedFailure(state: LibraryState): CanonicalPublicFailure? =
+    if (state.currentTab == LibraryTab.RECOMMENDED || state.appInfoSortType.contains(AppFilter.EXPIRED)) {
+        CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT
+    } else {
+        null
+    }
+
+internal object CanonicalCompatibilityLookup {
+    fun resolve(
+        card: CanonicalLibraryCard,
+        state: LibraryState,
+        cachedStatus: (String) -> GameCompatibilityStatus?,
+    ): GameCompatibilityStatus? {
+        state.compatibilityMap[card.displayName]?.let { return it }
+        cachedStatus(card.displayName)?.let { return it }
+        return card.aliases.asSequence()
+            .filter(String::isNotBlank)
+            .filterNot { alias -> alias.equals(card.displayName, ignoreCase = true) }
+            .sortedWith(compareBy<String> { it.lowercase() }.thenBy { it })
+            .firstNotNullOfOrNull { alias -> state.compatibilityMap[alias] ?: cachedStatus(alias) }
+    }
+}
+
+internal object CanonicalLibraryFilter {
+    fun project(
+        cards: List<CanonicalLibraryCard>,
+        state: LibraryState,
+        paginationPage: Int,
+        pageSize: Int,
+        promotion: LibraryItem?,
+        showRecommendations: Boolean,
+        compatibility: (CanonicalLibraryCard) -> GameCompatibilityStatus?,
+    ): CanonicalLibraryPage {
+        require(pageSize > 0)
+        val appTypes = buildSet {
+            if (state.appInfoSortType.contains(AppFilter.GAME)) add(CanonicalAppType.GAME)
+            if (state.appInfoSortType.contains(AppFilter.APPLICATION)) add(CanonicalAppType.APPLICATION)
+            if (state.appInfoSortType.contains(AppFilter.TOOL)) add(CanonicalAppType.TOOL)
+            if (state.appInfoSortType.contains(AppFilter.DEMO)) add(CanonicalAppType.DEMO)
+        }
+        val installedOnly = state.currentTab.installedOnly ||
+            state.appInfoSortType.contains(AppFilter.INSTALLED)
+        val includeShared = state.appInfoSortType.contains(AppFilter.SHARED)
+
+        val beforeCollections = cards.asSequence()
+            .filter { card -> card.appType in appTypes }
+            .filter { card ->
+                state.searchQuery.isEmpty() || sequenceOf(card.displayName)
+                    .plus(card.aliases.asSequence().filter(String::isNotBlank))
+                    .any { name -> canonicalNameMatches(name, state.searchQuery) }
+            }
+            .filter { card -> !installedOnly || card.copies.any(OwnedCopySummary::isInstalled) }
+            .filter { card -> includeShared || card.copies.any { copy -> !copy.isShared } }
+            .map { card ->
+                CanonicalEntry(
+                    card = card,
+                    compatibility = compatibility(card),
+                    stats = state.statsFor(card.copies),
+                    sizeBytes = sizeBytes(card),
+                )
+            }
+            .filter { entry -> passesCompatibility(state, entry.compatibility) }
+            .filter { entry -> passesStats(state, entry.stats) }
+            .toList()
+
+        val steamCollectionCounts = state.steamCollections?.associate { collection ->
+            collection.id to beforeCollections.count { entry ->
+                entry.card.steamCollectionAppIds.any(collection.appIds::contains)
+            }
+        }.orEmpty()
+        val allowedSteamAppIds = SteamCollectionFilter.allowedAppIds(
+            selectedIds = state.selectedSteamCollectionIds,
+            collections = state.steamCollections,
+        )
+        val afterCollections = if (allowedSteamAppIds == null) {
+            beforeCollections
+        } else {
+            beforeCollections.filter { entry ->
+                entry.card.steamCollectionAppIds.any(allowedSteamAppIds::contains)
+            }
+        }
+
+        val sourceCounts = LibraryCard.OWNED_SOURCE_ORDER.associateWith { source ->
+            afterCollections.count { entry -> source in entry.card.ownedSources }
+        }
+        val allCount = afterCollections.count { entry -> ownsEnabledSource(entry.card, state) }
+        val admitted = afterCollections.filter { entry -> admitted(entry.card, state) }
+        val sorted = admitted.sortedWith(comparator(state.currentSortOption))
+        val totalCount = sorted.size
+        val lastPage = if (totalCount == 0) 0 else (totalCount - 1) / pageSize
+        val safePage = paginationPage.coerceIn(0, lastPage)
+        val endIndex = min((safePage + 1) * pageSize, totalCount)
+        val indexed = sorted.mapIndexed { index, entry -> IndexedCanonicalEntry(index, entry) }
+            .take(endIndex)
+        val compatibilityRequestNames = indexed.map { it.entry.card.displayName }
+        var displayCards = indexed.map { indexedEntry ->
+            val entry = indexedEntry.entry
+            val card = entry.card
+            LibraryCard.canonical(
+                key = card.key,
+                index = indexedEntry.index,
+                name = card.displayName,
+                iconUrl = card.iconUrl,
+                capsuleImageUrl = card.capsuleImageUrl,
+                headerImageUrl = card.headerImageUrl,
+                heroImageUrl = card.heroImageUrl,
+                gridHeroImageScale = card.gridHeroImageScale,
+                ownedSources = card.ownedSources,
+                compatibilityStatus = entry.compatibility,
+                gameStats = entry.stats,
+                sizeBytes = entry.sizeBytes ?: 0L,
+                isInstalled = card.copies.any(OwnedCopySummary::isInstalled),
+                isShared = card.copies.any(OwnedCopySummary::isShared),
+            )
+        }
+        if (
+            showRecommendations &&
+            state.currentTab == LibraryTab.ALL &&
+            state.searchQuery.isEmpty() &&
+            promotion != null
+        ) {
+            val promotionCard = LibraryCard.fromPromotion(
+                item = promotion,
+                compatibilityStatus = state.compatibilityMap[promotion.name],
+                gameStats = state.statsFor(promotion),
+            )
+            displayCards = listOf(promotionCard) + displayCards.map { card ->
+                card.copy(index = card.index + 1)
+            }
+        }
+        return CanonicalLibraryPage(
+            cards = immutableList(displayCards),
+            totalCount = totalCount,
+            paginationPage = safePage,
+            lastPage = lastPage,
+            allCount = allCount,
+            sourceCounts = sourceCounts,
+            steamCollectionCounts = steamCollectionCounts,
+            compatibilityRequestNames = immutableList(compatibilityRequestNames),
+        )
+    }
+
+    private fun passesCompatibility(
+        state: LibraryState,
+        status: GameCompatibilityStatus?,
+    ): Boolean {
+        if (!state.appInfoSortType.contains(AppFilter.COMPATIBLE)) return true
+        return status == null ||
+            status == GameCompatibilityStatus.COMPATIBLE ||
+            status == GameCompatibilityStatus.GPU_COMPATIBLE
+    }
+
+    private fun passesStats(state: LibraryState, stats: GameCardStats?): Boolean {
+        val filters = state.appInfoSortType
+        if (filters.contains(AppFilter.PLAYABLE) && (stats?.fps ?: 0) < PLAYABLE_FPS_THRESHOLD) return false
+        if (filters.contains(AppFilter.FIVE_STAR) && (stats?.reviewsDevice ?: 0) < 1) return false
+        if (filters.contains(AppFilter.FIVE_STAR_GPU) && (stats?.reviewsGpu ?: 0) < 1) return false
+        if (filters.contains(AppFilter.PROVEN_GPU) && (stats?.runsGpu ?: 0) < PROVEN_RUNS_THRESHOLD) return false
+        return true
+    }
+
+    private fun ownsEnabledSource(card: CanonicalLibraryCard, state: LibraryState): Boolean =
+        (state.showSteamInLibrary && GameSource.STEAM in card.ownedSources) ||
+            (state.showGOGInLibrary && GameSource.GOG in card.ownedSources) ||
+            (state.showEpicInLibrary && GameSource.EPIC in card.ownedSources) ||
+            (state.showAmazonInLibrary && GameSource.AMAZON in card.ownedSources) ||
+            (state.showCustomGamesInLibrary && GameSource.CUSTOM_GAME in card.ownedSources)
+
+    private fun admitted(card: CanonicalLibraryCard, state: LibraryState): Boolean = when (state.currentTab) {
+        LibraryTab.ALL -> ownsEnabledSource(card, state)
+        LibraryTab.STEAM -> GameSource.STEAM in card.ownedSources
+        LibraryTab.GOG -> GameSource.GOG in card.ownedSources
+        LibraryTab.EPIC -> GameSource.EPIC in card.ownedSources
+        LibraryTab.AMAZON -> GameSource.AMAZON in card.ownedSources
+        LibraryTab.LOCAL -> GameSource.CUSTOM_GAME in card.ownedSources
+        LibraryTab.RECOMMENDED -> false
+    }
+
+    private fun comparator(sort: SortOption): Comparator<CanonicalEntry> {
+        val name = compareBy<CanonicalEntry> { it.card.displayName.lowercase() }
+            .thenBy { it.card.displayName }
+            .thenBy { it.card.key.stableComposeKey() }
+        return when (sort) {
+            SortOption.INSTALLED_FIRST -> compareBy<CanonicalEntry> {
+                if (it.card.copies.any(OwnedCopySummary::isInstalled)) 0 else 1
+            }.then(name)
+            SortOption.NAME_ASC -> name
+            SortOption.NAME_DESC -> compareByDescending<CanonicalEntry> { it.card.displayName.lowercase() }
+                .thenByDescending { it.card.displayName }
+                .thenBy { it.card.key.stableComposeKey() }
+            SortOption.RECENTLY_PLAYED -> compareBy<CanonicalEntry> {
+                if (it.card.copies.any(OwnedCopySummary::isInstalled)) 0 else 1
+            }.thenByDescending { it.card.copies.mapNotNull(OwnedCopySummary::lastPlayedEpochMs).maxOrNull() ?: 0L }
+                .then(name)
+            SortOption.SIZE_SMALLEST -> compareBy<CanonicalEntry> { it.sizeBytes == null }
+                .thenBy { it.sizeBytes ?: Long.MAX_VALUE }
+                .then(name)
+            SortOption.SIZE_LARGEST -> compareBy<CanonicalEntry> { it.sizeBytes == null }
+                .thenByDescending { it.sizeBytes ?: Long.MIN_VALUE }
+                .then(name)
+            SortOption.FPS_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.fps ?: -1 }.then(name)
+            SortOption.RUNS_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.runsGpu ?: -1 }.then(name)
+            SortOption.REVIEWS_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.reviewsDevice ?: -1 }.then(name)
+            SortOption.REVIEWS_GPU_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.reviewsGpu ?: -1 }.then(name)
+        }
+    }
+
+    private fun sizeBytes(card: CanonicalLibraryCard): Long? {
+        val preferred = card.preferredCopy
+            ?.let { key -> card.copies.singleOrNull { copy -> copy.key == key } }
+            ?.installedSizeBytes
+            ?.takeIf { it >= 0L }
+        if (preferred != null) return preferred
+        return card.copies.singleOrNull(OwnedCopySummary::isInstalled)
+            ?.installedSizeBytes
+            ?.takeIf { it >= 0L }
+    }
+
+    private data class CanonicalEntry(
+        val card: CanonicalLibraryCard,
+        val compatibility: GameCompatibilityStatus?,
+        val stats: GameCardStats?,
+        val sizeBytes: Long?,
+    )
+
+    private data class IndexedCanonicalEntry(
+        val index: Int,
+        val entry: CanonicalEntry,
+    )
+
+    private fun <T> immutableList(values: Collection<T>): List<T> =
+        if (values.isEmpty()) emptyList()
+        else Collections.unmodifiableList(ArrayList(values))
+}
+
+private fun canonicalNameMatches(name: String, searchQuery: String): Boolean =
+    name.contains(searchQuery, ignoreCase = true) ||
+        name.unaccent().contains(searchQuery, ignoreCase = true)
+
+private class InvalidCanonicalCardList(
+    val failure: CanonicalPublicFailure,
+) : IllegalStateException()
+
+private class CanonicalAssemblyFailure : IllegalStateException()
+private class CanonicalCollectionStopped : CancellationException()
+
+private const val MIN_CANONICAL_RETRY_DELAY_MS = 1_000L
+private const val MAX_CANONICAL_RETRY_DELAY_MS = 60_000L
+
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val libraryPlayHistoryDao: LibraryPlayHistoryDao,
@@ -95,6 +399,11 @@ class LibraryViewModel @Inject constructor(
     private val epicGameDao: EpicGameDao,
     private val amazonGameDao: AmazonGameDao,
     @ApplicationContext private val context: Context,
+    private val canonicalLibraryRepository: CanonicalLibraryRepository,
+    private val canonicalPublicLibraryGate: CanonicalPublicLibraryGate,
+    private val canonicalProjectionReadiness: CanonicalProjectionReadiness,
+    private val runtimeRegistry: OwnedCopyRuntimeRegistry,
+    @CanonicalIoDispatcher private val canonicalDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryState(isLoading = true))
@@ -103,11 +412,13 @@ class LibraryViewModel @Inject constructor(
     // Keep the library scroll state. This will last longer as the VM will stay alive.
     var listState: LazyGridState by mutableStateOf(LazyGridState(0, 0))
 
-    private val onInstallStatusChanged: (AndroidEvent.LibraryInstallStatusChanged) -> Unit = {
+    private val onInstallStatusChanged: (AndroidEvent.LibraryInstallStatusChanged) -> Unit = { event ->
+        runtimeRegistry.notifyVolatileStateChanged(event.source)
         onFilterApps(paginationCurrentPage)
     }
 
     private val onCustomGameImagesFetched: (AndroidEvent.CustomGameImagesFetched) -> Unit = {
+        runtimeRegistry.notifyVolatileStateChanged(GameSource.CUSTOM_GAME)
         // Increment refresh counter and refresh the library list to pick up newly fetched images
         _state.update { it.copy(imageRefreshCounter = it.imageRefreshCounter + 1) }
         onFilterApps(paginationCurrentPage)
@@ -120,6 +431,9 @@ class LibraryViewModel @Inject constructor(
     // How many items loaded on one page of results
     @Volatile private var paginationCurrentPage: Int = 0
     @Volatile private var lastPageInCurrentFilter: Int = 0
+    @Volatile private var latestCanonicalCards: List<CanonicalLibraryCard>? = null
+    @Volatile private var canonicalCollectionHealthy: Boolean = false
+    private var canonicalCollectionJob: Job? = null
 
     // Complete and unfiltered app list
     private var appList: List<SteamApp> = emptyList()
@@ -152,14 +466,23 @@ class LibraryViewModel @Inject constructor(
                 Timber.tag("LibraryViewModel").d("Retrieved GPU name: $gpu")
                 gpu
             }
-        } catch (e: Exception) {
-            Timber.tag("LibraryViewModel").e(e, "Failed to get GPU name")
+        } catch (error: Throwable) {
+            if (error !is Exception && error !is LinkageError) throw error
+            Timber.tag("LibraryViewModel").e(error, "Failed to get GPU name")
             "Unknown GPU"
         }
     }
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
+            canonicalProjectionReadiness.isReady.collect {
+                if (canonicalPublicLibraryGate.isEnabled()) {
+                    onFilterApps(paginationCurrentPage)
+                }
+            }
+        }
+
+        viewModelScope.launch(canonicalDispatcher) {
             if (gpuName != "Unknown GPU") {
                 DeviceGameStatsCache.refreshIfStale(
                     deviceModel = HardwareUtils.getMachineName(),
@@ -184,7 +507,7 @@ class LibraryViewModel @Inject constructor(
         }
 
         @OptIn(ExperimentalCoroutinesApi::class)
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             // Re-create the underlying DAO Flow whenever the EXPIRED filter is toggled,
             // so apps with Expired or missing licenses are surfaced/hidden accordingly.
             _state
@@ -203,7 +526,7 @@ class LibraryViewModel @Inject constructor(
                 }
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             libraryPlayHistoryDao.getAll().collect { entries ->
                 val playHistory = entries.associate { it.appId to it.lastPlayed }
                 if (playHistoryByAppId != playHistory) {
@@ -214,7 +537,7 @@ class LibraryViewModel @Inject constructor(
         }
 
         // Collect GOG games
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             gogGameDao.getAll().collect { games ->
                 Timber.tag("LibraryViewModel").d("Collecting ${games.size} GOG games")
                 // Check if the list has actually changed before triggering a re-filter
@@ -225,7 +548,7 @@ class LibraryViewModel @Inject constructor(
             }
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             epicGameDao.getAll().collect { games ->
                 Timber.tag("LibraryViewModel").d("Collecting ${games.size} Epic games")
 
@@ -238,7 +561,7 @@ class LibraryViewModel @Inject constructor(
             }
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             amazonGameDao.getAll().collect { games ->
                 Timber.tag("LibraryViewModel").d("Collecting ${games.size} Amazon games")
                 val hasChanges = amazonGameList.size != games.size || amazonGameList != games
@@ -251,7 +574,7 @@ class LibraryViewModel @Inject constructor(
 
         // Load any cached collections immediately, then observe live updates.
         SteamCollectionRepository.loadFromCache()
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             SteamCollectionRepository.collections.collect { collections ->
                 steamCollections = collections
                 // Reconcile the persisted selection against freshly-loaded collections.
@@ -272,7 +595,7 @@ class LibraryViewModel @Inject constructor(
                 onFilterApps(paginationCurrentPage)
             }
         }
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             SteamCollectionRepository.skippedDynamic.collect { skipped ->
                 _state.update { it.copy(skippedDynamicCollections = skipped) }
             }
@@ -286,7 +609,7 @@ class LibraryViewModel @Inject constructor(
     }
 
     private fun refreshRecommendationHero() {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             val hero = RecommendationRepository.getHero(context)
             cachedFeatured = hero.featured
             cachedRecommendation = when {
@@ -313,6 +636,7 @@ class LibraryViewModel @Inject constructor(
 
     override fun onCleared() {
         searchDebounceJob?.cancel()
+        canonicalCollectionJob?.cancel()
         PluviaApp.events.off<AndroidEvent.LibraryInstallStatusChanged, Unit>(onInstallStatusChanged)
         PluviaApp.events.off<AndroidEvent.CustomGameImagesFetched, Unit>(onCustomGameImagesFetched)
         PluviaApp.events.off<AndroidEvent.RecommendationToggleChanged, Unit>(onRecommendationToggleChanged)
@@ -512,7 +836,7 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun addCustomGameFolder(path: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             val normalizedPath = File(path).absolutePath
             val libraryItem = CustomGameScanner.createLibraryItemFromFolder(normalizedPath)
             if (libraryItem == null) {
@@ -560,10 +884,230 @@ class LibraryViewModel @Inject constructor(
     }
 
     private fun onFilterApps(paginationPage: Int = 0): Job {
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            stopCanonicalCollection(clearCards = true)
+            _state.update { state -> state.copy(canonicalPublicFailure = null) }
+            return onFilterLegacyApps(paginationPage)
+        }
+        if (!canonicalProjectionReadiness.isReady.value) {
+            stopCanonicalCollection(clearCards = true)
+            return recoverWithLegacy(
+                failure = CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE,
+                paginationPage = paginationPage,
+            )
+        }
+        canonicalUnsupportedFailure(_state.value)?.let { failure ->
+            stopCanonicalCollection(clearCards = false)
+            return recoverWithLegacy(failure, paginationPage)
+        }
+
+        if (_state.value.canonicalPublicFailure == CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE) {
+            _state.update { state -> state.copy(canonicalPublicFailure = null) }
+        }
+        ensureCanonicalCollection()
+        return if (canonicalCollectionHealthy && latestCanonicalCards != null) {
+            onFilterCanonicalCards(paginationPage)
+        } else {
+            viewModelScope.launch(canonicalDispatcher) { }
+        }
+    }
+
+    private fun ensureCanonicalCollection() {
+        if (canonicalCollectionJob?.isActive == true) return
+        canonicalCollectionJob = viewModelScope.launch(canonicalDispatcher) {
+            var retryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
+            while (
+                canonicalPublicLibraryGate.isEnabled() &&
+                canonicalProjectionReadiness.isReady.value &&
+                canonicalUnsupportedFailure(_state.value) == null
+            ) {
+                try {
+                    canonicalLibraryRepository.observeCards().collect { emitted ->
+                        if (!canonicalPublicLibraryGate.isEnabled()) {
+                            throw CanonicalCollectionStopped()
+                        }
+                        val frozen = immutableCanonicalCards(emitted)
+                        CanonicalLibraryCardValidator.failureOrNull(frozen)?.let { failure ->
+                            throw InvalidCanonicalCardList(failure)
+                        }
+                        latestCanonicalCards = frozen
+                        canonicalCollectionHealthy = true
+                        retryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
+                        publishCanonicalCards(paginationCurrentPage)
+                    }
+                    if (!canonicalPublicLibraryGate.isEnabled()) return@launch
+                    throw CanonicalAssemblyFailure()
+                } catch (error: CanonicalCollectionStopped) {
+                    throw error
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: InvalidCanonicalCardList) {
+                    canonicalCollectionHealthy = false
+                    recoverWithLegacy(error.failure, paginationCurrentPage).join()
+                } catch (_: Exception) {
+                    canonicalCollectionHealthy = false
+                    recoverWithLegacy(CanonicalPublicFailure.ASSEMBLY_FAILED, paginationCurrentPage).join()
+                }
+                delay(retryDelayMs)
+                retryDelayMs = (retryDelayMs * 2).coerceAtMost(MAX_CANONICAL_RETRY_DELAY_MS)
+            }
+        }
+    }
+
+    private fun stopCanonicalCollection(clearCards: Boolean) {
+        canonicalCollectionJob?.cancel()
+        canonicalCollectionJob = null
+        canonicalCollectionHealthy = false
+        if (clearCards) latestCanonicalCards = null
+    }
+
+    private fun recoverWithLegacy(
+        failure: CanonicalPublicFailure,
+        paginationPage: Int,
+    ): Job {
+        _state.update { state -> state.copy(canonicalPublicFailure = failure) }
+        return onFilterLegacyApps(paginationPage)
+    }
+
+    private fun onFilterCanonicalCards(paginationPage: Int): Job =
+        viewModelScope.launch(canonicalDispatcher) {
+            publishCanonicalCards(paginationPage)
+        }
+
+    private suspend fun publishCanonicalCards(paginationPage: Int) {
+        val diagnosticStartedAt = SystemClock.elapsedRealtime()
+        val diagnosticState = _state.value
+        FeatureDiagnostics.record(
+            area = DiagnosticArea.LIBRARY_FILTER,
+            name = DiagnosticEventName.LIBRARY_FILTER,
+            outcome = DiagnosticOutcome.STARTED,
+            attributes = mapOf(
+                DiagnosticAttribute.FILTER_GROUPS to diagnosticFilterGroups(diagnosticState),
+            ),
+        )
+        _state.update { state -> state.copy(isLoading = true) }
+        val currentState = _state.value
+        val sourceCards = checkNotNull(latestCanonicalCards)
+        val page = CanonicalLibraryFilter.project(
+            cards = sourceCards,
+            state = currentState,
+            paginationPage = paginationPage,
+            pageSize = PrefManager.itemsPerPage,
+            promotion = canonicalPromotionItem(),
+            showRecommendations = PrefManager.showRecommendations,
+            compatibility = { card ->
+                CanonicalCompatibilityLookup.resolve(
+                    card = card,
+                    state = currentState,
+                    cachedStatus = { name ->
+                        GameCompatibilityCache.getCached(name)?.let(::compatibilityStatusFor)
+                    },
+                )
+            },
+        )
+        paginationCurrentPage = page.paginationPage
+        lastPageInCurrentFilter = page.lastPage
+        if (isFirstLoad) isFirstLoad = false
+        _state.update { state ->
+            state.copy(
+                cards = page.cards,
+                currentPaginationPage = page.paginationPage + 1,
+                lastPaginationPage = page.lastPage + 1,
+                totalAppsInFilter = page.totalCount,
+                isLoading = false,
+                canonicalPublicFailure = null,
+                allCount = page.allCount,
+                steamCount = if (currentState.showSteamInLibrary) {
+                    page.sourceCounts.getValue(GameSource.STEAM)
+                } else {
+                    0
+                },
+                gogCount = if (currentState.showGOGInLibrary) {
+                    page.sourceCounts.getValue(GameSource.GOG)
+                } else {
+                    0
+                },
+                epicCount = if (currentState.showEpicInLibrary) {
+                    page.sourceCounts.getValue(GameSource.EPIC)
+                } else {
+                    0
+                },
+                amazonCount = if (currentState.showAmazonInLibrary) {
+                    page.sourceCounts.getValue(GameSource.AMAZON)
+                } else {
+                    0
+                },
+                localCount = if (currentState.showCustomGamesInLibrary) {
+                    page.sourceCounts.getValue(GameSource.CUSTOM_GAME)
+                } else {
+                    0
+                },
+                steamCollectionCounts = page.steamCollectionCounts,
+            )
+        }
+        fetchCompatibilityForPage(page.compatibilityRequestNames)
+        FeatureDiagnostics.record(
+            area = DiagnosticArea.LIBRARY_FILTER,
+            name = DiagnosticEventName.LIBRARY_FILTER,
+            outcome = DiagnosticOutcome.SUCCEEDED,
+            durationMs = SystemClock.elapsedRealtime() - diagnosticStartedAt,
+            attributes = mapOf(
+                DiagnosticAttribute.RESULT_COUNT to page.totalCount.toString(),
+                DiagnosticAttribute.STEAM_COUNT to page.sourceCounts.getValue(GameSource.STEAM).toString(),
+                DiagnosticAttribute.GOG_COUNT to page.sourceCounts.getValue(GameSource.GOG).toString(),
+                DiagnosticAttribute.EPIC_COUNT to page.sourceCounts.getValue(GameSource.EPIC).toString(),
+                DiagnosticAttribute.AMAZON_COUNT to page.sourceCounts.getValue(GameSource.AMAZON).toString(),
+                DiagnosticAttribute.CUSTOM_COUNT to page.sourceCounts.getValue(GameSource.CUSTOM_GAME).toString(),
+            ),
+        )
+    }
+
+    private fun canonicalPromotionItem(): LibraryItem? {
+        val featured = cachedFeatured
+        if (featured != null) {
+            return LibraryItem(
+                index = -1,
+                appId = "FEATURED_${featured.campaignId}",
+                name = featured.title,
+                heroImageUrl = featured.heroImageUrl,
+                headerImageUrl = featured.heroImageUrl,
+                capsuleImageUrl = featured.capsuleImageUrl ?: featured.heroImageUrl,
+                iconHash = featured.iconUrl ?: featured.capsuleImageUrl ?: featured.heroImageUrl,
+                isRecommended = true,
+                isFeatured = true,
+                recommendedGameId = featured.campaignId,
+                recSource = "hero",
+                gameSource = GameSource.STEAM,
+            )
+        }
+        val rec = cachedRecommendation ?: return null
+        return LibraryItem(
+            index = -1,
+            appId = "RECOMMENDED_${rec.id}",
+            name = rec.name,
+            heroImageUrl = rec.heroImageUrl,
+            capsuleImageUrl = rec.capsuleImageUrl,
+            iconHash = rec.iconUrl ?: rec.capsuleImageUrl,
+            isRecommended = true,
+            recommendedGameId = rec.id,
+            recSource = "hero",
+            gameSource = GameSource.STEAM,
+        )
+    }
+
+    private fun immutableCanonicalCards(
+        cards: List<CanonicalLibraryCard>,
+    ): List<CanonicalLibraryCard> = if (cards.isEmpty()) {
+        emptyList()
+    } else {
+        Collections.unmodifiableList(ArrayList(cards))
+    }
+
+    private fun onFilterLegacyApps(paginationPage: Int = 0): Job {
         Timber.tag("LibraryViewModel").d("onFilterApps - appList.size: ${appList.size}, isFirstLoad: $isFirstLoad")
         val diagnosticStartedAt = SystemClock.elapsedRealtime()
         val diagnosticState = _state.value
-        val job = viewModelScope.launch(Dispatchers.IO) {
+        val job = viewModelScope.launch(canonicalDispatcher) {
             FeatureDiagnostics.record(
                 area = DiagnosticArea.LIBRARY_FILTER,
                 name = DiagnosticEventName.LIBRARY_FILTER,
@@ -1117,7 +1661,7 @@ class LibraryViewModel @Inject constructor(
             return
         }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(canonicalDispatcher) {
             try {
                 // Separate cached and uncached games
                 val uncachedGames = mutableListOf<String>()
