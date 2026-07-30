@@ -8,6 +8,7 @@ import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -37,12 +38,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -53,17 +52,6 @@ import org.robolectric.annotation.Config
 class OwnedCopyActionRouterTest {
     private val scope = AccountScope.parse("a".repeat(64))
     private val canonicalId = CanonicalGameId.parse("11111111-1111-1111-1111-111111111111")
-
-    @Before
-    fun setUp() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        PrefManager.init(context)
-    }
-
-    @After
-    fun restoreProjectionPreference() {
-        PrefManager.canonicalProjectionEnabled = true
-    }
 
     @Test
     fun explicitSelectionWinsOverPreferredAndMostRecentAcrossThreeCopies() = runTest {
@@ -339,37 +327,68 @@ class OwnedCopyActionRouterTest {
                 summary(gog, setOf(operation), installed = true),
             ),
         )
-        val selectedFailures = listOf<(OwnedCopyKey) -> OwnedCopyRuntimeResult>(
-            { OwnedCopyRuntimeResult.Hidden },
-            { OwnedCopyRuntimeResult.Unavailable(it, CopyUnavailableReason.SOURCE_READ_FAILED) },
-            {
-                OwnedCopyRuntimeResult.Available(
-                    runtime(it, capabilities = setOf(operation), libraryItem = null),
-                )
+        val selectedFailures = listOf(
+            { key: OwnedCopyKey ->
+                OwnedCopyRuntimeResult.Hidden to ActionFailureReason.COPY_UNAVAILABLE
             },
-            {
+            { key: OwnedCopyKey ->
+                OwnedCopyRuntimeResult.Unavailable(
+                    key,
+                    CopyUnavailableReason.SOURCE_READ_FAILED,
+                ) to ActionFailureReason.COPY_UNAVAILABLE
+            },
+            { key: OwnedCopyKey ->
                 OwnedCopyRuntimeResult.Available(
-                    runtime(it, capabilities = emptySet()),
-                )
+                    runtime(key, capabilities = emptySet()),
+                ) to ActionFailureReason.CAPABILITY_CHANGED
             },
         )
 
-        selectedFailures.forEachIndexed { index, failure ->
+        selectedFailures.forEach { failure ->
             val fixture = fixture()
-            fixture.adapters.getValue(GameSource.STEAM).handler = failure
+            val (runtimeResult, expectedReason) = failure(steam)
+            fixture.adapters.getValue(GameSource.STEAM).handler = { runtimeResult }
             fixture.available(gog, setOf(operation))
 
             val result = fixture.router.route(card, operation, explicitKey = steam)
 
-            val expectedReason = if (index == selectedFailures.lastIndex) {
-                ActionFailureReason.CAPABILITY_CHANGED
-            } else {
-                ActionFailureReason.COPY_UNAVAILABLE
-            }
             assertEquals(OwnedCopyRouteResult.Unavailable(expectedReason), result)
             assertEquals(1, fixture.adapters.getValue(GameSource.STEAM).resolveCalls)
             assertEquals(0, fixture.adapters.getValue(GameSource.GOG).resolveCalls)
         }
+
+        val unbridgeableGog = key(GameSource.GOG, "2147483648")
+        val nullBridge = fixture()
+        nullBridge.adapters.getValue(GameSource.GOG).handler = {
+            OwnedCopyRuntimeResult.Available(
+                runtime(
+                    key = unbridgeableGog,
+                    reference = SourceOwnedCopyReference.Gog(
+                        unbridgeableGog,
+                        unbridgeableGog.stableSourceId,
+                    ),
+                    capabilities = setOf(operation),
+                    libraryItem = null,
+                ),
+            )
+        }
+        nullBridge.available(steam, setOf(operation))
+
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            nullBridge.router.route(
+                card = card(
+                    listOf(
+                        summary(unbridgeableGog, setOf(operation), installed = true),
+                        summary(steam, setOf(operation), installed = true),
+                    ),
+                ),
+                operation = operation,
+                explicitKey = unbridgeableGog,
+            ),
+        )
+        assertEquals(1, nullBridge.adapters.getValue(GameSource.GOG).resolveCalls)
+        assertEquals(0, nullBridge.adapters.getValue(GameSource.STEAM).resolveCalls)
     }
 
     @Test
@@ -406,6 +425,8 @@ class OwnedCopyActionRouterTest {
 
     @Test
     fun publicGateIsIndependentDefaultOffAndRequiresProjectionAndPublicPreferences() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        PrefManager.init(context)
         PrefManager.clearPreferences()
         awaitPreference {
             PrefManager.canonicalProjectionEnabled && !PrefManager.canonicalPublicLibraryEnabled
@@ -448,6 +469,73 @@ class OwnedCopyActionRouterTest {
         assertEquals(null, result.warning)
         coVerify(exactly = 1) {
             fixture.preferences.setPreferredCopy(canonicalId, steam, 1234L)
+        }
+    }
+
+    @Test
+    fun independentReviewRejectedAndUnmatchedCardsNeverOverwriteGroupedPreference() = runTest {
+        val steam = key(GameSource.STEAM, "1")
+        val confidenceStates = listOf(
+            MatchConfidence.REVIEW_REQUIRED,
+            MatchConfidence.REJECTED,
+            MatchConfidence.UNMATCHED,
+        )
+        val fixture = fixture()
+        fixture.available(steam, setOf(OwnedCopyOperation.INSTALL))
+
+        confidenceStates.forEach { confidence ->
+            val independent = card(
+                copies = listOf(
+                    summary(steam, setOf(OwnedCopyOperation.INSTALL)).copy(
+                        confidence = confidence,
+                        matchMethod = MatchMethod.UNMATCHED,
+                    ),
+                ),
+                preferredCopy = steam,
+            ).copy(key = CanonicalCardKey.Independent(steam))
+
+            val result = fixture.router.route(
+                card = independent,
+                operation = OwnedCopyOperation.INSTALL,
+                explicitKey = steam,
+                rememberChoice = true,
+            ) as OwnedCopyRouteResult.Ready
+
+            assertEquals(confidence.name, ActionSelectionPolicy.EXPLICIT, result.policy)
+            assertEquals(confidence.name, null, result.warning)
+        }
+
+        coVerify(exactly = 0) {
+            fixture.preferences.setPreferredCopy(canonicalId, steam, 1000L)
+        }
+    }
+
+    @Test
+    fun groupedKeyCanonicalIdMismatchNeverWritesButKeepsSafeExplicitCaptureReady() = runTest {
+        val fixture = fixture()
+        val steam = key(GameSource.STEAM, "1")
+        val mismatchedCanonicalId = CanonicalGameId.parse(
+            "22222222-2222-2222-2222-222222222222",
+        )
+        fixture.available(steam, setOf(OwnedCopyOperation.INSTALL))
+        val malformed = card(
+            listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL))),
+        ).copy(canonicalId = mismatchedCanonicalId)
+
+        val result = fixture.router.route(
+            card = malformed,
+            operation = OwnedCopyOperation.INSTALL,
+            explicitKey = steam,
+            rememberChoice = true,
+        ) as OwnedCopyRouteResult.Ready
+
+        assertEquals(ActionSelectionPolicy.EXPLICIT, result.policy)
+        assertEquals(null, result.warning)
+        coVerify(exactly = 0) {
+            fixture.preferences.setPreferredCopy(canonicalId, steam, 1000L)
+        }
+        coVerify(exactly = 0) {
+            fixture.preferences.setPreferredCopy(mismatchedCanonicalId, steam, 1000L)
         }
     }
 
@@ -532,6 +620,92 @@ class OwnedCopyActionRouterTest {
         )
         coVerify(exactly = 0) {
             sole.preferences.setPreferredCopy(canonicalId, steam, 1000L)
+        }
+    }
+
+    @Test
+    fun everySourceCaptureRejectsWrongProviderReferenceWithoutPreferenceOrSiblingFallback() = runTest {
+        exactIdentityCases().forEach { identity ->
+            val fixture = fixture()
+            fixture.adapters.getValue(identity.key.source).handler = {
+                OwnedCopyRuntimeResult.Available(
+                    runtime(
+                        key = identity.key,
+                        reference = identity.wrongReference,
+                        capabilities = setOf(OwnedCopyOperation.PLAY),
+                        libraryItem = libraryItem(
+                            identity.key.source,
+                            identity.validLibraryItemId,
+                        ),
+                    ),
+                )
+            }
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                fixture.router.route(
+                    card = card(
+                        listOf(
+                            summary(
+                                identity.key,
+                                setOf(OwnedCopyOperation.PLAY),
+                                installed = true,
+                            ),
+                        ),
+                    ),
+                    operation = OwnedCopyOperation.PLAY,
+                    explicitKey = identity.key,
+                    rememberChoice = true,
+                )
+            }
+
+            assertEquals(identity.name, 1, fixture.adapters.getValue(identity.key.source).resolveCalls)
+            assertEquals(identity.name, 0, fixture.siblingCalls(identity.key.source))
+            coVerify(exactly = 0) {
+                fixture.preferences.setPreferredCopy(canonicalId, identity.key, 1000L)
+            }
+        }
+    }
+
+    @Test
+    fun everySourceCaptureRejectsWrongSameSourceExecutableIdWithoutPreferenceOrSiblingFallback() = runTest {
+        exactIdentityCases().forEach { identity ->
+            val fixture = fixture()
+            fixture.adapters.getValue(identity.key.source).handler = {
+                OwnedCopyRuntimeResult.Available(
+                    runtime(
+                        key = identity.key,
+                        reference = identity.validReference,
+                        capabilities = setOf(OwnedCopyOperation.PLAY),
+                        libraryItem = libraryItem(
+                            identity.key.source,
+                            identity.wrongLibraryItemId,
+                        ),
+                    ),
+                )
+            }
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                fixture.router.route(
+                    card = card(
+                        listOf(
+                            summary(
+                                identity.key,
+                                setOf(OwnedCopyOperation.PLAY),
+                                installed = true,
+                            ),
+                        ),
+                    ),
+                    operation = OwnedCopyOperation.PLAY,
+                    explicitKey = identity.key,
+                    rememberChoice = true,
+                )
+            }
+
+            assertEquals(identity.name, 1, fixture.adapters.getValue(identity.key.source).resolveCalls)
+            assertEquals(identity.name, 0, fixture.siblingCalls(identity.key.source))
+            coVerify(exactly = 0) {
+                fixture.preferences.setPreferredCopy(canonicalId, identity.key, 1000L)
+            }
         }
     }
 
@@ -645,6 +819,65 @@ class OwnedCopyActionRouterTest {
 
     private fun key(source: GameSource, stableSourceId: String): OwnedCopyKey =
         OwnedCopyKey(scope, source, stableSourceId)
+
+    private fun exactIdentityCases(): List<ExactIdentityCase> {
+        val steam = key(GameSource.STEAM, "42")
+        val gog = key(GameSource.GOG, "123")
+        val epic = key(
+            GameSource.EPIC,
+            EpicStableSourceId.encode("namespace", "catalog"),
+        )
+        val amazon = key(GameSource.AMAZON, "product")
+        val custom = key(GameSource.CUSTOM_GAME, "5")
+        return listOf(
+            ExactIdentityCase(
+                "Steam",
+                steam,
+                SourceOwnedCopyReference.Steam(steam, 42),
+                SourceOwnedCopyReference.Steam(steam, 43),
+                "STEAM_42",
+                "STEAM_43",
+            ),
+            ExactIdentityCase(
+                "GOG",
+                gog,
+                SourceOwnedCopyReference.Gog(gog, "123"),
+                SourceOwnedCopyReference.Gog(gog, "0123"),
+                "GOG_123",
+                "GOG_124",
+            ),
+            ExactIdentityCase(
+                "Epic",
+                epic,
+                SourceOwnedCopyReference.Epic(epic, 7, "namespace", "catalog"),
+                SourceOwnedCopyReference.Epic(epic, 7, "other-namespace", "catalog"),
+                "EPIC_7",
+                "EPIC_8",
+            ),
+            ExactIdentityCase(
+                "Amazon",
+                amazon,
+                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, "other-product", "entitlement"),
+                "AMAZON_8",
+                "AMAZON_9",
+            ),
+            ExactIdentityCase(
+                "Custom",
+                custom,
+                SourceOwnedCopyReference.Custom(custom, 5),
+                SourceOwnedCopyReference.Custom(custom, 6),
+                "CUSTOM_GAME_5",
+                "CUSTOM_GAME_6",
+            ),
+        )
+    }
+
+    private fun libraryItem(source: GameSource, appId: String): LibraryItem = LibraryItem(
+        appId = appId,
+        name = "Runtime",
+        gameSource = source,
+    )
 
     private fun card(
         copies: List<OwnedCopySummary>,
@@ -796,7 +1029,21 @@ class OwnedCopyActionRouterTest {
         }
 
         fun totalResolveCalls(): Int = adapters.values.sumOf(RecordingAdapter::resolveCalls)
+
+        fun siblingCalls(selectedSource: GameSource): Int = adapters
+            .filterKeys { it != selectedSource }
+            .values
+            .sumOf(RecordingAdapter::resolveCalls)
     }
+
+    private data class ExactIdentityCase(
+        val name: String,
+        val key: OwnedCopyKey,
+        val validReference: SourceOwnedCopyReference,
+        val wrongReference: SourceOwnedCopyReference,
+        val validLibraryItemId: String,
+        val wrongLibraryItemId: String,
+    )
 
     private class MutableGate(
         var enabled: Boolean = true,

@@ -11,6 +11,7 @@ import app.gamenative.data.EpicGame
 import app.gamenative.data.GOGGame
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryAssetsInfo
+import app.gamenative.data.LibraryItem
 import app.gamenative.data.LibraryCapsuleInfo
 import app.gamenative.data.LibraryHeroInfo
 import app.gamenative.data.LibraryPlayHistory
@@ -1951,6 +1952,117 @@ class OwnedCopyRuntimeAdapterTest {
 
         assertEquals(500L, available(adapter.resolve(key)).lastPlayedEpochMs)
         assertEquals(500L, available(adapter.resolveAll(setOf(key)).getValue(key)).lastPlayedEpochMs)
+    }
+
+    @Test
+    fun registryPointRejectsWrongProviderReferencesAndSameSourceExecutableIdsForEverySource() = runTest {
+        exactIdentityCases().forEach { identity ->
+            val wrongReference = identityRegistry(
+                identity.key.source,
+                runtimeResult(
+                    identity.key,
+                    identity.wrongReference,
+                    libraryItem(identity.key.source, identity.validLibraryItemId),
+                ),
+            )
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                wrongReference.registry.resolve(identity.key)
+            }
+            assertEquals(identity.name, 1, wrongReference.selected.pointCalls)
+            assertEquals(identity.name, 0, wrongReference.siblingCalls())
+
+            val wrongLibraryItem = identityRegistry(
+                identity.key.source,
+                runtimeResult(
+                    identity.key,
+                    identity.validReference,
+                    libraryItem(identity.key.source, identity.wrongLibraryItemId),
+                ),
+            )
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                wrongLibraryItem.registry.resolve(identity.key)
+            }
+            assertEquals(identity.name, 1, wrongLibraryItem.selected.pointCalls)
+            assertEquals(identity.name, 0, wrongLibraryItem.siblingCalls())
+        }
+    }
+
+    @Test
+    fun registryBatchRejectsWrongProviderReferencesAndSameSourceExecutableIdsForEverySource() = runTest {
+        exactIdentityCases().forEach { identity ->
+            val wrongReference = identityRegistry(
+                identity.key.source,
+                runtimeResult(
+                    identity.key,
+                    identity.wrongReference,
+                    libraryItem(identity.key.source, identity.validLibraryItemId),
+                ),
+            )
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                wrongReference.registry.resolveAll(identity.key.source, setOf(identity.key))
+            }
+            assertEquals(identity.name, 1, wrongReference.selected.batchCalls)
+            assertEquals(identity.name, 0, wrongReference.siblingCalls())
+
+            val wrongLibraryItem = identityRegistry(
+                identity.key.source,
+                runtimeResult(
+                    identity.key,
+                    identity.validReference,
+                    libraryItem(identity.key.source, identity.wrongLibraryItemId),
+                ),
+            )
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                wrongLibraryItem.registry.resolveAll(identity.key.source, setOf(identity.key))
+            }
+            assertEquals(identity.name, 1, wrongLibraryItem.selected.batchCalls)
+            assertEquals(identity.name, 0, wrongLibraryItem.siblingCalls())
+        }
+    }
+
+    @Test
+    fun registryAllowsNullExecutableOnlyForExactUnbridgeableGogProviderIds() = runTest {
+        listOf("0", "-7", "+7", "007", "2147483648", "not-decimal").forEach { gameId ->
+            val gogKey = key(GameSource.GOG, gameId)
+            val fixture = identityRegistry(
+                GameSource.GOG,
+                runtimeResult(
+                    gogKey,
+                    SourceOwnedCopyReference.Gog(gogKey, gameId),
+                    libraryItem = null,
+                ),
+            )
+
+            assertTrue(fixture.registry.resolve(gogKey) is OwnedCopyRuntimeResult.Available)
+        }
+
+        val bridgeableGog = key(GameSource.GOG, "123")
+        assertSuspendThrows(IllegalStateException::class.java) {
+            identityRegistry(
+                GameSource.GOG,
+                runtimeResult(
+                    bridgeableGog,
+                    SourceOwnedCopyReference.Gog(bridgeableGog, "123"),
+                    libraryItem = null,
+                ),
+            ).registry.resolve(bridgeableGog)
+        }
+
+        val steam = key(GameSource.STEAM, "42")
+        assertSuspendThrows(IllegalStateException::class.java) {
+            identityRegistry(
+                GameSource.STEAM,
+                runtimeResult(
+                    steam,
+                    SourceOwnedCopyReference.Steam(steam, 42),
+                    libraryItem = null,
+                ),
+            ).registry.resolve(steam)
+        }
     }
 
     @Test
@@ -4734,14 +4846,127 @@ class OwnedCopyRuntimeAdapterTest {
             }.toMap(),
         )
 
+    private fun exactIdentityCases(): List<ExactIdentityCase> {
+        val steam = key(GameSource.STEAM, "42")
+        val gog = key(GameSource.GOG, "123")
+        val epic = key(
+            GameSource.EPIC,
+            EpicStableSourceId.encode("namespace", "catalog"),
+        )
+        val amazon = key(GameSource.AMAZON, "product")
+        val custom = key(GameSource.CUSTOM_GAME, "5")
+        return listOf(
+            ExactIdentityCase(
+                name = "Steam",
+                key = steam,
+                validReference = SourceOwnedCopyReference.Steam(steam, 42),
+                wrongReference = SourceOwnedCopyReference.Steam(steam, 43),
+                validLibraryItemId = "STEAM_42",
+                wrongLibraryItemId = "STEAM_43",
+            ),
+            ExactIdentityCase(
+                name = "GOG",
+                key = gog,
+                validReference = SourceOwnedCopyReference.Gog(gog, "123"),
+                wrongReference = SourceOwnedCopyReference.Gog(gog, "0123"),
+                validLibraryItemId = "GOG_123",
+                wrongLibraryItemId = "GOG_124",
+            ),
+            ExactIdentityCase(
+                name = "Epic",
+                key = epic,
+                validReference = SourceOwnedCopyReference.Epic(
+                    epic,
+                    localRowId = 7,
+                    namespace = "namespace",
+                    catalogId = "catalog",
+                ),
+                wrongReference = SourceOwnedCopyReference.Epic(
+                    epic,
+                    localRowId = 7,
+                    namespace = "other-namespace",
+                    catalogId = "catalog",
+                ),
+                validLibraryItemId = "EPIC_7",
+                wrongLibraryItemId = "EPIC_8",
+            ),
+            ExactIdentityCase(
+                name = "Amazon",
+                key = amazon,
+                validReference = SourceOwnedCopyReference.Amazon(
+                    amazon,
+                    localRowId = 8,
+                    productId = "product",
+                    entitlementId = "entitlement",
+                ),
+                wrongReference = SourceOwnedCopyReference.Amazon(
+                    amazon,
+                    localRowId = 8,
+                    productId = "other-product",
+                    entitlementId = "entitlement",
+                ),
+                validLibraryItemId = "AMAZON_8",
+                wrongLibraryItemId = "AMAZON_9",
+            ),
+            ExactIdentityCase(
+                name = "Custom",
+                key = custom,
+                validReference = SourceOwnedCopyReference.Custom(custom, 5),
+                wrongReference = SourceOwnedCopyReference.Custom(custom, 6),
+                validLibraryItemId = "CUSTOM_GAME_5",
+                wrongLibraryItemId = "CUSTOM_GAME_6",
+            ),
+        )
+    }
+
+    private fun identityRegistry(
+        source: GameSource,
+        result: OwnedCopyRuntimeResult,
+    ): IdentityRegistryFixture {
+        val adapters = GameSource.entries.associateWith { adapterSource ->
+            IdentityRecordingAdapter(
+                source = adapterSource,
+                result = result.takeIf { adapterSource == source }
+                    ?: OwnedCopyRuntimeResult.Hidden,
+            )
+        }
+        val history = mockk<LibraryPlayHistoryDao>()
+        every { history.getAll() } returns emptyFlow()
+        return IdentityRegistryFixture(
+            registry = OwnedCopyRuntimeRegistry(
+                adapters.values.toSet(),
+                history,
+                mockk(relaxed = true),
+            ),
+            selected = adapters.getValue(source),
+            adapters = adapters,
+        )
+    }
+
+    private fun libraryItem(source: GameSource, appId: String): LibraryItem = LibraryItem(
+        appId = appId,
+        name = "Runtime",
+        gameSource = source,
+    )
+
     private fun runtimeResult(
         copyKey: OwnedCopyKey,
         referenceKey: OwnedCopyKey,
+    ): OwnedCopyRuntimeResult.Available = runtimeResult(
+        key = copyKey,
+        reference = SourceOwnedCopyReference.Steam(referenceKey, 1),
+        libraryItem = null,
+    )
+
+    private fun runtimeResult(
+        key: OwnedCopyKey,
+        reference: SourceOwnedCopyReference,
+        libraryItem: LibraryItem?,
     ): OwnedCopyRuntimeResult.Available = OwnedCopyRuntimeResult.Available(
         OwnedCopyRuntime(
-            key = copyKey,
-            reference = SourceOwnedCopyReference.Steam(referenceKey, 1),
-            libraryItem = null,
+            key = key,
+            reference = reference,
+            libraryItem = libraryItem,
             nativeTitle = "Runtime",
             aliases = emptySet(),
             developerKey = "",
@@ -4782,6 +5007,47 @@ class OwnedCopyRuntimeAdapterTest {
         override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult = resolve(key)
         override suspend fun resolveAll(keys: Set<OwnedCopyKey>): Map<OwnedCopyKey, OwnedCopyRuntimeResult> =
             resolveAll(keys)
+    }
+
+    private data class ExactIdentityCase(
+        val name: String,
+        val key: OwnedCopyKey,
+        val validReference: SourceOwnedCopyReference,
+        val wrongReference: SourceOwnedCopyReference,
+        val validLibraryItemId: String,
+        val wrongLibraryItemId: String,
+    )
+
+    private data class IdentityRegistryFixture(
+        val registry: OwnedCopyRuntimeRegistry,
+        val selected: IdentityRecordingAdapter,
+        val adapters: Map<GameSource, IdentityRecordingAdapter>,
+    ) {
+        fun siblingCalls(): Int = adapters.values
+            .filterNot { it === selected }
+            .sumOf { it.pointCalls + it.batchCalls }
+    }
+
+    private class IdentityRecordingAdapter(
+        override val source: GameSource,
+        private val result: OwnedCopyRuntimeResult,
+    ) : OwnedCopyRuntimeAdapter {
+        var pointCalls = 0
+        var batchCalls = 0
+
+        override fun invalidations(): Flow<Unit> = emptyFlow()
+
+        override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult {
+            pointCalls += 1
+            return result
+        }
+
+        override suspend fun resolveAll(
+            keys: Set<OwnedCopyKey>,
+        ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> {
+            batchCalls += 1
+            return keys.associateWith { result }
+        }
     }
 
     private class MutableRuntimeClock(

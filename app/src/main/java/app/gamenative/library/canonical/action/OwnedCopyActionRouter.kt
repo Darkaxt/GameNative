@@ -2,6 +2,7 @@ package app.gamenative.library.canonical.action
 
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
@@ -10,6 +11,7 @@ import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.canonical.PreferredCopyRepository
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
+import app.gamenative.library.canonical.runtime.requireIdentity
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -88,20 +90,9 @@ class OwnedCopyActionRouter @Inject constructor(
             is OwnedCopyRuntimeResult.Unavailable,
             -> return OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
         }
-        check(available.key == selection.key) {
-            "Captured runtime key differs from selected key"
-        }
-        check(available.reference.key == selection.key) {
-            "Captured runtime reference differs from selected key"
-        }
-        check(referenceMatchesSource(available.reference, selection.key.source)) {
-            "Captured runtime reference belongs to another source"
-        }
+        available.requireIdentity(selection.key)
         val libraryItem = available.libraryItem
             ?: return OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
-        check(libraryItem.gameSource == selection.key.source) {
-            "Captured library item belongs to another source"
-        }
         if (operation !in available.capabilities) {
             return OwnedCopyRouteResult.Unavailable(ActionFailureReason.CAPABILITY_CHANGED)
         }
@@ -163,9 +154,11 @@ class OwnedCopyActionRouter @Inject constructor(
         rememberChoice: Boolean,
     ): ActionFailureReason? {
         if (selection.policy != ActionSelectionPolicy.EXPLICIT || !rememberChoice) return null
+        val groupedKey = card.key as? CanonicalCardKey.Grouped ?: return null
+        if (groupedKey.canonicalId != card.canonicalId) return null
         return try {
             preferredCopyRepository.setPreferredCopy(
-                canonicalId = card.canonicalId,
+                canonicalId = groupedKey.canonicalId,
                 key = selection.key,
                 nowEpochMs = clock.nowEpochMs(),
             )

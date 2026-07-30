@@ -5,6 +5,7 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
+import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
@@ -35,8 +36,8 @@ class OwnedCopyActionGuardTest {
     private val scope = AccountScope.parse("a".repeat(64))
 
     @Test
-    fun everySourceReferenceFieldMutationFailsTheCapturedTargetWithoutSiblingFallback() = runTest {
-        val mutations = referenceMutations()
+    fun everyCapturedTargetMutationThatRetainsKeyIdentityFailsWithoutSiblingFallback() = runTest {
+        val mutations = validReferenceMutations()
 
         mutations.forEach { mutation ->
             val fixture = fixture(mutation.key)
@@ -65,6 +66,78 @@ class OwnedCopyActionGuardTest {
             )
             assertEquals(mutation.name, 1, fixture.selected.resolveCalls)
             assertEquals(mutation.name, 0, fixture.siblingCalls())
+        }
+    }
+
+    @Test
+    fun everySourceRevalidationRejectsWrongProviderReferenceWithoutSiblingFallback() = runTest {
+        exactIdentityCases().forEach { identity ->
+            val fixture = fixture(identity.key)
+            fixture.selected.handler = {
+                OwnedCopyRuntimeResult.Available(
+                    runtime(
+                        key = identity.key,
+                        reference = identity.wrongReference,
+                        capabilities = setOf(OwnedCopyOperation.PLAY),
+                        libraryItem = libraryItem(
+                            identity.key.source,
+                            identity.validLibraryItemId,
+                        ),
+                    ),
+                )
+            }
+            val guard = guard(
+                key = identity.key,
+                capturedReference = identity.validReference,
+                registry = fixture.registry,
+                gate = fixture.gate,
+                initialLibraryItem = libraryItem(
+                    identity.key.source,
+                    identity.validLibraryItemId,
+                ),
+            )
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                guard.revalidate(OwnedCopyOperation.PLAY)
+            }
+            assertEquals(identity.name, 1, fixture.selected.resolveCalls)
+            assertEquals(identity.name, 0, fixture.siblingCalls())
+        }
+    }
+
+    @Test
+    fun everySourceRevalidationRejectsWrongSameSourceExecutableIdWithoutSiblingFallback() = runTest {
+        exactIdentityCases().forEach { identity ->
+            val fixture = fixture(identity.key)
+            fixture.selected.handler = {
+                OwnedCopyRuntimeResult.Available(
+                    runtime(
+                        key = identity.key,
+                        reference = identity.validReference,
+                        capabilities = setOf(OwnedCopyOperation.PLAY),
+                        libraryItem = libraryItem(
+                            identity.key.source,
+                            identity.wrongLibraryItemId,
+                        ),
+                    ),
+                )
+            }
+            val guard = guard(
+                key = identity.key,
+                capturedReference = identity.validReference,
+                registry = fixture.registry,
+                gate = fixture.gate,
+                initialLibraryItem = libraryItem(
+                    identity.key.source,
+                    identity.validLibraryItemId,
+                ),
+            )
+
+            assertSuspendThrows(IllegalStateException::class.java) {
+                guard.revalidate(OwnedCopyOperation.PLAY)
+            }
+            assertEquals(identity.name, 1, fixture.selected.resolveCalls)
+            assertEquals(identity.name, 0, fixture.siblingCalls())
         }
     }
 
@@ -159,9 +232,9 @@ class OwnedCopyActionGuardTest {
     }
 
     @Test
-    fun currentNullLegacyBridgeFailsBeforeCapabilityHandoff() = runTest {
-        val key = key(GameSource.GOG, "2147483648")
-        val reference = SourceOwnedCopyReference.Gog(key, "2147483648")
+    fun bridgeableCurrentNullExecutableIsRejectedBeforeCapabilityHandoff() = runTest {
+        val key = key(GameSource.GOG, "123")
+        val reference = SourceOwnedCopyReference.Gog(key, "123")
         val fixture = fixture(key)
         fixture.selected.handler = {
             OwnedCopyRuntimeResult.Available(
@@ -175,10 +248,9 @@ class OwnedCopyActionGuardTest {
         }
         val guard = guard(key, reference, fixture.registry, fixture.gate)
 
-        assertEquals(
-            ActionRevalidationResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
-            guard.revalidate(OwnedCopyOperation.OPEN_SOURCE_DETAILS),
-        )
+        assertSuspendThrows(IllegalStateException::class.java) {
+            guard.revalidate(OwnedCopyOperation.OPEN_SOURCE_DETAILS)
+        }
         assertEquals(1, fixture.selected.resolveCalls)
         assertEquals(0, fixture.siblingCalls())
     }
@@ -204,7 +276,10 @@ class OwnedCopyActionGuardTest {
 
     @Test
     fun unchangedReferenceReturnsCurrentReplacementLibraryItemNotCapturedItem() = runTest {
-        val key = key(GameSource.EPIC, "durable-epic")
+        val key = key(
+            GameSource.EPIC,
+            EpicStableSourceId.encode("namespace", "catalog"),
+        )
         val reference = SourceOwnedCopyReference.Epic(key, 7, "namespace", "catalog")
         val initial = LibraryItem(appId = "EPIC_7", name = "Initial", gameSource = GameSource.EPIC)
         val replacement = LibraryItem(appId = "EPIC_7", name = "Current", gameSource = GameSource.EPIC)
@@ -360,42 +435,18 @@ class OwnedCopyActionGuardTest {
         assertSame(initial, guard.initialLibraryItem)
     }
 
-    private fun referenceMutations(): List<ReferenceMutation> {
-        val steam = key(GameSource.STEAM, "42")
-        val gog = key(GameSource.GOG, "123")
-        val epic = key(GameSource.EPIC, "durable-epic")
+    private fun validReferenceMutations(): List<ReferenceMutation> {
+        val epic = key(
+            GameSource.EPIC,
+            EpicStableSourceId.encode("namespace", "catalog"),
+        )
         val amazon = key(GameSource.AMAZON, "product")
-        val custom = key(GameSource.CUSTOM_GAME, "5")
         return listOf(
-            ReferenceMutation(
-                "Steam AppID",
-                steam,
-                SourceOwnedCopyReference.Steam(steam, 42),
-                SourceOwnedCopyReference.Steam(steam, 43),
-            ),
-            ReferenceMutation(
-                "GOG exact decimal game ID",
-                gog,
-                SourceOwnedCopyReference.Gog(gog, "123"),
-                SourceOwnedCopyReference.Gog(gog, "0123"),
-            ),
             ReferenceMutation(
                 "Epic local row ID",
                 epic,
                 SourceOwnedCopyReference.Epic(epic, 7, "namespace", "catalog"),
                 SourceOwnedCopyReference.Epic(epic, 8, "namespace", "catalog"),
-            ),
-            ReferenceMutation(
-                "Epic namespace",
-                epic,
-                SourceOwnedCopyReference.Epic(epic, 7, "namespace", "catalog"),
-                SourceOwnedCopyReference.Epic(epic, 7, "other-namespace", "catalog"),
-            ),
-            ReferenceMutation(
-                "Epic catalog ID",
-                epic,
-                SourceOwnedCopyReference.Epic(epic, 7, "namespace", "catalog"),
-                SourceOwnedCopyReference.Epic(epic, 7, "namespace", "other-catalog"),
             ),
             ReferenceMutation(
                 "Amazon local row ID",
@@ -404,24 +455,79 @@ class OwnedCopyActionGuardTest {
                 SourceOwnedCopyReference.Amazon(amazon, 9, "product", "entitlement"),
             ),
             ReferenceMutation(
-                "Amazon product ID",
-                amazon,
-                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
-                SourceOwnedCopyReference.Amazon(amazon, 8, "other-product", "entitlement"),
-            ),
-            ReferenceMutation(
                 "Amazon entitlement ID",
                 amazon,
                 SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
                 SourceOwnedCopyReference.Amazon(amazon, 8, "product", "other-entitlement"),
             ),
-            ReferenceMutation(
-                "Custom persisted ID",
+        )
+    }
+
+    private fun exactIdentityCases(): List<ExactIdentityCase> {
+        val steam = key(GameSource.STEAM, "42")
+        val gog = key(GameSource.GOG, "123")
+        val epic = key(
+            GameSource.EPIC,
+            EpicStableSourceId.encode("namespace", "catalog"),
+        )
+        val amazon = key(GameSource.AMAZON, "product")
+        val custom = key(GameSource.CUSTOM_GAME, "5")
+        return listOf(
+            ExactIdentityCase(
+                "Steam",
+                steam,
+                SourceOwnedCopyReference.Steam(steam, 42),
+                SourceOwnedCopyReference.Steam(steam, 43),
+                "STEAM_42",
+                "STEAM_43",
+            ),
+            ExactIdentityCase(
+                "GOG",
+                gog,
+                SourceOwnedCopyReference.Gog(gog, "123"),
+                SourceOwnedCopyReference.Gog(gog, "0123"),
+                "GOG_123",
+                "GOG_124",
+            ),
+            ExactIdentityCase(
+                "Epic",
+                epic,
+                SourceOwnedCopyReference.Epic(epic, 7, "namespace", "catalog"),
+                SourceOwnedCopyReference.Epic(epic, 7, "other-namespace", "catalog"),
+                "EPIC_7",
+                "EPIC_8",
+            ),
+            ExactIdentityCase(
+                "Amazon",
+                amazon,
+                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, "other-product", "entitlement"),
+                "AMAZON_8",
+                "AMAZON_9",
+            ),
+            ExactIdentityCase(
+                "Custom",
                 custom,
                 SourceOwnedCopyReference.Custom(custom, 5),
                 SourceOwnedCopyReference.Custom(custom, 6),
+                "CUSTOM_GAME_5",
+                "CUSTOM_GAME_6",
             ),
         )
+    }
+
+    private fun libraryItem(source: GameSource, appId: String): LibraryItem = LibraryItem(
+        appId = appId,
+        name = "Current",
+        gameSource = source,
+    )
+
+    private fun executableAppId(reference: SourceOwnedCopyReference): String = when (reference) {
+        is SourceOwnedCopyReference.Steam -> "STEAM_${reference.appId}"
+        is SourceOwnedCopyReference.Gog -> "GOG_${reference.gameId}"
+        is SourceOwnedCopyReference.Epic -> "EPIC_${reference.localRowId}"
+        is SourceOwnedCopyReference.Amazon -> "AMAZON_${reference.localRowId}"
+        is SourceOwnedCopyReference.Custom -> "CUSTOM_GAME_${reference.appId}"
     }
 
     private fun fixture(
@@ -444,10 +550,9 @@ class OwnedCopyActionGuardTest {
         capturedReference: SourceOwnedCopyReference,
         registry: OwnedCopyRuntimeRegistry,
         gate: CanonicalPublicLibraryGate,
-        initialLibraryItem: LibraryItem = LibraryItem(
-            appId = "${key.source.name}_${key.stableSourceId}",
-            name = "Initial",
-            gameSource = key.source,
+        initialLibraryItem: LibraryItem = libraryItem(
+            key.source,
+            executableAppId(capturedReference),
         ),
     ): OwnedCopyActionGuard = OwnedCopyActionGuard(
         key = key,
@@ -464,10 +569,9 @@ class OwnedCopyActionGuardTest {
         key: OwnedCopyKey,
         reference: SourceOwnedCopyReference,
         capabilities: Set<OwnedCopyOperation>,
-        libraryItem: LibraryItem? = LibraryItem(
-            appId = "${key.source.name}_${key.stableSourceId}",
-            name = "Current",
-            gameSource = key.source,
+        libraryItem: LibraryItem? = libraryItem(
+            key.source,
+            executableAppId(reference),
         ),
     ): OwnedCopyRuntime = OwnedCopyRuntime(
         key = key,
@@ -555,6 +659,15 @@ class OwnedCopyActionGuardTest {
             return enabled
         }
     }
+
+    private data class ExactIdentityCase(
+        val name: String,
+        val key: OwnedCopyKey,
+        val validReference: SourceOwnedCopyReference,
+        val wrongReference: SourceOwnedCopyReference,
+        val validLibraryItemId: String,
+        val wrongLibraryItemId: String,
+    )
 
     private data class ReferenceMutation(
         val name: String,

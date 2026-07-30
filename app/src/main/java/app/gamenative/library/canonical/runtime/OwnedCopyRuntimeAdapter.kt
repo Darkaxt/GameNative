@@ -1,12 +1,15 @@
 package app.gamenative.library.canonical.runtime
 
 import app.gamenative.data.GameSource
+import app.gamenative.data.LibraryItem
+import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.PlayHistoryOrigin
+import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.reflect.KClass
@@ -219,17 +222,108 @@ internal fun Set<OwnedCopyKey>.hiddenResults(): Map<OwnedCopyKey, OwnedCopyRunti
 
 internal fun OwnedCopyRuntimeResult.requireIdentity(requestedKey: OwnedCopyKey) {
     when (this) {
-        is OwnedCopyRuntimeResult.Available -> {
-            check(copy.key == requestedKey) { "Runtime result copy key differs from requested key" }
-            check(copy.reference.key == requestedKey) {
-                "Runtime result reference key differs from requested key"
-            }
-        }
+        is OwnedCopyRuntimeResult.Available -> copy.requireIdentity(requestedKey)
         is OwnedCopyRuntimeResult.Unavailable ->
             check(key == requestedKey) { "Unavailable runtime key differs from requested key" }
         OwnedCopyRuntimeResult.Hidden -> Unit
     }
 }
+
+internal fun OwnedCopyRuntime.requireIdentity(requestedKey: OwnedCopyKey) {
+    check(key == requestedKey) { "Runtime result copy key differs from requested key" }
+    requireExactRuntimeIdentity(
+        requestedKey = requestedKey,
+        reference = reference,
+        libraryItem = libraryItem,
+    )
+}
+
+internal fun requireExactRuntimeIdentity(
+    requestedKey: OwnedCopyKey,
+    reference: SourceOwnedCopyReference,
+    libraryItem: LibraryItem?,
+) {
+    check(reference.key == requestedKey) {
+        "Runtime result reference key differs from requested key"
+    }
+    val expectedLibraryItemId = when (reference) {
+        is SourceOwnedCopyReference.Steam -> {
+            check(requestedKey.source == GameSource.STEAM) {
+                "Runtime reference source differs from requested source"
+            }
+            val appId = requestedKey.stableSourceId.exactPositiveIntOrNull()
+            check(appId != null && reference.appId == appId) {
+                "Runtime reference identity differs from requested identity"
+            }
+            sourceAppId(GameSource.STEAM, reference.appId)
+        }
+        is SourceOwnedCopyReference.Gog -> {
+            check(requestedKey.source == GameSource.GOG) {
+                "Runtime reference source differs from requested source"
+            }
+            check(reference.gameId == requestedKey.stableSourceId) {
+                "Runtime reference identity differs from requested identity"
+            }
+            requestedKey.stableSourceId.exactPositiveIntOrNull()?.let {
+                sourceAppId(GameSource.GOG, reference.gameId)
+            }
+        }
+        is SourceOwnedCopyReference.Epic -> {
+            check(requestedKey.source == GameSource.EPIC) {
+                "Runtime reference source differs from requested source"
+            }
+            check(
+                reference.namespace.isNotBlank() &&
+                    reference.catalogId.isNotBlank() &&
+                    EpicStableSourceId.encode(
+                        reference.namespace,
+                        reference.catalogId,
+                    ) == requestedKey.stableSourceId,
+            ) {
+                "Runtime reference identity differs from requested identity"
+            }
+            sourceAppId(GameSource.EPIC, reference.localRowId)
+        }
+        is SourceOwnedCopyReference.Amazon -> {
+            check(requestedKey.source == GameSource.AMAZON) {
+                "Runtime reference source differs from requested source"
+            }
+            check(
+                reference.productId == requestedKey.stableSourceId &&
+                    reference.entitlementId.isNotBlank(),
+            ) {
+                "Runtime reference identity differs from requested identity"
+            }
+            sourceAppId(GameSource.AMAZON, reference.localRowId)
+        }
+        is SourceOwnedCopyReference.Custom -> {
+            check(requestedKey.source == GameSource.CUSTOM_GAME) {
+                "Runtime reference source differs from requested source"
+            }
+            val appId = requestedKey.stableSourceId.exactPositiveIntOrNull()
+            check(appId != null && reference.appId == appId) {
+                "Runtime reference identity differs from requested identity"
+            }
+            sourceAppId(GameSource.CUSTOM_GAME, reference.appId)
+        }
+    }
+
+    if (libraryItem == null) {
+        check(requestedKey.source == GameSource.GOG && expectedLibraryItemId == null) {
+            "Runtime executable identity is missing"
+        }
+        return
+    }
+    check(libraryItem.gameSource == requestedKey.source) {
+        "Runtime executable source differs from requested source"
+    }
+    check(libraryItem.appId == expectedLibraryItemId) {
+        "Runtime executable identity differs from requested identity"
+    }
+}
+
+private fun String.exactPositiveIntOrNull(): Int? =
+    toIntOrNull()?.takeIf { value -> value > 0 && value.toString() == this }
 
 internal suspend inline fun currentAccountProof(
     crossinline check: suspend () -> Boolean,
