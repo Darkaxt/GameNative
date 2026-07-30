@@ -1,6 +1,7 @@
 package app.gamenative.service.amazon
 
 import app.gamenative.utils.Net
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -64,8 +65,10 @@ object AmazonAuthClient {
                 .post(body.toString().toRequestBody(JSON_MEDIA))
                 .build()
 
-            val response = httpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            val response = httpClient.newCall(request).awaitAmazonResponse { received ->
+                received.body?.string()
+            }
+            val responseBody = response.body.orEmpty()
 
             if (!response.isSuccessful) {
                 Timber.e("[Amazon] Device registration failed: HTTP ${response.code}")
@@ -90,9 +93,11 @@ object AmazonAuthClient {
 
             Timber.i("[Amazon] Device registration successful")
             Result.success(authResponse)
-        } catch (e: Exception) {
-            Timber.e("[Amazon] Device registration exception: ${e.javaClass.simpleName}")
-            Result.failure(e)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.e("[Amazon] Device registration exception: ${error.javaClass.simpleName}")
+            Result.failure(error)
         }
     }
 
@@ -119,8 +124,10 @@ object AmazonAuthClient {
                 .post(body.toString().toRequestBody(JSON_MEDIA))
                 .build()
 
-            val response = httpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            val response = httpClient.newCall(request).awaitAmazonResponse { received ->
+                received.body?.string()
+            }
+            val responseBody = response.body.orEmpty()
 
             if (!response.isSuccessful) {
                 Timber.e("[Amazon] Token refresh failed: HTTP ${response.code}")
@@ -138,9 +145,11 @@ object AmazonAuthClient {
 
             Timber.i("[Amazon] Token refresh successful")
             Result.success(authResponse)
-        } catch (e: Exception) {
-            Timber.e("[Amazon] Token refresh exception: ${e.javaClass.simpleName}")
-            Result.failure(e)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.e("[Amazon] Token refresh exception: ${error.javaClass.simpleName}")
+            Result.failure(error)
         }
     }
 
@@ -164,18 +173,19 @@ object AmazonAuthClient {
                 .post(body.toString().toRequestBody(JSON_MEDIA))
                 .build()
 
-            httpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Timber.w("[Amazon] Deregister returned HTTP ${response.code}")
-                    // Non-fatal: credentials will still be cleared locally
-                } else {
-                    Timber.i("[Amazon] Device deregistered successfully")
-                }
+            val response = httpClient.newCall(request).awaitAmazonResponse { Unit }
+            if (!response.isSuccessful) {
+                Timber.w("[Amazon] Deregister returned HTTP ${response.code}")
+                // Non-fatal: credentials will still be cleared locally
+            } else {
+                Timber.i("[Amazon] Device deregistered successfully")
             }
 
             Result.success(Unit)
-        } catch (e: Exception) {
-            Timber.w("[Amazon] Device deregister exception: ${e.javaClass.simpleName}")
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.w("[Amazon] Device deregister exception: ${error.javaClass.simpleName}")
             // Still succeed locally – we'll clear creds regardless
             Result.success(Unit)
         }

@@ -125,7 +125,7 @@ class CustomOwnedCopyRuntimeScanner private constructor(
     private fun Candidate.icon(): String? {
         val rootLogo = files.asSequence()
             .filter { file ->
-                file.nameWithoutExtension.equals("steamgriddb_logo", ignoreCase = true)
+                file.name.startsWith("steamgriddb_logo", ignoreCase = true)
             }
             .filter { it.isSupportedIcon(STEAM_GRID_LOGO_EXTENSIONS) }
             .sortedWith(iconOrder(STEAM_GRID_LOGO_EXTENSIONS))

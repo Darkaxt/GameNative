@@ -7,11 +7,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 /** Explicit result of one provider update observation. */
 internal sealed interface UpdateRefreshOutcome {
@@ -30,8 +32,18 @@ enum class UpdateObservation {
     UPDATE_AVAILABLE,
 }
 
+internal enum class UpdateSnapshotCoverage {
+    POINT,
+    COMPLETE,
+}
+
 data class UpdateObservationOwner(
     val accountScope: AccountScope,
+    val generation: Long,
+)
+
+internal data class UpdateObservationLifecycle(
+    val accountScope: AccountScope?,
     val generation: Long,
 )
 
@@ -45,18 +57,25 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
     private val nowMonotonicMs: () -> Long,
     private val ttlMs: Long,
     private val retryDelayMs: Long,
-    private val maxEntries: Int,
+    maxEntries: Int,
     private val maxRefreshBatch: Int = maxEntries,
+    private val refreshTimeoutMs: Long = DEFAULT_REFRESH_TIMEOUT_MS,
     private val isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean = { true },
     private val onRefreshFailure: (KClass<out Throwable>) -> Unit = {},
-    private val refresh: suspend (
+    private val refresh: (suspend (
         List<UpdateObservationRequest<K, F>>,
-    ) -> Map<K, UpdateRefreshOutcome>,
+    ) -> Map<K, UpdateRefreshOutcome>)? = null,
+    private val ownerAwareRefresh: (suspend (
+        UpdateObservationOwner,
+        List<UpdateObservationRequest<K, F>>,
+    ) -> Map<K, UpdateRefreshOutcome>)? = null,
 ) {
     private val lock = Any()
     private val changed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     private var owner: UpdateObservationOwner? = null
     private var highestGeneration = -1L
+    private var lifecycleInitialized = false
+    private var lifecycleAccountScope: AccountScope? = null
     private var ownerJob: Job? = null
     private var ownerContext: CoroutineContext? = null
     private var workerJob: Job? = null
@@ -67,27 +86,31 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
     private val pending = mutableMapOf<K, F>()
     private val failures = linkedMapOf<K, Failure<F>>()
 
+    init {
+        require(maxEntries > 0)
+        require(maxRefreshBatch > 0)
+        require(refreshTimeoutMs > 0L)
+        require((refresh == null) != (ownerAwareRefresh == null))
+    }
+
     fun invalidations(): Flow<Unit> = changed.asSharedFlow()
 
     fun snapshot(
         requestedOwner: UpdateObservationOwner,
         fingerprints: Map<K, F>,
+        coverage: UpdateSnapshotCoverage = UpdateSnapshotCoverage.POINT,
     ): Map<K, UpdateObservation> {
         val requests = synchronized(lock) {
             if (!activateOwnerLocked(requestedOwner)) return fingerprints.unknownObservations()
-            requestedFingerprints.keys.retainAll(fingerprints.keys)
-            fingerprints.forEach { (key, fingerprint) ->
-                if (
-                    key in requestedFingerprints ||
-                    requestedFingerprints.size < maxEntries.coerceAtLeast(1)
-                ) {
-                    requestedFingerprints[key] = fingerprint
-                }
+            if (coverage == UpdateSnapshotCoverage.COMPLETE) {
+                requestedFingerprints.keys.retainAll(fingerprints.keys)
             }
-            entries.keys.retainAll(requestedFingerprints.keys)
-            failures.keys.retainAll(requestedFingerprints.keys)
-            pending.keys.retainAll(requestedFingerprints.keys)
-            queued.keys.retainAll(requestedFingerprints.keys)
+            fingerprints.forEach { (key, fingerprint) ->
+                requestedFingerprints[key] = fingerprint
+            }
+            if (coverage == UpdateSnapshotCoverage.COMPLETE) {
+                pruneInactiveLocked()
+            }
             val now = nowMonotonicMs()
             buildList {
                 requestedFingerprints.forEach { (key, fingerprint) ->
@@ -104,7 +127,7 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
                         now >= failure.retryAtMonotonicMs
                     if (
                         pending[key] != fingerprint && retryAllowed &&
-                        size < maxRefreshBatch.coerceAtLeast(1)
+                        size < maxRefreshBatch
                     ) {
                         pending[key] = fingerprint
                         add(UpdateObservationRequest(key, fingerprint))
@@ -124,21 +147,23 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
         }
     }
 
-    fun retire(retiredThroughGeneration: Long) {
+    fun transitionLifecycle(accountScope: AccountScope?, generation: Long) {
+        require(generation >= 0L)
         synchronized(lock) {
-            highestGeneration = maxOf(highestGeneration, retiredThroughGeneration)
-            if (owner?.generation?.let { it > retiredThroughGeneration } == true) return
-            owner = null
-            ownerJob?.cancel()
-            ownerJob = null
-            ownerContext = null
-            workerJob = null
-            timerJob = null
-            queued.clear()
-            requestedFingerprints.clear()
-            entries.clear()
-            pending.clear()
-            failures.clear()
+            if (generation < highestGeneration) return
+            if (lifecycleInitialized && generation == highestGeneration) {
+                if (lifecycleAccountScope == accountScope) return
+                if (lifecycleAccountScope == null) return
+                lifecycleAccountScope = accountScope
+                cancelActiveOwnerLocked()
+                return
+            }
+
+            highestGeneration = generation
+            lifecycleInitialized = true
+            lifecycleAccountScope = accountScope
+            val transitionedOwner = accountScope?.let { UpdateObservationOwner(it, generation) }
+            if (owner != transitionedOwner) cancelActiveOwnerLocked()
         }
     }
 
@@ -149,8 +174,11 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
         synchronized(lock) {
             val context = ownerContext.takeIf { owner == requestedOwner } ?: return
             requests.forEach { request ->
-                if (pending[request.key] == request.fingerprint) {
+                if (pending[request.key] != request.fingerprint) return@forEach
+                if (request.key in queued || queued.size < maxRefreshBatch) {
                     queued[request.key] = request.fingerprint
+                } else {
+                    pending.remove(request.key)
                 }
             }
             if (workerJob?.isActive == true) return
@@ -166,7 +194,7 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
                 if (owner != requestedOwner) return
                 buildList {
                     val iterator = queued.iterator()
-                    while (iterator.hasNext() && size < maxRefreshBatch.coerceAtLeast(1)) {
+                    while (iterator.hasNext() && size < maxRefreshBatch) {
                         val (key, fingerprint) = iterator.next()
                         iterator.remove()
                         if (pending[key] == fingerprint) {
@@ -183,15 +211,21 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
             if (requests.isEmpty()) return
             try {
                 if (!isOwnerCurrent(requestedOwner)) {
-                    retire(requestedOwner.generation)
+                    deactivateOwner(requestedOwner)
                     return
                 }
-                val refreshed = refresh(requests)
+                val refreshed = withTimeout(refreshTimeoutMs) {
+                    ownerAwareRefresh?.invoke(requestedOwner, requests)
+                        ?: requireNotNull(refresh).invoke(requests)
+                }
                 if (!isOwnerCurrent(requestedOwner)) {
-                    retire(requestedOwner.generation)
+                    deactivateOwner(requestedOwner)
                     return
                 }
                 complete(requestedOwner, requests, refreshed)
+            } catch (error: TimeoutCancellationException) {
+                onRefreshFailure(error::class)
+                fail(requestedOwner, requests)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -241,7 +275,6 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
                     }
                 }
             }
-            trimEntries()
             armTimerLocked(requestedOwner)
         }
         refreshFailures.forEach(onRefreshFailure)
@@ -296,9 +329,6 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
             attempts = attempts,
             retryAtMonotonicMs = now + (retryDelayMs * multiplier),
         )
-        while (failures.size > maxEntries.coerceAtLeast(1)) {
-            failures.remove(failures.keys.first())
-        }
     }
 
     private fun armTimerLocked(requestedOwner: UpdateObservationOwner) {
@@ -332,7 +362,7 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
             val now = nowMonotonicMs()
             buildList {
                 requestedFingerprints.forEach { (key, fingerprint) ->
-                    if (size >= maxRefreshBatch.coerceAtLeast(1)) return@forEach
+                    if (size >= maxRefreshBatch) return@forEach
                     if (pending[key] == fingerprint) return@forEach
                     val failure = failures[key]?.takeIf { it.fingerprint == fingerprint }
                     if (failure != null && now < failure.retryAtMonotonicMs) return@forEach
@@ -355,13 +385,40 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
 
     private fun activateOwnerLocked(requestedOwner: UpdateObservationOwner): Boolean {
         if (owner == requestedOwner) return true
-        if (requestedOwner.generation <= highestGeneration) return false
-        highestGeneration = requestedOwner.generation
+        if (!lifecycleInitialized) {
+            if (requestedOwner.generation <= highestGeneration) return false
+            highestGeneration = requestedOwner.generation
+            lifecycleInitialized = true
+            lifecycleAccountScope = requestedOwner.accountScope
+        } else {
+            if (requestedOwner.generation < highestGeneration) return false
+            if (requestedOwner.generation == highestGeneration) {
+                if (lifecycleAccountScope != requestedOwner.accountScope) return false
+            } else {
+                highestGeneration = requestedOwner.generation
+                lifecycleAccountScope = requestedOwner.accountScope
+            }
+        }
+
+        cancelActiveOwnerLocked()
         owner = requestedOwner
-        ownerJob?.cancel()
         val job = SupervisorJob(scope.coroutineContext[Job])
         ownerJob = job
         ownerContext = scope.coroutineContext + job
+        return true
+    }
+
+    private fun deactivateOwner(requestedOwner: UpdateObservationOwner) {
+        synchronized(lock) {
+            if (owner == requestedOwner) cancelActiveOwnerLocked()
+        }
+    }
+
+    private fun cancelActiveOwnerLocked() {
+        owner = null
+        ownerJob?.cancel()
+        ownerJob = null
+        ownerContext = null
         workerJob = null
         timerJob = null
         queued.clear()
@@ -369,17 +426,21 @@ internal class ObservedUpdateStateStore<K : Any, F : Any>(
         entries.clear()
         pending.clear()
         failures.clear()
-        return true
     }
 
-    private fun trimEntries() {
-        while (entries.size > maxEntries.coerceAtLeast(1)) {
-            entries.remove(entries.keys.first())
-        }
+    private fun pruneInactiveLocked() {
+        entries.keys.retainAll(requestedFingerprints.keys)
+        failures.keys.retainAll(requestedFingerprints.keys)
+        pending.keys.retainAll(requestedFingerprints.keys)
+        queued.keys.retainAll(requestedFingerprints.keys)
     }
 
     private fun Map<K, F>.unknownObservations(): Map<K, UpdateObservation> =
         keys.associateWith { UpdateObservation.UNKNOWN }
+
+    private companion object {
+        const val DEFAULT_REFRESH_TIMEOUT_MS = 30_000L
+    }
 
     private data class Entry<F : Any>(
         val fingerprint: F,

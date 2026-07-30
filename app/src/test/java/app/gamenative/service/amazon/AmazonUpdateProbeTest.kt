@@ -1,8 +1,22 @@
 package app.gamenative.service.amazon
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import okhttp3.Call
+import okhttp3.EventListener
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,5 +134,88 @@ class AmazonUpdateProbeTest {
             setOf(AmazonLiveVersionsUnavailableException::class),
             results.values.map { (it as AmazonUpdateVersionResult.Failed).errorClass }.toSet(),
         )
+    }
+
+    @Test
+    fun accountSwitchDuringTokenAcquisitionAbortsBeforeHttpDispatch() = runTest {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val tokenStarted = CompletableDeferred<Unit>()
+            val releaseToken = CompletableDeferred<Unit>()
+            var ownerCurrent = true
+            val request = AmazonUpdateVersionRequest("old-product", "stored")
+
+            val result = async {
+                AmazonService.probeUpdateVersions(
+                    requests = listOf(request),
+                    tokenProvider = {
+                        tokenStarted.complete(Unit)
+                        releaseToken.await()
+                        "new-account-token"
+                    },
+                    expectedOwnerIsCurrent = { ownerCurrent },
+                    liveVersionFetcher = { productIds, token ->
+                        AmazonApiClient.fetchLiveVersionIdsAt(
+                            url = server.url("/versions").toString(),
+                            adgProductIds = productIds,
+                            bearerToken = token,
+                            client = OkHttpClient(),
+                        )
+                    },
+                )
+            }
+
+            tokenStarted.await()
+            ownerCurrent = false
+            releaseToken.complete(Unit)
+
+            assertEquals(
+                AmazonUpdateVersionResult.Failed(AmazonUpdateOwnerChangedException::class),
+                result.await()[request.productId],
+            )
+            assertEquals(0, server.requestCount)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun cancellingDelayedLiveVersionRequestCancelsActualOkHttpCall() = runBlocking {
+        val server = MockWebServer()
+        val cancelled = CountDownLatch(1)
+        val client = OkHttpClient.Builder()
+            .eventListener(
+                object : EventListener() {
+                    override fun canceled(call: Call) {
+                        cancelled.countDown()
+                    }
+                },
+            )
+            .build()
+        server.enqueue(
+            MockResponse()
+                .setBodyDelay(30L, TimeUnit.SECONDS)
+                .setBody("{\"adgProductIdToVersionIdMap\":{\"product\":\"live\"}}"),
+        )
+        server.start()
+        try {
+            val request = launch(Dispatchers.IO) {
+                AmazonApiClient.fetchLiveVersionIdsAt(
+                    url = server.url("/versions").toString(),
+                    adgProductIds = listOf("product"),
+                    bearerToken = "token",
+                    client = client,
+                )
+            }
+
+            assertNotNull(server.takeRequest(5L, TimeUnit.SECONDS))
+            request.cancelAndJoin()
+
+            assertTrue(request.isCancelled)
+            assertTrue(cancelled.await(5L, TimeUnit.SECONDS))
+        } finally {
+            server.shutdown()
+        }
     }
 }

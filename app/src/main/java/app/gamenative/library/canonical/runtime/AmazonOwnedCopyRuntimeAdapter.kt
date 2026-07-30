@@ -43,6 +43,8 @@ import kotlinx.coroutines.withContext
 class AmazonOwnedCopyRuntimeGateway @Inject constructor(
     @ApplicationContext private val context: Context,
     @CanonicalIoDispatcher private val ioDispatcher: CoroutineDispatcher,
+    private val accountScopeProvider: AccountScopeProvider,
+    private val accountLifecycleState: AccountLifecycleState,
 ) {
     internal suspend fun activeDownloadProductIds(): Set<String> = withContext(ioDispatcher) {
         AmazonService.getActiveDownloads()
@@ -55,14 +57,20 @@ class AmazonOwnedCopyRuntimeGateway @Inject constructor(
     }
 
     internal suspend fun refreshUpdates(
+        expectedOwner: UpdateObservationOwner,
         requests: List<UpdateObservationRequest<String, String>>,
     ): Map<String, UpdateRefreshOutcome> = withContext(ioDispatcher) {
         AmazonService.getUpdatePendingBatch(
-            requests.map { request ->
+            requests = requests.map { request ->
                 AmazonUpdateVersionRequest(
                     productId = request.key,
                     storedVersionId = request.fingerprint,
                 )
+            },
+            expectedOwnerIsCurrent = {
+                accountScopeProvider.current(GameSource.AMAZON) == expectedOwner.accountScope &&
+                    accountLifecycleState.generation(GameSource.AMAZON) == expectedOwner.generation &&
+                    accountLifecycleState.readyGeneration(GameSource.AMAZON) == expectedOwner.generation
             },
         ).mapValues { (_, result) ->
             when (result) {
@@ -80,7 +88,7 @@ class AmazonObservedUpdateState private constructor(
     scope: CoroutineScope,
     nowMonotonicMs: () -> Long,
     isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
-    retirements: Flow<Long>,
+    retirements: Flow<UpdateObservationLifecycle>,
     diagnostics: CanonicalDiagnosticSink?,
     @Suppress("UNUSED_PARAMETER") marker: Unit,
 ) {
@@ -101,7 +109,10 @@ class AmazonObservedUpdateState private constructor(
                 accountLifecycleState.readyGeneration(GameSource.AMAZON) == owner.generation
         },
         retirements = AccountScopeInvalidations.forSource(GameSource.AMAZON).map {
-            accountLifecycleState.generation(GameSource.AMAZON)
+            UpdateObservationLifecycle(
+                accountScope = accountScopeProvider.current(GameSource.AMAZON),
+                generation = accountLifecycleState.generation(GameSource.AMAZON),
+            )
         },
         diagnostics = diagnostics,
         marker = Unit,
@@ -132,7 +143,7 @@ class AmazonObservedUpdateState private constructor(
         scope: CoroutineScope,
         nowMonotonicMs: () -> Long,
         isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
-        retirements: Flow<Long>,
+        retirements: Flow<UpdateObservationLifecycle>,
     ) : this(gateway, scope, nowMonotonicMs, isOwnerCurrent, retirements, null, Unit)
 
     private val store = ObservedUpdateStateStore<String, String>(
@@ -142,16 +153,19 @@ class AmazonObservedUpdateState private constructor(
         retryDelayMs = UPDATE_RETRY_MS,
         maxEntries = MAX_UPDATE_ENTRIES,
         maxRefreshBatch = MAX_UPDATE_REFRESH_BATCH,
+        refreshTimeoutMs = UPDATE_REFRESH_TIMEOUT_MS,
         isOwnerCurrent = isOwnerCurrent,
         onRefreshFailure = { errorClass ->
             diagnostics?.updateObservationFailed(GameSource.AMAZON, errorClass)
         },
-        refresh = { requests -> gateway.refreshUpdates(requests) },
+        ownerAwareRefresh = { owner, requests -> gateway.refreshUpdates(owner, requests) },
     )
 
     init {
         scope.launch {
-            retirements.collect(store::retire)
+            retirements.collect { lifecycle ->
+                store.transitionLifecycle(lifecycle.accountScope, lifecycle.generation)
+            }
         }
     }
 
@@ -160,18 +174,26 @@ class AmazonObservedUpdateState private constructor(
     internal fun snapshot(
         owner: UpdateObservationOwner,
         games: List<AmazonGame>,
+        coverage: UpdateSnapshotCoverage = UpdateSnapshotCoverage.POINT,
     ): Map<String, UpdateObservation> = store.snapshot(
         owner,
         games.associate { game -> game.productId to game.versionId },
+        coverage,
     )
 
     private companion object {
         const val UPDATE_TTL_MS = 5 * 60_000L
         const val UPDATE_RETRY_MS = 15_000L
+        const val UPDATE_REFRESH_TIMEOUT_MS = 30_000L
         const val MAX_UPDATE_ENTRIES = 2_048
         const val MAX_UPDATE_REFRESH_BATCH = 32
     }
 }
+
+internal data class AmazonRuntimeBatchResult(
+    val states: Map<Int, OwnedCopyVolatileState>,
+    val failures: Map<Int, kotlin.reflect.KClass<out Throwable>>,
+) : Map<Int, OwnedCopyVolatileState> by states
 
 @Singleton
 class AmazonOwnedCopyRuntimeState @Inject constructor(
@@ -194,6 +216,7 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
             observedUpdates.snapshot(
                 UpdateObservationOwner(accountScope, generation),
                 listOf(game),
+                UpdateSnapshotCoverage.POINT,
             ).getValue(game.productId)
         } else {
             UpdateObservation.CURRENT
@@ -205,17 +228,20 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
         games: List<AmazonGame>,
         accountScope: AccountScope,
         generation: Long,
-    ): Map<Int, OwnedCopyVolatileState> {
-        if (games.isEmpty()) return emptyMap()
+    ): AmazonRuntimeBatchResult {
+        if (games.isEmpty()) return AmazonRuntimeBatchResult(emptyMap(), emptyMap())
         val activeDownloads = gateway.activeDownloadProductIds()
         val partialDownloads = gateway.partialDownloadProductIds() + activeDownloads
         val observations = observedUpdates.snapshot(
             UpdateObservationOwner(accountScope, generation),
             games.filter(AmazonGame::isInstalled),
+            UpdateSnapshotCoverage.COMPLETE,
         )
-        return games.mapNotNull { game ->
+        val states = mutableMapOf<Int, OwnedCopyVolatileState>()
+        val failures = mutableMapOf<Int, kotlin.reflect.KClass<out Throwable>>()
+        games.forEach { game ->
             try {
-                game.appId to stateFor(
+                states[game.appId] = stateFor(
                     game,
                     activeDownloads,
                     partialDownloads,
@@ -223,10 +249,11 @@ class AmazonOwnedCopyRuntimeState @Inject constructor(
                 )
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
-                null
+            } catch (error: Exception) {
+                failures[game.appId] = error::class
             }
-        }.toMap()
+        }
+        return AmazonRuntimeBatchResult(states, failures)
     }
 
     internal fun updateInvalidations(): Flow<Unit> = observedUpdates.invalidations()
@@ -396,7 +423,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 .mapNotNull { rowsByProduct[it.stableSourceId] }
                 .distinctBy(AmazonGame::appId)
                 .toList()
-            val states = runtimeState.readBatch(requestedRows, accountScope, generation)
+            val stateBatch = runtimeState.readBatch(requestedRows, accountScope, generation)
             val history = playHistoryDao.batchLastPlayed(source, diagnostics)
             val finalLedger = finalLedger(accountScope, generation) ?: return keys.hiddenResults()
             completedFinalLedger = finalLedger
@@ -404,12 +431,18 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
             keys.associateWith { key ->
                 val entitlementId = ledger.resolvedSourceIds[key.stableSourceId]
                 val game = rowsByProduct[key.stableSourceId]
-                val sourceState = game?.let { states[it.appId] }
+                val sourceState = game?.let { stateBatch.states[it.appId] }
+                val stateFailure = game?.let { stateBatch.failures[it.appId] }
                 when {
                     key.source != source || key.accountScope != accountScope ->
                         OwnedCopyRuntimeResult.Hidden
                     !referenceIsCurrent(key.stableSourceId, ledger, finalLedger) ->
                         OwnedCopyRuntimeResult.Hidden
+                    stateFailure != null -> unavailable(
+                        key,
+                        CopyUnavailableReason.SOURCE_READ_FAILED,
+                        stateFailure,
+                    )
                     entitlementId.isNullOrBlank() || game == null || sourceState == null ->
                         unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
                     else -> available(

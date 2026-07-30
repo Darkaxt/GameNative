@@ -58,6 +58,7 @@ internal class AmazonTokenUnavailableException : Exception()
 internal class AmazonLiveVersionsUnavailableException : Exception()
 internal class AmazonStoredVersionUnavailableException : Exception()
 internal class AmazonLiveVersionMissingException : Exception()
+internal class AmazonUpdateOwnerChangedException : Exception()
 
 /** Amazon Games foreground service. */
 @AndroidEntryPoint
@@ -367,6 +368,7 @@ class AmazonService : Service() {
         /** Observe live versions for one bounded canonical refresh wave. */
         internal suspend fun getUpdatePendingBatch(
             requests: List<AmazonUpdateVersionRequest>,
+            expectedOwnerIsCurrent: suspend () -> Boolean = { true },
         ): Map<String, AmazonUpdateVersionResult> {
             if (requests.isEmpty()) return emptyMap()
             val svc = instance ?: return requests.failedUpdates(
@@ -376,6 +378,7 @@ class AmazonService : Service() {
                 requests = requests,
                 tokenProvider = svc.amazonManager::getBearerToken,
                 liveVersionFetcher = AmazonApiClient::fetchLiveVersionIds,
+                expectedOwnerIsCurrent = expectedOwnerIsCurrent,
             )
         }
 
@@ -383,6 +386,7 @@ class AmazonService : Service() {
             requests: List<AmazonUpdateVersionRequest>,
             tokenProvider: suspend () -> String?,
             liveVersionFetcher: suspend (List<String>, String) -> Map<String, String>?,
+            expectedOwnerIsCurrent: suspend () -> Boolean = { true },
         ): Map<String, AmazonUpdateVersionResult> {
             if (requests.isEmpty()) return emptyMap()
             val usable = requests.distinctBy(AmazonUpdateVersionRequest::productId)
@@ -397,6 +401,9 @@ class AmazonService : Service() {
                 val token = tokenProvider() ?: return usable.failedUpdates(
                     AmazonTokenUnavailableException::class,
                 )
+                if (!expectedOwnerIsCurrent()) {
+                    return usable.failedUpdates(AmazonUpdateOwnerChangedException::class)
+                }
                 val liveVersions = liveVersionFetcher(
                     queryable.map(AmazonUpdateVersionRequest::productId),
                     token,

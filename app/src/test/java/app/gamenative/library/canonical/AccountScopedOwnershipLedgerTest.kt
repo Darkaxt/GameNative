@@ -6,6 +6,9 @@ import androidx.test.core.app.ApplicationProvider
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.db.PluviaDatabase
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -135,6 +138,94 @@ class AccountScopedOwnershipLedgerTest {
 
         assertEquals(0, result.getOrThrow())
         assertTrue(dao.getCompletedSnapshot(scopeA.value, GameSource.AMAZON)?.stableSourceIds?.isEmpty() == true)
+    }
+
+    @Test
+    fun completedNonSteamLedgersPublishExactLifecycleReadiness() = runTest {
+        val ledger = AccountScopedOwnershipLedger(
+            fixedScopes(scopeA),
+            database.ownedCopyLedgerDao(),
+            lifecycleState,
+        )
+
+        listOf(GameSource.GOG, GameSource.EPIC, GameSource.AMAZON).forEach { source ->
+            val generation = lifecycleState.advanceGeneration(source)
+            assertNull(lifecycleState.readyGeneration(source))
+
+            val result = ledger.runCompleteSnapshot(source) {
+                MaterializedOwnedCopySnapshot(
+                    value = source,
+                    stableSourceIds = listOf(source.name.lowercase()),
+                )
+            }
+
+            assertEquals(source, result.getOrThrow())
+            assertEquals(generation, lifecycleState.readyGeneration(source))
+        }
+    }
+
+    @Test
+    fun completedNonSteamLedgersPublishReadinessInvalidation() = runTest {
+        val productionLifecycle = InMemoryAccountLifecycleState()
+        AccountScopeInvalidations.install(productionLifecycle)
+        try {
+            val invalidation = async(start = CoroutineStart.UNDISPATCHED) {
+                AccountScopeInvalidations.forSource(GameSource.GOG).first()
+            }
+            val ledger = AccountScopedOwnershipLedger(
+                fixedScopes(scopeA),
+                database.ownedCopyLedgerDao(),
+                AccountScopeInvalidations,
+            )
+
+            ledger.runCompleteSnapshot(GameSource.GOG) {
+                MaterializedOwnedCopySnapshot(value = Unit, stableSourceIds = listOf("owned"))
+            }.getOrThrow()
+
+            assertEquals(Unit, invalidation.await())
+        } finally {
+            AccountScopeInvalidations.install(InMemoryAccountLifecycleState())
+        }
+    }
+
+    @Test
+    fun readinessRaceRejectsCommittedSnapshotAndStaleGenerationCannotBecomeReady() = runTest {
+        val delegate = InMemoryAccountLifecycleState()
+        val racingLifecycle = object : AccountLifecycleState by delegate {
+            override fun markReady(source: GameSource, expectedGeneration: Long): Boolean {
+                delegate.advanceGeneration(source)
+                return delegate.markReady(source, expectedGeneration)
+            }
+        }
+        val ledger = AccountScopedOwnershipLedger(
+            fixedScopes(scopeA),
+            database.ownedCopyLedgerDao(),
+            racingLifecycle,
+        )
+
+        val result = ledger.runCompleteSnapshot(GameSource.AMAZON) {
+            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("owned"))
+        }
+
+        assertTrue(result.isFailure)
+        assertEquals(OwnedCopySyncFailure.ACCOUNT_SCOPE_CHANGED.name, result.exceptionOrNull()?.message)
+        assertNull(delegate.readyGeneration(GameSource.AMAZON))
+        assertEquals(1L, delegate.generation(GameSource.AMAZON))
+    }
+
+    @Test
+    fun steamLedgerDoesNotPublishLicenseReadiness() = runTest {
+        val ledger = AccountScopedOwnershipLedger(
+            fixedScopes(scopeA),
+            database.ownedCopyLedgerDao(),
+            lifecycleState,
+        )
+
+        ledger.runCompleteSnapshot(GameSource.STEAM) {
+            MaterializedOwnedCopySnapshot(value = Unit, stableSourceIds = listOf("42"))
+        }.getOrThrow()
+
+        assertNull(lifecycleState.readyGeneration(GameSource.STEAM))
     }
 
     private fun fixedScopes(scope: AccountScope): AccountScopeProvider = object : AccountScopeProvider {

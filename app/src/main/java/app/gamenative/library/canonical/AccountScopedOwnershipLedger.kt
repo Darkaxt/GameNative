@@ -59,10 +59,18 @@ class AccountScopedOwnershipLedger @Inject constructor(
                 lifecycleGeneration = capturedGeneration,
             )
             val isStillCurrent = isLifecycleCurrent(source, capturedScope, capturedGeneration)
-            if (committed && isStillCurrent) {
+            if (!committed || !isStillCurrent) {
+                failure(OwnedCopySyncFailure.ACCOUNT_SCOPE_CHANGED)
+            } else if (source == GameSource.STEAM) {
                 Result.success(snapshot.value)
             } else {
-                failure(OwnedCopySyncFailure.ACCOUNT_SCOPE_CHANGED)
+                val ready = accountLifecycleState.markReady(source, capturedGeneration)
+                if (ready && isLifecycleCurrent(source, capturedScope, capturedGeneration)) {
+                    AccountScopeInvalidations.publishInvalidation(source)
+                    Result.success(snapshot.value)
+                } else {
+                    failure(OwnedCopySyncFailure.ACCOUNT_SCOPE_CHANGED)
+                }
             }
         } catch (error: CancellationException) {
             throw error

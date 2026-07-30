@@ -170,8 +170,9 @@ class DepotFilteringTest {
         val localDlc = SteamApp(id = 2, name = "DLC", depots = mapOf(200 to localDlcDepot))
         val remoteDlc = localDlc.copy(depots = mapOf(200 to remoteDlcDepot))
 
-        assertTrue(
-            SteamService.isUpdatePendingFromSnapshots(
+        assertEquals(
+            SteamUpdateCheckResult.Observed(updateAvailable = true),
+            SteamService.getUpdatePendingFromSnapshots(
                 localApp = localMain,
                 branch = "public",
                 preferredLanguage = "english",
@@ -197,8 +198,9 @@ class DepotFilteringTest {
         val remoteMain = localMain.copy(depots = mapOf(200 to remoteDlcDepot))
         val localDlc = SteamApp(id = 2, name = "DLC")
 
-        assertTrue(
-            SteamService.isUpdatePendingFromSnapshots(
+        assertEquals(
+            SteamUpdateCheckResult.Observed(updateAvailable = true),
+            SteamService.getUpdatePendingFromSnapshots(
                 localApp = localMain,
                 branch = "public",
                 preferredLanguage = "english",
@@ -234,8 +236,9 @@ class DepotFilteringTest {
             depots = mapOf(100 to englishDepot, 200 to remoteFrenchDepot),
         )
 
-        assertTrue(
-            SteamService.isUpdatePendingFromSnapshots(
+        assertEquals(
+            SteamUpdateCheckResult.Observed(updateAvailable = true),
+            SteamService.getUpdatePendingFromSnapshots(
                 localApp = localMain,
                 branch = "public",
                 preferredLanguage = "english",
@@ -248,8 +251,112 @@ class DepotFilteringTest {
     }
 
     @Test
+    fun `parent 64 bit preference excludes indirect 32 bit DLC from update comparison`() {
+        val parentDepot = depot(
+            depotId = 100,
+            osArch = OSArch.Arch64,
+            manifests = mapOf("public" to manifest(gid = 1L)),
+        )
+        val localDlcDepot = depot(
+            depotId = 200,
+            osArch = OSArch.Arch32,
+            manifests = mapOf("public" to manifest(gid = 10L)),
+        )
+        val remoteDlcDepot = localDlcDepot.copy(
+            manifests = mapOf("public" to manifest(gid = 11L)),
+        )
+        val localMain = SteamApp(id = 1, name = "Main", depots = mapOf(100 to parentDepot))
+        val localDlc = SteamApp(id = 2, name = "DLC", depots = mapOf(200 to localDlcDepot))
+
+        assertEquals(
+            SteamUpdateCheckResult.Observed(updateAvailable = false),
+            SteamService.getUpdatePendingFromSnapshots(
+                localApp = localMain,
+                branch = "public",
+                preferredLanguage = "english",
+                ownedDlcApps = listOf(localDlc),
+                licensedDepotIds = mapOf(1 to setOf(100), 2 to setOf(200)),
+                installedDepotIds = setOf(100),
+                remoteApps = mapOf(
+                    1 to localMain,
+                    2 to localDlc.copy(depots = mapOf(200 to remoteDlcDepot)),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `missing remote branch manifest remains unknown`() {
+        val localDepot = depot(
+            depotId = 100,
+            manifests = mapOf("public" to manifest(gid = 1L)),
+        )
+        val local = SteamApp(id = 1, name = "Main", depots = mapOf(100 to localDepot))
+        val remote = local.copy(depots = mapOf(100 to localDepot.copy(manifests = emptyMap())))
+
+        assertEquals(
+            SteamUpdateCheckResult.Failed(SteamManifestUnavailableException::class),
+            SteamService.getUpdatePendingFromSnapshots(
+                localApp = local,
+                branch = "public",
+                preferredLanguage = "english",
+                ownedDlcApps = emptyList(),
+                licensedDepotIds = mapOf(1 to setOf(100)),
+                installedDepotIds = emptySet(),
+                remoteApps = mapOf(1 to remote),
+            ),
+        )
+    }
+
+    @Test
+    fun `zero comparable required depots remains unknown`() {
+        val local = SteamApp(id = 1, name = "Main", depots = emptyMap())
+
+        assertEquals(
+            SteamUpdateCheckResult.Failed(SteamNoComparableDepotsException::class),
+            SteamService.getUpdatePendingFromSnapshots(
+                localApp = local,
+                branch = "public",
+                preferredLanguage = "english",
+                ownedDlcApps = emptyList(),
+                licensedDepotIds = emptyMap(),
+                installedDepotIds = emptySet(),
+                remoteApps = mapOf(1 to local),
+            ),
+        )
+    }
+
+    @Test
+    fun `malformed remote sibling does not prevent healthy comparison`() {
+        val firstDepot = depot(depotId = 100, manifests = mapOf("public" to manifest(gid = 1L)))
+        val secondDepot = depot(depotId = 200, manifests = mapOf("public" to manifest(gid = 2L)))
+        val first = SteamApp(id = 1, name = "Healthy", depots = mapOf(100 to firstDepot))
+        val second = SteamApp(id = 2, name = "Malformed", depots = mapOf(200 to secondDepot))
+
+        val results = SteamService.getUpdatePendingBatchFromSnapshots(
+            localApps = listOf(first, second),
+            branches = mapOf(1 to "public", 2 to "public"),
+            preferredLanguage = "english",
+            ownedDlcApps = emptyList(),
+            licensedDepotIds = mapOf(1 to setOf(100), 2 to setOf(200)),
+            installedDepotIds = emptyMap(),
+            unlockedBranchAppIds = emptySet(),
+            remoteApps = mapOf(1 to first),
+            remoteGenerationFailures = mapOf(2 to MalformedSteamMetadataException::class),
+        )
+
+        assertEquals(SteamUpdateCheckResult.Observed(false), results[1])
+        assertEquals(
+            SteamUpdateCheckResult.Failed(MalformedSteamMetadataException::class),
+            results[2],
+        )
+    }
+
+    @Test
     fun `non-deck depot passes regardless of preferNonDeckWindows`() {
         val d = depot(manifests = mapOf("public" to manifest()), steamDeck = false)
         assertTrue(SteamService.filterForDownloadableDepots(d, true, true, "english", null))
     }
+
+    private class MalformedSteamMetadataException : Exception()
 }

@@ -18,6 +18,7 @@ import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
 import app.gamenative.service.SteamService
+import app.gamenative.service.SteamUpdateCheckResult
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -149,7 +150,7 @@ class SteamOwnedCopyRuntimeGateway @Inject constructor(
 
     internal suspend fun refreshUpdates(
         requests: List<SteamUpdateRefreshRequest>,
-    ): Map<Int, Boolean> = withContext(ioDispatcher) {
+    ): Map<Int, UpdateRefreshOutcome> = withContext(ioDispatcher) {
         SteamService.getUpdatePendingBatch(
             apps = requests.map(SteamUpdateRefreshRequest::app),
             branches = requests.associate { it.app.id to it.branch },
@@ -159,7 +160,13 @@ class SteamOwnedCopyRuntimeGateway @Inject constructor(
             installedDepotIds = requests.associate { request ->
                 request.app.id to request.installedDepotIds
             },
-        )
+        ).mapValues { (_, result) ->
+            when (result) {
+                is SteamUpdateCheckResult.Failed -> UpdateRefreshOutcome.Failed(result.errorClass)
+                is SteamUpdateCheckResult.Observed ->
+                    UpdateRefreshOutcome.Observed(result.updateAvailable)
+            }
+        }
     }
 }
 
@@ -168,7 +175,7 @@ class SteamObservedUpdateState private constructor(
     scope: CoroutineScope,
     nowMonotonicMs: () -> Long,
     isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
-    retirements: Flow<Long>,
+    retirements: Flow<UpdateObservationLifecycle>,
     diagnostics: CanonicalDiagnosticSink?,
     @Suppress("UNUSED_PARAMETER") marker: Unit,
 ) {
@@ -189,7 +196,10 @@ class SteamObservedUpdateState private constructor(
                 accountLifecycleState.readyGeneration(GameSource.STEAM) == owner.generation
         },
         retirements = AccountScopeInvalidations.forSource(GameSource.STEAM).map {
-            accountLifecycleState.generation(GameSource.STEAM)
+            UpdateObservationLifecycle(
+                accountScope = accountScopeProvider.current(GameSource.STEAM),
+                generation = accountLifecycleState.generation(GameSource.STEAM),
+            )
         },
         diagnostics = diagnostics,
         marker = Unit,
@@ -220,7 +230,7 @@ class SteamObservedUpdateState private constructor(
         scope: CoroutineScope,
         nowMonotonicMs: () -> Long,
         isOwnerCurrent: suspend (UpdateObservationOwner) -> Boolean,
-        retirements: Flow<Long>,
+        retirements: Flow<UpdateObservationLifecycle>,
     ) : this(gateway, scope, nowMonotonicMs, isOwnerCurrent, retirements, null, Unit)
 
     private val store = ObservedUpdateStateStore<Int, SteamUpdateRefreshRequest>(
@@ -230,20 +240,21 @@ class SteamObservedUpdateState private constructor(
         retryDelayMs = UPDATE_RETRY_MS,
         maxEntries = MAX_UPDATE_ENTRIES,
         maxRefreshBatch = MAX_UPDATE_REFRESH_BATCH,
+        refreshTimeoutMs = UPDATE_REFRESH_TIMEOUT_MS,
         isOwnerCurrent = isOwnerCurrent,
         onRefreshFailure = { errorClass ->
             diagnostics?.updateObservationFailed(GameSource.STEAM, errorClass)
         },
         refresh = { requests ->
-            gateway.refreshUpdates(requests.map { it.fingerprint }).mapValues { (_, pending) ->
-                UpdateRefreshOutcome.Observed(pending)
-            }
+            gateway.refreshUpdates(requests.map { it.fingerprint })
         },
     )
 
     init {
         scope.launch {
-            retirements.collect(store::retire)
+            retirements.collect { lifecycle ->
+                store.transitionLifecycle(lifecycle.accountScope, lifecycle.generation)
+            }
         }
     }
 
@@ -253,6 +264,7 @@ class SteamObservedUpdateState private constructor(
         owner: UpdateObservationOwner,
         apps: List<SteamApp>,
         inputs: SteamRuntimeInputs,
+        coverage: UpdateSnapshotCoverage = UpdateSnapshotCoverage.POINT,
     ): Map<Int, UpdateObservation> = store.snapshot(
         owner,
         apps.associate { app ->
@@ -268,11 +280,13 @@ class SteamObservedUpdateState private constructor(
                     .toSet(),
             )
         },
+        coverage,
     )
 
     private companion object {
         const val UPDATE_TTL_MS = 5 * 60_000L
         const val UPDATE_RETRY_MS = 15_000L
+        const val UPDATE_REFRESH_TIMEOUT_MS = 30_000L
         const val MAX_UPDATE_ENTRIES = 2_048
         const val MAX_UPDATE_REFRESH_BATCH = 100
     }
@@ -304,6 +318,7 @@ class SteamOwnedCopyRuntimeState @Inject constructor(
                 UpdateObservationOwner(accountScope, generation),
                 listOf(app),
                 inputs,
+                UpdateSnapshotCoverage.POINT,
             ).getValue(app.id)
         } else {
             UpdateObservation.CURRENT
@@ -325,6 +340,7 @@ class SteamOwnedCopyRuntimeState @Inject constructor(
             UpdateObservationOwner(accountScope, generation),
             observedApps,
             inputs,
+            UpdateSnapshotCoverage.COMPLETE,
         )
         val states = mutableMapOf<Int, OwnedCopyVolatileState>()
         val failures = mutableMapOf<Int, KClass<out Throwable>>()

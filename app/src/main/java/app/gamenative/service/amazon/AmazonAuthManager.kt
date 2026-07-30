@@ -13,6 +13,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 
 /** Manages Amazon authentication and credential lifecycle. */
 object AmazonAuthManager {
@@ -175,9 +176,11 @@ object AmazonAuthManager {
                 return Result.failure(IOException("Amazon credential lifecycle changed while reading credentials"))
             }
             Result.success(credentials)
-        } catch (e: Exception) {
-            Timber.e("[Amazon] Error getting credentials: ${e.javaClass.simpleName}")
-            Result.failure(Exception("Error getting credentials", e))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.e("[Amazon] Error getting credentials: ${error.javaClass.simpleName}")
+            Result.failure(Exception("Error getting credentials", error))
         }
     }
 

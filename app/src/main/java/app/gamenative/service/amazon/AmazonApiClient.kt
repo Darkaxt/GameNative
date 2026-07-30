@@ -2,15 +2,56 @@ package app.gamenative.service.amazon
 
 import app.gamenative.data.AmazonGame
 import app.gamenative.utils.Net
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
-import timber.log.Timber
+import java.io.IOException
 import java.net.URL
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import org.json.JSONObject
+import timber.log.Timber
+
+internal data class AmazonHttpResponse<T>(
+    val code: Int,
+    val isSuccessful: Boolean,
+    val body: T?,
+)
+
+internal suspend fun <T> Call.awaitAmazonResponse(
+    readBody: (Response) -> T?,
+): AmazonHttpResponse<T> = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(
+        object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                if (continuation.isActive) continuation.resumeWith(Result.failure(error))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    val result = response.use { received ->
+                        AmazonHttpResponse(
+                            code = received.code,
+                            isSuccessful = received.isSuccessful,
+                            body = readBody(received),
+                        )
+                    }
+                    if (continuation.isActive) continuation.resumeWith(Result.success(result))
+                } catch (error: Throwable) {
+                    if (continuation.isActive) continuation.resumeWith(Result.failure(error))
+                }
+            }
+        },
+    )
+}
 
 /** Low-level client for Amazon Gaming distribution APIs. */
 object AmazonApiClient {
@@ -120,11 +161,12 @@ object AmazonApiClient {
 
     private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
-    private fun postJson(
+    internal suspend fun postJson(
         url: String,
         target: String,
         bearerToken: String,
         body: JSONObject,
+        client: OkHttpClient = Net.http,
     ): JSONObject? {
         return try {
             val requestBody = body.toString().toRequestBody(JSON_MEDIA_TYPE)
@@ -139,17 +181,20 @@ object AmazonApiClient {
                 .header("Content-Encoding", "amz-1.0")
                 .build()
 
-            Net.http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Timber.e("[Amazon] Request failed: HTTP ${response.code}")
-                    return null
-                }
-
-                val responseText = response.body?.string() ?: return null
-                JSONObject(responseText)
+            val response = client.newCall(request).awaitAmazonResponse { received ->
+                received.body?.string()
             }
-        } catch (e: Exception) {
-            Timber.e("[Amazon] Request failed: ${e.javaClass.simpleName}")
+            if (!response.isSuccessful) {
+                Timber.e("[Amazon] Request failed: HTTP ${response.code}")
+                return null
+            }
+
+            val responseText = response.body ?: return null
+            JSONObject(responseText)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.e("[Amazon] Request failed: ${error.javaClass.simpleName}")
             null
         }
     }
@@ -254,6 +299,18 @@ object AmazonApiClient {
     suspend fun fetchLiveVersionIds(
         adgProductIds: List<String>,
         bearerToken: String,
+    ): Map<String, String>? = fetchLiveVersionIdsAt(
+        url = DISTRIBUTION_URL,
+        adgProductIds = adgProductIds,
+        bearerToken = bearerToken,
+        client = Net.http,
+    )
+
+    internal suspend fun fetchLiveVersionIdsAt(
+        url: String,
+        adgProductIds: List<String>,
+        bearerToken: String,
+        client: OkHttpClient,
     ): Map<String, String>? = withContext(Dispatchers.IO) {
         if (adgProductIds.isEmpty()) return@withContext emptyMap()
 
@@ -266,13 +323,13 @@ object AmazonApiClient {
         Timber.tag("Amazon").d("fetchLiveVersionIds: ${adgProductIds.size} product(s)")
 
         val response = postJson(
-            url = DISTRIBUTION_URL,
+            url = url,
             target = GET_LIVE_VERSION_IDS_TARGET,
             bearerToken = bearerToken,
             body = body,
+            client = client,
         ) ?: return@withContext null
 
-        // Response shape: { "adgProductIdToVersionIdMap": { "productId1": "versionId1", ... } }
         val versions = response.optJSONObject("adgProductIdToVersionIdMap")
         if (versions == null) {
             Timber.tag("Amazon").w("GetLiveVersionIds: version map missing")
@@ -328,16 +385,19 @@ object AmazonApiClient {
                 .get()
                 .build()
 
-            Net.http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Timber.tag("Amazon").e("fetchDownloadSize: HTTP ${response.code} fetching manifest")
-                    return@withContext null
-                }
-                response.body?.bytes()
+            val response = Net.http.newCall(request).awaitAmazonResponse { received ->
+                received.body?.bytes()
             }
-        } catch (e: Exception) {
+            if (!response.isSuccessful) {
+                Timber.tag("Amazon").e("fetchDownloadSize: HTTP ${response.code} fetching manifest")
+                return@withContext null
+            }
+            response.body
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
             Timber.tag("Amazon").e(
-                "fetchDownloadSize: manifest fetch failed: ${e.javaClass.simpleName}",
+                "fetchDownloadSize: manifest fetch failed: ${error.javaClass.simpleName}",
             )
             return@withContext null
         }
@@ -376,25 +436,28 @@ object AmazonApiClient {
                 .header("User-Agent", AmazonConstants.GAMING_USER_AGENT)
                 .build()
 
-            Net.http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Timber.tag("Amazon").e("fetchSdkDownload: HTTP ${response.code}")
-                    return@withContext null
-                }
-
-                val responseText = response.body?.string() ?: return@withContext null
-                val json = JSONObject(responseText)
-
-                val downloadUrl = json.optString("downloadUrl", "").ifEmpty {
-                    Timber.tag("Amazon").e("fetchSdkDownload: missing downloadUrl")
-                    return@withContext null
-                }
-                val versionId = json.optString("versionId", "")
-                Timber.tag("Amazon").i("fetchSdkDownload: download spec received")
-                GameDownloadSpec(downloadUrl = downloadUrl, versionId = versionId)
+            val response = Net.http.newCall(request).awaitAmazonResponse { received ->
+                received.body?.string()
             }
-        } catch (e: Exception) {
-            Timber.tag("Amazon").e("fetchSdkDownload failed: ${e.javaClass.simpleName}")
+            if (!response.isSuccessful) {
+                Timber.tag("Amazon").e("fetchSdkDownload: HTTP ${response.code}")
+                return@withContext null
+            }
+
+            val responseText = response.body ?: return@withContext null
+            val json = JSONObject(responseText)
+
+            val downloadUrl = json.optString("downloadUrl", "").ifEmpty {
+                Timber.tag("Amazon").e("fetchSdkDownload: missing downloadUrl")
+                return@withContext null
+            }
+            val versionId = json.optString("versionId", "")
+            Timber.tag("Amazon").i("fetchSdkDownload: download spec received")
+            GameDownloadSpec(downloadUrl = downloadUrl, versionId = versionId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Timber.tag("Amazon").e("fetchSdkDownload failed: ${error.javaClass.simpleName}")
             null
         }
     }
