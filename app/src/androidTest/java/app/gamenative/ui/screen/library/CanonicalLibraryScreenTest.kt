@@ -3,11 +3,17 @@ package app.gamenative.ui.screen.library
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -22,10 +28,14 @@ import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.printToString
 import androidx.test.espresso.Espresso.pressBack
 import app.gamenative.PrefManager
@@ -63,6 +73,7 @@ import app.gamenative.ui.screen.library.components.CanonicalCopiesFeedback
 import app.gamenative.ui.screen.library.components.CanonicalCopiesSheet
 import app.gamenative.ui.screen.library.components.OwnedSourceBadges
 import app.gamenative.ui.theme.PluviaTheme
+import app.gamenative.ui.util.SnackbarManager
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -73,6 +84,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
+@OptIn(ExperimentalTestApi::class)
 class CanonicalLibraryScreenTest {
     @get:Rule
     val composeRule = createComposeRule()
@@ -173,8 +185,9 @@ class CanonicalLibraryScreenTest {
         composeRule.onNodeWithText("Use automatic selection").performClick()
         composeRule.runOnIdle { assertEquals(1, automaticSelections) }
 
-        assertFalse(composeRule.onRoot().printToString().contains(accountScope.value))
-        assertFalse(composeRule.onRoot().printToString().contains(steamKey.stableSourceId))
+        val sheetSemantics = composeRule.onNodeWithTag("copies-sheet").printToString()
+        assertFalse(sheetSemantics.contains(accountScope.value))
+        assertFalse(sheetSemantics.contains(steamKey.stableSourceId))
         assertEquals(0, separateSelections)
     }
 
@@ -362,7 +375,7 @@ class CanonicalLibraryScreenTest {
             canonicalCards = mapOf(refreshed.key to refreshed)
             screenState = screenState.copy(canonicalSnapshotRevision = 2L)
         }
-        composeRule.onNodeWithText("Branch/version: fresh-runtime-version").assertIsDisplayed()
+        composeRule.onNodeWithText("Branch or version: fresh-runtime-version").fetchSemanticsNode()
 
         composeRule.runOnIdle {
             canonicalCards = emptyMap()
@@ -399,7 +412,9 @@ class CanonicalLibraryScreenTest {
             },
         )
 
-        composeRule.onAllNodesWithTag("copies-action")[1].performClick()
+        val originCopies = composeRule.onAllNodesWithTag("copies-action")[1]
+        originCopies.performSemanticsAction(SemanticsActions.RequestFocus)
+        originCopies.assertIsFocused().performKeyInput { pressKey(Key.ButtonA) }
         composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
         composeRule.runOnIdle {
             screenState = screenState.copy(
@@ -410,16 +425,14 @@ class CanonicalLibraryScreenTest {
         composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             runCatching {
-                composeRule.onNode(
-                    hasTestTag("canonical-card") and hasText("Second focus card"),
-                ).fetchSemanticsNode().config[
-                    androidx.compose.ui.semantics.SemanticsProperties.Focused
-                ]
+                composeRule.onAllNodesWithTag("copies-action")[0]
+                    .fetchSemanticsNode().config[
+                        androidx.compose.ui.semantics.SemanticsProperties.Focused
+                    ]
             }.getOrDefault(false)
         }
-        composeRule.onNode(
-            hasTestTag("canonical-card") and hasText("Second focus card"),
-        ).assertIsFocused()
+        composeRule.onAllNodesWithTag("copies-action")[0].assertIsFocused()
+        composeRule.onNodeWithText("Second focus card").assertIsDisplayed()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -537,6 +550,239 @@ class CanonicalLibraryScreenTest {
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun gamepadTraversesCopiesOperationsAndBackRestoresReorderedCardIdentity() {
+        val first = canonicalCard(
+            id = CanonicalGameId.parse("88888888-8888-8888-8888-888888888888"),
+            title = "First gamepad card",
+            keys = listOf(gogKey, steamKey),
+        )
+        val second = canonicalCard(
+            id = CanonicalGameId.parse("99999999-9999-9999-9999-999999999999"),
+            title = "Origin gamepad card",
+            keys = listOf(steamKey, epicKey),
+        ).withPlayableSteamCopy()
+        var screenState by mutableStateOf(
+            LibraryState(
+                cards = listOf(presentation(first, 0), presentation(second, 1)),
+                canonicalSnapshotRevision = 1L,
+            ),
+        )
+        val cards = mapOf(first.key to first, second.key to second)
+        setLibraryScreen(
+            state = { screenState },
+            canonicalCards = { cards },
+            onRoute = { _, _, _, _ ->
+                OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            },
+        )
+
+        composeRule.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+        val originCard = composeRule.onAllNodesWithTag("canonical-card")[1].onChild()
+        originCard.assertIsFocused().performKeyInput { pressKey(Key.DirectionRight) }
+        val originCopies = composeRule.onAllNodesWithTag("copies-action")[1]
+        originCopies.assertIsFocused().performKeyInput { pressKey(Key.ButtonA) }
+
+        val copiesSheet = composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
+        val firstOperation = composeRule.onNodeWithTag("copy-operation:STEAM:PLAY")
+        fun firstOperationIsFocused(): Boolean = runCatching {
+            firstOperation.fetchSemanticsNode().config[
+                androidx.compose.ui.semantics.SemanticsProperties.Focused
+            ]
+        }.getOrDefault(false)
+        repeat(6) {
+            if (!firstOperationIsFocused()) {
+                copiesSheet.performKeyInput { pressKey(Key.DirectionDown) }
+            }
+        }
+        firstOperation.assertIsFocused().performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("copy-operation:STEAM:OPEN_SOURCE_DETAILS").assertIsFocused()
+
+        composeRule.runOnIdle {
+            screenState = screenState.copy(
+                cards = listOf(presentation(second, 0), presentation(first, 1)),
+            )
+        }
+        pressBack()
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            runCatching {
+                composeRule.onAllNodesWithTag("copies-action")[0]
+                    .fetchSemanticsNode().config[
+                        androidx.compose.ui.semantics.SemanticsProperties.Focused
+                    ]
+            }.getOrDefault(false)
+        }
+        composeRule.onAllNodesWithTag("copies-action")[0].assertIsFocused()
+        composeRule.onNodeWithText("Origin gamepad card").assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun resetTransactionFailureKeepsProductionSheetOpenWithFixedFeedback() {
+        val rejectedCopy = copy(gogKey).copy(
+            matchMethod = MatchMethod.MANUAL,
+            confidence = MatchConfidence.REJECTED,
+            decisionSource = MatchDecisionSource.USER,
+            decisionRevision = 321L,
+        )
+        val independent = canonicalCard().copy(
+            key = CanonicalCardKey.Independent(gogKey),
+            copies = listOf(rejectedCopy),
+            ownedSources = setOf(GameSource.GOG),
+            preferredCopy = null,
+        )
+        setLibraryScreen(
+            state = {
+                LibraryState(
+                    cards = listOf(presentation(independent, 0)),
+                    canonicalSnapshotRevision = 1L,
+                )
+            },
+            canonicalCards = { mapOf(independent.key to independent) },
+            onRoute = { _, _, _, _ ->
+                OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            },
+            onResetCanonicalDecision = { _, _ ->
+                CanonicalCopyChangeResult.TRANSACTION_FAILED
+            },
+        )
+
+        composeRule.onNodeWithTag("copies-action").performClick()
+        composeRule.onNodeWithTag("reset-match-decision").performClick()
+
+        composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
+        composeRule.onNodeWithText("Could not change copy grouping. Try again.").assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun routeFailureWithAuthoritativeRemovalClearsDetailAndSheetAndEmitsFixedFeedback() {
+        val numericSteamKey = OwnedCopyKey(accountScope, GameSource.STEAM, "42")
+        val card = canonicalCard(
+            id = CanonicalGameId.parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            title = "Removed during route",
+            keys = listOf(numericSteamKey, gogKey),
+        ).withPlayableSteamCopy()
+        var screenState by mutableStateOf(
+            LibraryState(
+                cards = listOf(presentation(card, 0)),
+                canonicalSnapshotRevision = 1L,
+            ),
+        )
+        var canonicalCards by mutableStateOf(mapOf(card.key to card))
+        val feedbackMessages = mutableListOf<String>()
+        var routeCount = 0
+        setLibraryScreen(
+            state = { screenState },
+            canonicalCards = { canonicalCards },
+            onRoute = { _, _, _, _ ->
+                routeCount += 1
+                if (routeCount == 1) {
+                    OwnedCopyRouteResult.Ready(
+                        actionGuard(numericSteamKey),
+                        ActionSelectionPolicy.PREFERRED,
+                    )
+                } else {
+                    canonicalCards = emptyMap()
+                    screenState = screenState.copy(canonicalSnapshotRevision = 2L)
+                    OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+                }
+            },
+            onLibraryFeedback = feedbackMessages::add,
+        )
+
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("copies-action-detail").performClick()
+        composeRule.onNodeWithTag("copy-operation:STEAM:PLAY").performClick()
+
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("copies-action-detail").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-card").assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            "This copy changed or is no longer available. Refresh and try again." in feedbackMessages
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun selectedDetailRemovalClearsCapturedActionStateAndReturnsToLibrary() {
+        val numericSteamKey = OwnedCopyKey(accountScope, GameSource.STEAM, "43")
+        val card = canonicalCard(
+            id = CanonicalGameId.parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            title = "Removed selected detail",
+            keys = listOf(numericSteamKey, gogKey),
+        ).withPlayableSteamCopy()
+        var screenState by mutableStateOf(
+            LibraryState(
+                cards = listOf(presentation(card, 0)),
+                canonicalSnapshotRevision = 1L,
+            ),
+        )
+        var canonicalCards by mutableStateOf(mapOf(card.key to card))
+        setLibraryScreen(
+            state = { screenState },
+            canonicalCards = { canonicalCards },
+            onRoute = { _, operation, _, _ ->
+                OwnedCopyRouteResult.Ready(
+                    actionGuard(numericSteamKey),
+                    if (operation == OwnedCopyOperation.PLAY) {
+                        ActionSelectionPolicy.EXPLICIT
+                    } else {
+                        ActionSelectionPolicy.PREFERRED
+                    },
+                )
+            },
+        )
+
+        composeRule.onNodeWithTag("copies-action").performClick()
+        composeRule.onNodeWithTag("copy-operation:STEAM:PLAY").performClick()
+        composeRule.onNodeWithTag("copies-action-detail").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            canonicalCards = emptyMap()
+            screenState = screenState.copy(canonicalSnapshotRevision = 2L)
+        }
+
+        composeRule.onNodeWithTag("copies-action-detail").assertDoesNotExist()
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-card").assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun backOverCanonicalDetailAndCopiesSheetClosesOnlySheetFirst() {
+        val numericSteamKey = OwnedCopyKey(accountScope, GameSource.STEAM, "44")
+        val card = canonicalCard(
+            id = CanonicalGameId.parse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+            title = "Detail under sheet",
+            keys = listOf(numericSteamKey, gogKey),
+        )
+        setLibraryScreen(
+            state = LibraryState(
+                cards = listOf(presentation(card, 0)),
+                canonicalSnapshotRevision = 1L,
+            ),
+            canonicalCards = mapOf(card.key to card),
+            onRoute = { _, _, _, _ ->
+                OwnedCopyRouteResult.Ready(
+                    actionGuard(numericSteamKey),
+                    ActionSelectionPolicy.PREFERRED,
+                )
+            },
+        )
+
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("copies-action-detail").performClick()
+        composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
+
+        pressBack()
+
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("copies-action-detail").assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
     private fun setLibraryScreen(
         state: LibraryState,
         canonicalCards: Map<CanonicalCardKey, CanonicalLibraryCard>,
@@ -562,12 +808,29 @@ class CanonicalLibraryScreenTest {
             OwnedCopyKey?,
             Boolean,
         ) -> OwnedCopyRouteResult,
+        onUseAutomaticCopySelection: suspend (CanonicalCardKey) -> CanonicalCopyChangeResult = {
+            CanonicalCopyChangeResult.INVALID_REQUEST
+        },
+        onSeparateCanonicalCopy: suspend (
+            CanonicalCardKey,
+            OwnedCopyKey,
+        ) -> CanonicalCopyChangeResult = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+        onResetCanonicalDecision: suspend (
+            CanonicalCardKey,
+            OwnedCopyKey,
+        ) -> CanonicalCopyChangeResult = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+        onLibraryFeedback: (String) -> Unit = {},
     ) {
         composeRule.setContent {
             val context = LocalContext.current
+            val inputModeManager = LocalInputModeManager.current
             remember(context) {
                 PrefManager.init(context)
                 PrefManager.libraryLayout = PaneType.LIST
+            }
+            LaunchedEffect(Unit) {
+                inputModeManager.requestInputMode(InputMode.Keyboard)
+                SnackbarManager.messages.collect { message -> onLibraryFeedback(message) }
             }
             PluviaTheme {
                 LibraryScreenContent(
@@ -597,9 +860,9 @@ class CanonicalLibraryScreenTest {
                     onNextTab = {},
                     canonicalCard = { key -> canonicalCards()[key] },
                     onRouteCanonicalAction = onRoute,
-                    onUseAutomaticCopySelection = { CanonicalCopyChangeResult.INVALID_REQUEST },
-                    onSeparateCanonicalCopy = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
-                    onResetCanonicalDecision = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+                    onUseAutomaticCopySelection = onUseAutomaticCopySelection,
+                    onSeparateCanonicalCopy = onSeparateCanonicalCopy,
+                    onResetCanonicalDecision = onResetCanonicalDecision,
                 )
             }
         }
@@ -645,6 +908,21 @@ class CanonicalLibraryScreenTest {
             publicGate = CanonicalPublicLibraryGate { true },
         )
     }
+
+    private fun CanonicalLibraryCard.withPlayableSteamCopy(): CanonicalLibraryCard = copy(
+        copies = copies.map { copy ->
+            if (copy.source == GameSource.STEAM) {
+                copy.copy(
+                    capabilities = setOf(
+                        OwnedCopyOperation.PLAY,
+                        OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                    ),
+                )
+            } else {
+                copy
+            }
+        },
+    )
 
     private fun presentation(card: CanonicalLibraryCard, index: Int): LibraryCard =
         LibraryCard.canonical(
@@ -728,6 +1006,7 @@ class CanonicalLibraryScreenTest {
         matchMethod = MatchMethod.DIRECT_STEAM,
         confidence = MatchConfidence.VERIFIED,
         decisionSource = MatchDecisionSource.AUTOMATIC,
+        decisionRevision = 100L,
     )
 
     private companion object {

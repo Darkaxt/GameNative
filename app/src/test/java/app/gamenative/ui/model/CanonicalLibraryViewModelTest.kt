@@ -2125,12 +2125,13 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `pre-refresh compatibility fetch cannot repopulate cleared cache or recovered state`() {
-        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
-        val oldFetchStarted = CountDownLatch(1)
-        val releaseOldFetch = CountDownLatch(1)
-        val oldFetchReturning = CountDownLatch(1)
-        val fetchCalls = AtomicInteger(0)
+    fun `pre-refresh compatibility fetch cannot repopulate cleared cache or recovered state`() = runTest(dispatcher) {
+        val oldFetchStarted = CompletableDeferred<Unit>()
+        val releaseOldFetch = CompletableDeferred<Unit>()
+        val oldFetchReturned = CompletableDeferred<Unit>()
+        var fetchCalls = 0
+        var cacheGeneration = 1L
+        val committedCompatibility = mutableMapOf<String, GameCompatibilityService.GameCompatibilityResponse>()
         val gameName = "Compatibility Generation Race"
         val staleCompatibility = GameCompatibilityService.GameCompatibilityResponse(
             gameName = gameName,
@@ -2140,15 +2141,31 @@ class CanonicalLibraryViewModelTest {
             hasBeenTried = true,
             isNotWorking = true,
         )
-        unmockkObject(GameCompatibilityCache)
-        runBlocking { GameCompatibilityCache.clear() }
-        assertEquals("{}", PrefManager.gameCompatibilityCache)
+        every { GameCompatibilityCache.getCached(any()) } answers {
+            committedCompatibility[firstArg()]
+        }
+        every { GameCompatibilityCache.captureGeneration() } answers { cacheGeneration }
+        coEvery { GameCompatibilityCache.clear() } coAnswers {
+            cacheGeneration += 1L
+            committedCompatibility.clear()
+        }
+        coEvery { GameCompatibilityCache.cacheAllIfCurrent(any(), any()) } coAnswers {
+            val capturedGeneration = firstArg<Long>()
+            val responses = secondArg<Map<String, GameCompatibilityService.GameCompatibilityResponse>>()
+            if (capturedGeneration == cacheGeneration) {
+                committedCompatibility.putAll(responses)
+                true
+            } else {
+                false
+            }
+        }
         mockkObject(GameCompatibilityService)
         coEvery { GameCompatibilityService.fetchCompatibility(any(), any()) } coAnswers {
-            if (fetchCalls.incrementAndGet() == 1) {
-                oldFetchStarted.countDown()
-                awaitUninterruptibly(releaseOldFetch)
-                oldFetchReturning.countDown()
+            fetchCalls += 1
+            if (fetchCalls == 1) {
+                oldFetchStarted.complete(Unit)
+                releaseOldFetch.await()
+                oldFetchReturned.complete(Unit)
                 mapOf(gameName to staleCompatibility)
             } else {
                 null
@@ -2163,57 +2180,52 @@ class CanonicalLibraryViewModelTest {
                 repository = repository(emissions),
                 gateEnabled = true,
                 readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
-                ioDispatcher = io,
+                ioDispatcher = dispatcher,
             )
             setLazyStringField(vm, "gpuName", "Test GPU")
-            assertTrue(
-                "canonical collector did not subscribe",
-                awaitCondition { emissions.subscriptionCount.value > 0 },
-            )
-            runBlocking { emissions.emit(listOf(card(name = gameName))) }
-            awaitState { state -> state.cards.map { it.name } == listOf(gameName) && !state.isLoading }
-            awaitLatch(oldFetchStarted, "pre-refresh compatibility fetch")
+            runCurrent()
+            assertEquals(1, emissions.subscriptionCount.value)
+
+            emissions.emit(listOf(card(name = gameName)))
+            runCurrent()
+            assertEquals(listOf(gameName), vm.state.value.cards.map { it.name })
+            assertFalse(vm.state.value.isLoading)
+            assertTrue(oldFetchStarted.isCompleted)
 
             vm.onFilterChanged(AppFilter.COMPATIBLE)
-            awaitState { state ->
-                state.appInfoSortType.contains(AppFilter.COMPATIBLE) &&
-                    state.cards.map { it.name } == listOf(gameName) &&
-                    !state.isLoading
+            runCurrent()
+            with(vm.state.value) {
+                assertTrue(appInfoSortType.contains(AppFilter.COMPATIBLE))
+                assertEquals(listOf(gameName), cards.map { it.name })
+                assertFalse(isLoading)
             }
-            coEvery { DeviceGameStatsCache.clear() } throws IllegalStateException("private post-clear failure")
+            coEvery { DeviceGameStatsCache.clear() } throws
+                IllegalStateException("private post-clear failure")
 
             vm.onRefresh()
-            assertTrue(
-                "refresh recovery did not complete after compatibility clear",
-                awaitCondition(timeoutMs = 4_000L) {
-                    scheduler.runCurrent()
-                    val state = vm.state.value
-                    !state.isRefreshing &&
-                        !state.isLoading &&
-                        state.cards.map { it.name } == listOf(gameName) &&
-                        state.cards.single().compatibilityStatus == null &&
-                        gameName !in state.compatibilityMap
-                },
-            )
-            assertEquals("{}", PrefManager.gameCompatibilityCache)
+            runCurrent()
+            with(vm.state.value) {
+                assertFalse(isRefreshing)
+                assertFalse(isLoading)
+                assertEquals(listOf(gameName), cards.map { it.name })
+                assertNull(cards.single().compatibilityStatus)
+                assertFalse(gameName in compatibilityMap)
+            }
+            assertEquals(2L, cacheGeneration)
+            assertTrue(committedCompatibility.isEmpty())
 
-            releaseOldFetch.countDown()
-            awaitLatch(oldFetchReturning, "old compatibility response")
-            Thread.sleep(250L)
-
-            assertNull(GameCompatibilityCache.getCached(gameName))
-            assertFalse(PrefManager.gameCompatibilityCache.contains(gameName))
+            releaseOldFetch.complete(Unit)
+            runCurrent()
+            assertTrue(oldFetchReturned.isCompleted)
+            assertTrue(committedCompatibility.isEmpty())
             with(vm.state.value) {
                 assertEquals(listOf(gameName), cards.map { it.name })
                 assertNull(cards.single().compatibilityStatus)
                 assertFalse(gameName in compatibilityMap)
             }
         } finally {
-            releaseOldFetch.countDown()
+            releaseOldFetch.complete(Unit)
             viewModelStore.clear()
-            runBlocking { GameCompatibilityCache.clear() }
-            assertEquals("{}", PrefManager.gameCompatibilityCache)
-            io.close()
         }
     }
 
@@ -3116,7 +3128,7 @@ class CanonicalLibraryViewModelTest {
             CanonicalCopyChangeResult.COPY_STATE_CHANGED,
             vm.resetCanonicalDecision(independent.key, gogKey),
         )
-        coVerify(exactly = 0) { mutations.guardedResetDecision(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { mutations.guardedResetDecision(any(), any(), any(), any(), any()) }
         viewModelStore.clear()
     }
 
@@ -3140,7 +3152,7 @@ class CanonicalLibraryViewModelTest {
         )
         val mutations = mockk<CanonicalMutationRepository>()
         coEvery {
-            mutations.guardedResetDecision(any(), any(), any(), any())
+            mutations.guardedResetDecision(any(), any(), any(), any(), any())
         } returns CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(independent))),
@@ -3179,7 +3191,7 @@ class CanonicalLibraryViewModelTest {
         )
         val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
         coEvery {
-            mutations.guardedResetDecision(any(), any(), any(), any())
+            mutations.guardedResetDecision(any(), any(), any(), any(), any())
         } returns CanonicalGuardedMutationResult.APPLIED
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(independent))),
@@ -3197,6 +3209,7 @@ class CanonicalLibraryViewModelTest {
                 gogKey,
                 independent.canonicalId.value,
                 rejectedCopy.matchMethod,
+                rejectedCopy.decisionRevision,
                 789L,
             )
         }
@@ -3211,6 +3224,7 @@ class CanonicalLibraryViewModelTest {
                 gogKey,
                 independent.canonicalId.value,
                 rejectedCopy.matchMethod,
+                rejectedCopy.decisionRevision,
                 789L,
             )
         }
@@ -3453,6 +3467,7 @@ class CanonicalLibraryViewModelTest {
         matchMethod = MatchMethod.DIRECT_STEAM,
         confidence = confidence,
         decisionSource = MatchDecisionSource.AUTOMATIC,
+        decisionRevision = 123L,
     )
 
     private fun runtime(key: OwnedCopyKey): OwnedCopyRuntime {

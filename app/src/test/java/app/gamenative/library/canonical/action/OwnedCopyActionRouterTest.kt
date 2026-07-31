@@ -1015,6 +1015,7 @@ class OwnedCopyActionRouterTest {
         matchMethod = MatchMethod.EXACT_METADATA,
         confidence = MatchConfidence.HIGH,
         decisionSource = MatchDecisionSource.AUTOMATIC,
+        decisionRevision = 100L,
     )
 
     private fun runtime(

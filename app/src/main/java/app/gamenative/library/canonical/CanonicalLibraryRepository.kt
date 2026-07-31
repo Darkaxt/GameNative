@@ -197,6 +197,7 @@ class CanonicalLibraryRepository @Inject constructor(
                 matchMethod = match.matchMethod,
                 confidence = match.confidence,
                 decisionSource = match.decisionSource,
+                decisionRevision = match.matchedAt,
             )
         } else {
             val unavailable = checkNotNull(entry.unavailable)
@@ -220,6 +221,7 @@ class CanonicalLibraryRepository @Inject constructor(
                 matchMethod = match.matchMethod,
                 confidence = match.confidence,
                 decisionSource = match.decisionSource,
+                decisionRevision = match.matchedAt,
             )
         }
     }

@@ -59,14 +59,14 @@ class CanonicalLibraryRepositoryTest {
             "10",
             MatchConfidence.VERIFIED,
             evidenceName = "Steam Evidence",
-        )
+        ).copy(matchedAt = 111L)
         val gog = match(
             game,
             GameSource.GOG,
             "20",
             MatchConfidence.HIGH,
             evidenceName = "GOG Evidence",
-        )
+        ).copy(matchedAt = 222L)
         val harness = harness(
             listOf(aggregate(game, listOf(gog, steam))),
             mapOf(
@@ -82,6 +82,7 @@ class CanonicalLibraryRepositoryTest {
         assertEquals(CanonicalCardKey.Grouped(CanonicalGameId.parse(ID_A)), card.key)
         assertEquals("Canonical Hero", card.displayName)
         assertEquals(listOf(GameSource.STEAM, GameSource.GOG), card.copies.map { it.source })
+        assertEquals(listOf(111L, 222L), card.copies.map { it.decisionRevision })
         assertEquals(listOf(GameSource.STEAM, GameSource.GOG), card.ownedSources.toList())
         assertEquals(
             setOf("Canonical Hero", "Steam Evidence", "GOG Evidence", "Steam Native", "GOG Native"),

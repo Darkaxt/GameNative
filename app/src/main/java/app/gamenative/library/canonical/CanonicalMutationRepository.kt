@@ -47,6 +47,7 @@ interface CanonicalMutationRepository {
         key: OwnedCopyKey,
         expectedCanonicalId: String,
         expectedMatchMethod: MatchMethod,
+        expectedDecisionRevision: Long,
         nowEpochMs: Long,
     ): CanonicalGuardedMutationResult
 
@@ -211,6 +212,7 @@ class RoomCanonicalMutationRepository @Inject constructor(
         key: OwnedCopyKey,
         expectedCanonicalId: String,
         expectedMatchMethod: MatchMethod,
+        expectedDecisionRevision: Long,
         nowEpochMs: Long,
     ): CanonicalGuardedMutationResult = db.withTransaction {
         requireMutableMatch(key)
@@ -225,6 +227,7 @@ class RoomCanonicalMutationRepository @Inject constructor(
             match.confidence == MatchConfidence.REJECTED &&
             match.decisionSource == MatchDecisionSource.USER &&
             match.matchMethod == expectedMatchMethod &&
+            match.matchedAt == expectedDecisionRevision &&
             storeMatchDao.countPresentReferences(expectedCanonicalId) == 1
         if (!remainsExpectedIndependentRejection) {
             return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED

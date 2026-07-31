@@ -75,6 +75,7 @@ data class OwnedCopySummary(
     val matchMethod: MatchMethod,
     val confidence: MatchConfidence,
     val decisionSource: MatchDecisionSource,
+    val decisionRevision: Long,
 )
 
 data class CanonicalLibraryCard(
