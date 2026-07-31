@@ -1,13 +1,24 @@
 package app.gamenative.ui.screen.library
 
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -16,7 +27,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.printToString
+import androidx.test.espresso.Espresso.pressBack
+import app.gamenative.PrefManager
 import app.gamenative.data.GameSource
+import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameId
@@ -24,18 +38,35 @@ import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalCardKey
+import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
+import app.gamenative.library.canonical.action.ActionFailureReason
+import app.gamenative.library.canonical.action.ActionSelectionPolicy
+import app.gamenative.library.canonical.action.OwnedCopyActionGuard
+import app.gamenative.library.canonical.action.OwnedCopyRouteResult
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeAdapter
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
+import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.ui.data.LibraryCard
+import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.PaneType
+import app.gamenative.ui.model.CanonicalCopyChangeResult
 import app.gamenative.ui.screen.library.components.AppItem
 import app.gamenative.ui.screen.library.components.CanonicalCopiesFeedback
 import app.gamenative.ui.screen.library.components.CanonicalCopiesSheet
 import app.gamenative.ui.screen.library.components.OwnedSourceBadges
 import app.gamenative.ui.theme.PluviaTheme
+import java.lang.reflect.Proxy
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -130,7 +161,10 @@ class CanonicalLibraryScreenTest {
         composeRule.onNodeWithTag("copy-operation:GOG:PLAY", useUnmergedTree = true).assertIsNotEnabled()
         composeRule.onNodeWithTag("separate-copy").assertDoesNotExist()
 
-        composeRule.onNodeWithTag("remember-copy:STEAM").performClick()
+        val rememberToggle = composeRule.onNode(
+            hasTestTag("remember-copy:STEAM") and hasText("Always use this copy"),
+        )
+        rememberToggle.assertHasClickAction().assertIsOff().performClick().assertIsOn()
         composeRule.onNodeWithTag("copy-operation:STEAM:PLAY").performClick()
         composeRule.runOnIdle {
             assertEquals(listOf(Triple(GameSource.STEAM, OwnedCopyOperation.PLAY, true)), operations)
@@ -142,6 +176,72 @@ class CanonicalLibraryScreenTest {
         assertFalse(composeRule.onRoot().printToString().contains(accountScope.value))
         assertFalse(composeRule.onRoot().printToString().contains(steamKey.stableSourceId))
         assertEquals(0, separateSelections)
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun legacyBridgeUnsupportedCopyStillOffersSeparateWhenMatchAuthorityAllowsIt() {
+        val unsupported = copy(
+            key = epicKey,
+            capabilities = emptySet(),
+            unavailable = CopyUnavailableReason.LEGACY_BRIDGE_UNSUPPORTED,
+            canSeparate = true,
+        )
+        val card = canonicalCard().copy(
+            copies = listOf(copy(steamKey), unsupported),
+            ownedSources = setOf(GameSource.STEAM, GameSource.EPIC),
+            preferredCopy = null,
+        )
+
+        composeRule.setContent {
+            PluviaTheme {
+                CanonicalCopiesSheet(
+                    card = card,
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    onDismissRequest = {},
+                    onOperation = { _, _, _ -> },
+                    onUseAutomaticSelection = {},
+                    onSeparateCopy = {},
+                    onResetDecision = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("copy-row:EPIC").assertIsDisplayed()
+        composeRule.onNodeWithTag("separate-copy").assertHasClickAction()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun staleSourceReadFailureDoesNotOfferSeparateEvenIfMatchWasPreviouslySeparable() {
+        val stale = copy(
+            key = epicKey,
+            capabilities = emptySet(),
+            unavailable = CopyUnavailableReason.SOURCE_READ_FAILED,
+            canSeparate = true,
+        )
+        val card = canonicalCard().copy(
+            copies = listOf(copy(steamKey), stale),
+            ownedSources = setOf(GameSource.STEAM, GameSource.EPIC),
+            preferredCopy = null,
+        )
+
+        composeRule.setContent {
+            PluviaTheme {
+                CanonicalCopiesSheet(
+                    card = card,
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    onDismissRequest = {},
+                    onOperation = { _, _, _ -> },
+                    onUseAutomaticSelection = {},
+                    onSeparateCopy = {},
+                    onResetDecision = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("copy-row:EPIC").assertIsDisplayed()
+        composeRule.onNodeWithTag("separate-copy").assertDoesNotExist()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -181,6 +281,397 @@ class CanonicalLibraryScreenTest {
         composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
         composeRule.onNodeWithText("Could not change copy grouping. Try again.").assertIsDisplayed()
     }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun soleCopyReadyCaptureOpensDetailThroughLibraryScreenCallback() {
+        val soleKey = OwnedCopyKey(accountScope, GameSource.STEAM, "42")
+        val canonical = canonicalCard(
+            id = CanonicalGameId.parse("77777777-7777-7777-7777-777777777777"),
+            title = "Sole routed card",
+            keys = listOf(soleKey),
+        )
+        val captured = mutableListOf<List<Any?>>()
+        val guard = actionGuard(soleKey)
+        setLibraryScreen(
+            state = LibraryState(
+                cards = listOf(presentation(canonical, 0)),
+                canonicalSnapshotRevision = 1L,
+            ),
+            canonicalCards = mapOf(canonical.key to canonical),
+            onRoute = { key, operation, explicitKey, rememberChoice ->
+                captured += listOf(key, operation, explicitKey, rememberChoice)
+                OwnedCopyRouteResult.Ready(guard, ActionSelectionPolicy.SOLE_COPY)
+            },
+        )
+
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("copies-action-detail").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(
+                listOf(
+                    listOf(
+                        canonical.key,
+                        OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                        null,
+                        false,
+                    ),
+                ),
+                captured,
+            )
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun openCopiesSheetReactsToAuthoritativeRevisionButNotFilteredPresentation() {
+        val initial = canonicalCard()
+        var screenState by mutableStateOf(
+            LibraryState(
+                cards = listOf(presentation(initial, 0)),
+                canonicalSnapshotRevision = 1L,
+            ),
+        )
+        var canonicalCards by mutableStateOf(mapOf(initial.key to initial))
+        setLibraryScreen(
+            state = { screenState },
+            canonicalCards = { canonicalCards },
+            onRoute = { _, _, _, _ ->
+                OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            },
+        )
+
+        composeRule.onNodeWithTag("copies-action").performClick()
+        composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            screenState = screenState.copy(cards = emptyList())
+        }
+        composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            val refreshed = initial.copy(
+                copies = initial.copies.map { copy ->
+                    if (copy.key == steamKey) {
+                        copy.copy(branchOrVersion = "fresh-runtime-version")
+                    } else {
+                        copy
+                    }
+                },
+            )
+            canonicalCards = mapOf(refreshed.key to refreshed)
+            screenState = screenState.copy(canonicalSnapshotRevision = 2L)
+        }
+        composeRule.onNodeWithText("Branch/version: fresh-runtime-version").assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            canonicalCards = emptyMap()
+            screenState = screenState.copy(canonicalSnapshotRevision = 3L)
+        }
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun closingCopiesAfterReorderRestoresFocusByCardIdentity() {
+        val first = canonicalCard(
+            id = CanonicalGameId.parse("55555555-5555-5555-5555-555555555555"),
+            title = "First focus card",
+            keys = listOf(steamKey, gogKey),
+        )
+        val second = canonicalCard(
+            id = CanonicalGameId.parse("66666666-6666-6666-6666-666666666666"),
+            title = "Second focus card",
+            keys = listOf(epicKey, steamKey),
+        )
+        var screenState by mutableStateOf(
+            LibraryState(
+                cards = listOf(presentation(first, 0), presentation(second, 1)),
+                canonicalSnapshotRevision = 1L,
+            ),
+        )
+        val cards = mapOf(first.key to first, second.key to second)
+        setLibraryScreen(
+            state = { screenState },
+            canonicalCards = { cards },
+            onRoute = { _, _, _, _ ->
+                OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            },
+        )
+
+        composeRule.onAllNodesWithTag("copies-action")[1].performClick()
+        composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
+        composeRule.runOnIdle {
+            screenState = screenState.copy(
+                cards = listOf(presentation(second, 0), presentation(first, 1)),
+            )
+        }
+        pressBack()
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            runCatching {
+                composeRule.onNode(
+                    hasTestTag("canonical-card") and hasText("Second focus card"),
+                ).fetchSemanticsNode().config[
+                    androidx.compose.ui.semantics.SemanticsProperties.Focused
+                ]
+            }.getOrDefault(false)
+        }
+        composeRule.onNode(
+            hasTestTag("canonical-card") and hasText("Second focus card"),
+        ).assertIsFocused()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun fastSecondNormalSelectionSupersedesBlockedFirstRoute() {
+        val first = canonicalCard(
+            id = CanonicalGameId.parse("33333333-3333-3333-3333-333333333333"),
+            title = "Blocked card",
+            keys = listOf(steamKey, gogKey),
+        )
+        val second = canonicalCard(
+            id = CanonicalGameId.parse("44444444-4444-4444-4444-444444444444"),
+            title = "Winning card",
+            keys = listOf(epicKey, steamKey),
+        )
+        val routeStarted = CompletableDeferred<Unit>()
+        val releaseRoute = CompletableDeferred<Unit>()
+        val cards = mapOf(first.key to first, second.key to second)
+        setLibraryScreen(
+            state = LibraryState(
+                cards = listOf(presentation(first, 0), presentation(second, 1)),
+                canonicalSnapshotRevision = 1L,
+            ),
+            canonicalCards = cards,
+            onRoute = { key, _, _, _ ->
+                if (key == first.key) {
+                    routeStarted.complete(Unit)
+                    releaseRoute.await()
+                }
+                OwnedCopyRouteResult.NeedsChooser(
+                    canonicalCard(key, cards).copies.map(OwnedCopySummary::key),
+                )
+            },
+        )
+
+        composeRule.onAllNodesWithTag("canonical-card")[0].performClick()
+        composeRule.waitUntil { routeStarted.isCompleted }
+        composeRule.onAllNodesWithTag("canonical-card")[1].performClick()
+        composeRule.onNode(
+            hasTestTag("copies-sheet") and hasAnyDescendant(hasText("Winning card")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+
+        composeRule.runOnIdle { releaseRoute.complete(Unit) }
+        composeRule.waitForIdle()
+        composeRule.onNode(
+            hasTestTag("copies-sheet") and hasAnyDescendant(hasText("Winning card")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun explicitCopiesSupersedesBlockedNormalRouteThroughLibraryScreenWiring() {
+        val firstId = CanonicalGameId.parse("11111111-1111-1111-1111-111111111111")
+        val secondId = CanonicalGameId.parse("22222222-2222-2222-2222-222222222222")
+        val first = canonicalCard(
+            id = firstId,
+            title = "First card",
+            keys = listOf(steamKey, gogKey),
+        )
+        val second = canonicalCard(
+            id = secondId,
+            title = "Second card",
+            keys = listOf(epicKey, steamKey),
+        )
+        val routeStarted = CompletableDeferred<Unit>()
+        val routeCancelled = CompletableDeferred<Unit>()
+        val releaseRoute = CompletableDeferred<Unit>()
+        val routeKeys = mutableListOf<CanonicalCardKey>()
+        setLibraryScreen(
+            state = LibraryState(
+                cards = listOf(
+                    presentation(first, 0),
+                    presentation(second, 1),
+                ),
+                canonicalSnapshotRevision = 1L,
+            ),
+            canonicalCards = mapOf(first.key to first, second.key to second),
+            onRoute = { key, _, _, _ ->
+                routeKeys += key
+                if (key == first.key) {
+                    routeStarted.complete(Unit)
+                    try {
+                        releaseRoute.await()
+                    } finally {
+                        routeCancelled.complete(Unit)
+                    }
+                }
+                OwnedCopyRouteResult.NeedsChooser(
+                    canonicalCard(key = key, cards = mapOf(first.key to first, second.key to second))
+                        .copies.map(OwnedCopySummary::key),
+                )
+            },
+        )
+
+        composeRule.onAllNodesWithTag("canonical-card")[0].performClick()
+        composeRule.waitUntil { routeStarted.isCompleted }
+        composeRule.onAllNodesWithTag("copies-action")[1].performClick()
+        composeRule.waitUntil { routeCancelled.isCompleted }
+
+        composeRule.onNode(
+            hasTestTag("copies-sheet") and hasAnyDescendant(hasText("Second card")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(listOf(first.key), routeKeys)
+            releaseRoute.complete(Unit)
+        }
+        composeRule.waitForIdle()
+        composeRule.onNode(
+            hasTestTag("copies-sheet") and hasAnyDescendant(hasText("Second card")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    private fun setLibraryScreen(
+        state: LibraryState,
+        canonicalCards: Map<CanonicalCardKey, CanonicalLibraryCard>,
+        onRoute: suspend (
+            CanonicalCardKey,
+            OwnedCopyOperation,
+            OwnedCopyKey?,
+            Boolean,
+        ) -> OwnedCopyRouteResult,
+    ) = setLibraryScreen(
+        state = { state },
+        canonicalCards = { canonicalCards },
+        onRoute = onRoute,
+    )
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    private fun setLibraryScreen(
+        state: () -> LibraryState,
+        canonicalCards: () -> Map<CanonicalCardKey, CanonicalLibraryCard>,
+        onRoute: suspend (
+            CanonicalCardKey,
+            OwnedCopyOperation,
+            OwnedCopyKey?,
+            Boolean,
+        ) -> OwnedCopyRouteResult,
+    ) {
+        composeRule.setContent {
+            val context = LocalContext.current
+            remember(context) {
+                PrefManager.init(context)
+                PrefManager.libraryLayout = PaneType.LIST
+            }
+            PluviaTheme {
+                LibraryScreenContent(
+                    state = state(),
+                    listState = rememberLazyGridState(),
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    onFilterChanged = {},
+                    onPageChange = {},
+                    onModalBottomSheet = {},
+                    onIsSearching = {},
+                    onSearchQuery = {},
+                    onClickPlay = { _, _ -> },
+                    onTestGraphics = {},
+                    onPlayWithDiagnostics = {},
+                    onRefresh = {},
+                    onNavigateRoute = {},
+                    onLogout = {},
+                    onGoOnline = {},
+                    onSourceToggle = {},
+                    onAddCustomGameFolder = {},
+                    onSortOptionChanged = {},
+                    onSteamCollectionToggle = {},
+                    onClearSteamCollections = {},
+                    onOptionsPanelToggle = {},
+                    onTabChanged = {},
+                    onPreviousTab = {},
+                    onNextTab = {},
+                    canonicalCard = { key -> canonicalCards()[key] },
+                    onRouteCanonicalAction = onRoute,
+                    onUseAutomaticCopySelection = { CanonicalCopyChangeResult.INVALID_REQUEST },
+                    onSeparateCanonicalCopy = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+                    onResetCanonicalDecision = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+                )
+            }
+        }
+    }
+
+    private fun actionGuard(key: OwnedCopyKey): OwnedCopyActionGuard {
+        val adapters = GameSource.entries.mapTo(linkedSetOf()) { source ->
+            object : OwnedCopyRuntimeAdapter {
+                override val source: GameSource = source
+
+                override fun invalidations(): Flow<Unit> = emptyFlow()
+
+                override suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult =
+                    OwnedCopyRuntimeResult.Hidden
+
+                override suspend fun resolveAll(
+                    keys: Set<OwnedCopyKey>,
+                ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> =
+                    keys.associateWith { OwnedCopyRuntimeResult.Hidden }
+            }
+        }
+        val playHistoryDao = Proxy.newProxyInstance(
+            LibraryPlayHistoryDao::class.java.classLoader,
+            arrayOf(LibraryPlayHistoryDao::class.java),
+        ) { _, method, _ ->
+            if (method.name == "getAll") emptyFlow<Any>() else null
+        } as LibraryPlayHistoryDao
+        val diagnostics = Proxy.newProxyInstance(
+            CanonicalDiagnosticSink::class.java.classLoader,
+            arrayOf(CanonicalDiagnosticSink::class.java),
+        ) { _, _, _ -> null } as CanonicalDiagnosticSink
+        val registry = OwnedCopyRuntimeRegistry(adapters, playHistoryDao, diagnostics)
+        val appId = "${key.source.name}_${key.stableSourceId}"
+        return OwnedCopyActionGuard(
+            key = key,
+            capturedReference = SourceOwnedCopyReference.Steam(key, key.stableSourceId.toInt()),
+            initialLibraryItem = LibraryItem(
+                appId = appId,
+                name = "Captured source copy",
+                gameSource = key.source,
+            ),
+            runtimeRegistry = registry,
+            publicGate = CanonicalPublicLibraryGate { true },
+        )
+    }
+
+    private fun presentation(card: CanonicalLibraryCard, index: Int): LibraryCard =
+        LibraryCard.canonical(
+            key = card.key,
+            index = index,
+            name = card.displayName,
+            ownedSources = card.ownedSources,
+        )
+
+    private fun canonicalCard(
+        key: CanonicalCardKey,
+        cards: Map<CanonicalCardKey, CanonicalLibraryCard>,
+    ): CanonicalLibraryCard = requireNotNull(cards[key])
+
+    private fun canonicalCard(
+        id: CanonicalGameId,
+        title: String,
+        keys: List<OwnedCopyKey>,
+    ): CanonicalLibraryCard = canonicalCard().copy(
+        key = CanonicalCardKey.Grouped(id),
+        canonicalId = id,
+        displayName = title,
+        copies = keys.map(::copy),
+        ownedSources = keys.mapTo(linkedSetOf(), OwnedCopyKey::source),
+        preferredCopy = null,
+        steamCollectionAppIds = emptySet(),
+    )
 
     private fun canonicalCard(): CanonicalLibraryCard = CanonicalLibraryCard(
         key = CanonicalCardKey.Grouped(canonicalId),

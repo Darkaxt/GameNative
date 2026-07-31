@@ -20,6 +20,11 @@ import app.gamenative.library.canonical.source.OwnedCopyProjection
 import javax.inject.Inject
 import javax.inject.Singleton
 
+enum class CanonicalGuardedMutationResult {
+    APPLIED,
+    EXPECTED_STATE_CHANGED,
+}
+
 interface CanonicalMutationRepository {
     suspend fun confirmSteamMatch(
         key: OwnedCopyKey,
@@ -38,11 +43,25 @@ interface CanonicalMutationRepository {
         nowEpochMs: Long,
     )
 
+    suspend fun guardedResetDecision(
+        key: OwnedCopyKey,
+        expectedCanonicalId: String,
+        expectedMatchMethod: MatchMethod,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
     suspend fun unmergeCopy(
         key: OwnedCopyKey,
         current: OwnedCopyProjection,
         nowEpochMs: Long,
     ): String
+
+    suspend fun guardedUnmergeCopy(
+        key: OwnedCopyKey,
+        current: OwnedCopyProjection,
+        expectedCanonicalId: String,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
 
     suspend fun markCopyAbsent(key: OwnedCopyKey)
 }
@@ -184,18 +203,34 @@ class RoomCanonicalMutationRepository @Inject constructor(
     ) {
         db.withTransaction {
             requireMutableMatch(key)
-            val match = requireMatch(key)
-            storeMatchDao.upsert(
-                match.copy(
-                    candidateSteamAppId = null,
-                    matchMethod = MatchMethod.UNMATCHED,
-                    confidence = MatchConfidence.UNMATCHED,
-                    decisionSource = MatchDecisionSource.AUTOMATIC,
-                    resolverVersion = 0,
-                    matchedAt = nowEpochMs,
-                ),
-            )
+            resetDecision(requireMatch(key), nowEpochMs)
         }
+    }
+
+    override suspend fun guardedResetDecision(
+        key: OwnedCopyKey,
+        expectedCanonicalId: String,
+        expectedMatchMethod: MatchMethod,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        requireMutableMatch(key)
+        val match = storeMatchDao.get(
+            accountScope = key.accountScope.value,
+            source = key.source,
+            stableSourceId = key.stableSourceId,
+        )
+        val remainsExpectedIndependentRejection = match != null &&
+            match.canonicalId == expectedCanonicalId &&
+            match.isPresent &&
+            match.confidence == MatchConfidence.REJECTED &&
+            match.decisionSource == MatchDecisionSource.USER &&
+            match.matchMethod == expectedMatchMethod &&
+            storeMatchDao.countPresentReferences(expectedCanonicalId) == 1
+        if (!remainsExpectedIndependentRejection) {
+            return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        }
+        resetDecision(match, nowEpochMs)
+        CanonicalGuardedMutationResult.APPLIED
     }
 
     override suspend fun unmergeCopy(
@@ -203,37 +238,102 @@ class RoomCanonicalMutationRepository @Inject constructor(
         current: OwnedCopyProjection,
         nowEpochMs: Long,
     ): String {
+        val snapshot = immutableUnmergeSnapshot(key, current)
+        return db.withTransaction {
+            requireMutableMatch(key)
+            val selectedMatch = requireMatch(key)
+            val originalCanonical = requireCanonical(selectedMatch.canonicalId)
+            unmergeCopy(snapshot, selectedMatch, originalCanonical, nowEpochMs)
+        }
+    }
+
+    override suspend fun guardedUnmergeCopy(
+        key: OwnedCopyKey,
+        current: OwnedCopyProjection,
+        expectedCanonicalId: String,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult {
+        val snapshot = immutableUnmergeSnapshot(key, current)
+        return db.withTransaction {
+            requireMutableMatch(key)
+            val selectedMatch = storeMatchDao.get(
+                accountScope = key.accountScope.value,
+                source = key.source,
+                stableSourceId = key.stableSourceId,
+            )
+            val expectedMatches = storeMatchDao.getByCanonicalId(expectedCanonicalId)
+            val remainsExpectedGroupedCopy = selectedMatch != null &&
+                selectedMatch.canonicalId == expectedCanonicalId &&
+                selectedMatch.isPresent &&
+                selectedMatch.confidence.isCollapsibleForGuard() &&
+                selectedMatch.source != GameSource.STEAM &&
+                expectedMatches.count { match ->
+                    match.isPresent && match.confidence.isCollapsibleForGuard()
+                } >= 2
+            if (!remainsExpectedGroupedCopy) {
+                return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+            }
+            val originalCanonical = canonicalGameDao.get(expectedCanonicalId)
+                ?: return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+            unmergeCopy(snapshot, selectedMatch, originalCanonical, nowEpochMs)
+            CanonicalGuardedMutationResult.APPLIED
+        }
+    }
+
+    private fun immutableUnmergeSnapshot(
+        key: OwnedCopyKey,
+        current: OwnedCopyProjection,
+    ): OwnedCopyProjection {
         val snapshot = current.copy(
             genreKeys = current.genreKeys.toSet(),
             tagIds = current.tagIds.toSet(),
             featureKeys = current.featureKeys.toSet(),
         )
         require(snapshot.key == key) { "Unmerge snapshot does not match its owned copy key" }
-
-        return db.withTransaction {
-            requireMutableMatch(key)
-            val selectedMatch = requireMatch(key)
-            val originalCanonical = requireCanonical(selectedMatch.canonicalId)
-            val canonical = createStandaloneCanonical(snapshot, nowEpochMs)
-            storeMatchDao.upsert(
-                selectedMatch.asManualDecision(
-                    canonicalId = canonical.canonicalId,
-                    steamAppId = originalCanonical.steamAppId,
-                    confidence = MatchConfidence.REJECTED,
-                    nowEpochMs = nowEpochMs,
-                ).copy(
-                    evidenceDisplayName = CanonicalNormalization.displayName(snapshot.displayName),
-                    evidenceTitleKey = CanonicalNormalization.titleKey(snapshot.displayName),
-                    evidenceDeveloperKey = CanonicalNormalization.developerKey(snapshot.developer),
-                    evidenceReleaseYear = snapshot.releaseYear,
-                    evidenceAppType = snapshot.appType,
-                ),
-            )
-            insertFacets(canonical.canonicalId, snapshot)
-            clearPreferredCopy(originalCanonical.canonicalId, key, nowEpochMs)
-            canonical.canonicalId
-        }
+        return snapshot
     }
+
+    private suspend fun unmergeCopy(
+        snapshot: OwnedCopyProjection,
+        selectedMatch: StoreMatchEntity,
+        originalCanonical: CanonicalGameEntity,
+        nowEpochMs: Long,
+    ): String {
+        val canonical = createStandaloneCanonical(snapshot, nowEpochMs)
+        storeMatchDao.upsert(
+            selectedMatch.asManualDecision(
+                canonicalId = canonical.canonicalId,
+                steamAppId = originalCanonical.steamAppId,
+                confidence = MatchConfidence.REJECTED,
+                nowEpochMs = nowEpochMs,
+            ).copy(
+                evidenceDisplayName = CanonicalNormalization.displayName(snapshot.displayName),
+                evidenceTitleKey = CanonicalNormalization.titleKey(snapshot.displayName),
+                evidenceDeveloperKey = CanonicalNormalization.developerKey(snapshot.developer),
+                evidenceReleaseYear = snapshot.releaseYear,
+                evidenceAppType = snapshot.appType,
+            ),
+        )
+        insertFacets(canonical.canonicalId, snapshot)
+        clearPreferredCopy(originalCanonical.canonicalId, snapshot.key, nowEpochMs)
+        return canonical.canonicalId
+    }
+
+    private suspend fun resetDecision(match: StoreMatchEntity, nowEpochMs: Long) {
+        storeMatchDao.upsert(
+            match.copy(
+                candidateSteamAppId = null,
+                matchMethod = MatchMethod.UNMATCHED,
+                confidence = MatchConfidence.UNMATCHED,
+                decisionSource = MatchDecisionSource.AUTOMATIC,
+                resolverVersion = 0,
+                matchedAt = nowEpochMs,
+            ),
+        )
+    }
+
+    private fun MatchConfidence.isCollapsibleForGuard(): Boolean =
+        this == MatchConfidence.VERIFIED || this == MatchConfidence.HIGH
 
     override suspend fun markCopyAbsent(key: OwnedCopyKey) {
         db.withTransaction {

@@ -47,6 +47,10 @@ data class LibraryState(
     // Fixed recovery reason while canonical cards are unavailable or unsupported.
     val canonicalPublicFailure: CanonicalPublicFailure? = null,
 
+    // Monotonic in-memory signal for accepted authoritative canonical snapshots.
+    // Carries no account, game, title, or source-native identity.
+    val canonicalSnapshotRevision: Long = 0L,
+
     // Refresh counter that increments when custom game images are fetched
     // Used to trigger UI recomposition to show newly downloaded images
     val imageRefreshCounter: Long = 0,

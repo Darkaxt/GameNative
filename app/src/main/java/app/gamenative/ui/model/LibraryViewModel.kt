@@ -41,6 +41,7 @@ import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.library.canonical.CanonicalCardKey
+import app.gamenative.library.canonical.CanonicalGuardedMutationResult
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CanonicalLibraryRepository
 import app.gamenative.library.canonical.CanonicalMutationRepository
@@ -538,6 +539,7 @@ class LibraryViewModel @Inject constructor(
     private val renderGeneration = AtomicLong(0L)
     private val filterInputRevision = AtomicLong(0L)
     private val refreshEpoch = AtomicLong(0L)
+    private val canonicalSnapshotRevision = AtomicLong(0L)
     private var refreshJob: Job? = null
     @Volatile private var activeRenderToken: LibraryRenderToken? = null
     @Volatile private var latestPublishedToken: LibraryRenderToken? = null
@@ -882,7 +884,6 @@ class LibraryViewModel @Inject constructor(
         val summary = card.copies.singleOrNull { copy -> copy.key == copyKey }
             ?.takeIf { copy -> copy.source != GameSource.STEAM && copy.canSeparateMatch }
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST
-        if (summary.unavailableReason != null) return CanonicalCopyChangeResult.COPY_STATE_CHANGED
 
         val resolved = try {
             runtimeRegistry.resolve(copyKey)
@@ -913,12 +914,18 @@ class LibraryViewModel @Inject constructor(
             featureKeys = runtime.featureKeys,
         )
         return try {
-            canonicalMutationRepository.unmergeCopy(
-                key = runtime.key,
-                current = projection,
-                nowEpochMs = canonicalProjectionClock.nowEpochMs(),
-            )
-            CanonicalCopyChangeResult.SUCCESS
+            when (
+                canonicalMutationRepository.guardedUnmergeCopy(
+                    key = runtime.key,
+                    current = projection,
+                    expectedCanonicalId = card.canonicalId.value,
+                    nowEpochMs = canonicalProjectionClock.nowEpochMs(),
+                )
+            ) {
+                CanonicalGuardedMutationResult.APPLIED -> CanonicalCopyChangeResult.SUCCESS
+                CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED ->
+                    CanonicalCopyChangeResult.COPY_STATE_CHANGED
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -938,9 +945,10 @@ class LibraryViewModel @Inject constructor(
         if (independent.copyKey != copyKey || copyKey.source == GameSource.STEAM) {
             return CanonicalCopyChangeResult.INVALID_REQUEST
         }
-        val summary = canonicalCard(cardKey)
-            ?.copies
-            ?.singleOrNull()
+        val card = canonicalCard(cardKey)
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+        val summary = card.copies
+            .singleOrNull()
             ?.takeIf { copy ->
                 copy.key == copyKey &&
                     copy.confidence == MatchConfidence.REJECTED &&
@@ -968,11 +976,18 @@ class LibraryViewModel @Inject constructor(
             return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
         }
         return try {
-            canonicalMutationRepository.resetDecision(
-                key = summary.key,
-                nowEpochMs = canonicalProjectionClock.nowEpochMs(),
-            )
-            CanonicalCopyChangeResult.SUCCESS
+            when (
+                canonicalMutationRepository.guardedResetDecision(
+                    key = summary.key,
+                    expectedCanonicalId = card.canonicalId.value,
+                    expectedMatchMethod = summary.matchMethod,
+                    nowEpochMs = canonicalProjectionClock.nowEpochMs(),
+                )
+            ) {
+                CanonicalGuardedMutationResult.APPLIED -> CanonicalCopyChangeResult.SUCCESS
+                CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED ->
+                    CanonicalCopyChangeResult.COPY_STATE_CHANGED
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -1928,6 +1943,10 @@ class LibraryViewModel @Inject constructor(
         latestPublishedToken = null
         canonicalSnapshotEpoch = collectorEpoch
         latestCanonicalCards = snapshot
+        val acceptedSnapshotRevision = canonicalSnapshotRevision.incrementAndGet()
+        _state.update { current ->
+            current.copy(canonicalSnapshotRevision = acceptedSnapshotRevision)
+        }
         canonicalCollectionFailure = null
         retirePendingLegacyLocked()
         val job = viewModelScope.launch(

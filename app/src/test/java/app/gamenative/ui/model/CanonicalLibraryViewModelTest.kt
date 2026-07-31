@@ -35,6 +35,7 @@ import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.events.AndroidEvent
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
+import app.gamenative.library.canonical.CanonicalGuardedMutationResult
 import app.gamenative.library.canonical.CanonicalLibraryRepository
 import app.gamenative.library.canonical.CanonicalMutationRepository
 import app.gamenative.library.canonical.CanonicalProjectionClock
@@ -2775,6 +2776,56 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
+    fun `authoritative capability preference and runtime-only snapshot advances observable revision`() = runTest(dispatcher) {
+        val emissions = MutableSharedFlow<List<CanonicalLibraryCard>>()
+        val initial = card(
+            name = "Reactive copies",
+            copyKeys = listOf(steamKey, gogKey),
+        )
+        val updatedGog = initial.copies.single { it.key == gogKey }.copy(
+            capabilities = setOf(OwnedCopyOperation.PLAY, OwnedCopyOperation.OPEN_SOURCE_DETAILS),
+            branchOrVersion = "runtime-v2",
+        )
+        val updated = initial.copy(
+            copies = initial.copies.map { copy -> if (copy.key == gogKey) updatedGog else copy },
+            preferredCopy = gogKey,
+        )
+        val vm = viewModel(
+            repository = repository(emissions),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        runCurrent()
+        assertTrue(awaitCondition { emissions.subscriptionCount.value > 0 })
+
+        emissions.emit(listOf(initial))
+        runCurrent()
+        awaitState { state -> state.cards.singleOrNull()?.name == initial.displayName && !state.isLoading }
+        val initialRevision = vm.state.value.canonicalSnapshotRevision
+        val initialCards = vm.state.value.cards
+
+        emissions.emit(listOf(updated))
+        assertTrue(
+            awaitCondition {
+                scheduler.runCurrent()
+                vm.state.value.canonicalSnapshotRevision > initialRevision
+            },
+        )
+
+        assertEquals(initialCards, vm.state.value.cards)
+        assertEquals(gogKey, vm.canonicalCard(initial.key)?.preferredCopy)
+        assertEquals(
+            "runtime-v2",
+            vm.canonicalCard(initial.key)?.copies?.single { it.key == gogKey }?.branchOrVersion,
+        )
+        assertTrue(
+            OwnedCopyOperation.PLAY in requireNotNull(vm.canonicalCard(initial.key))
+                .copies.single { it.key == gogKey }.capabilities,
+        )
+        viewModelStore.clear()
+    }
+
+    @Test
     fun `canonical selection routes the exact current card and explicit copy through owned router`() = runTest(dispatcher) {
         val grouped = card(
             name = "Exact routed card",
@@ -2861,7 +2912,9 @@ class CanonicalLibraryViewModelTest {
         val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
         coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(currentRuntime)
         val mutations = mockk<CanonicalMutationRepository>()
-        coEvery { mutations.unmergeCopy(any(), any(), any()) } returns canonicalId(90).value
+        coEvery {
+            mutations.guardedUnmergeCopy(any(), any(), any(), any())
+        } returns CanonicalGuardedMutationResult.APPLIED
         val clock = CanonicalProjectionClock { 456L }
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(grouped))),
@@ -2879,7 +2932,7 @@ class CanonicalLibraryViewModelTest {
         )
         coVerify(exactly = 1) { registry.resolve(epicKey) }
         coVerify(exactly = 1) {
-            mutations.unmergeCopy(
+            mutations.guardedUnmergeCopy(
                 key = epicKey,
                 current = OwnedCopyProjection(
                     key = epicKey,
@@ -2891,8 +2944,50 @@ class CanonicalLibraryViewModelTest {
                     tagIds = linkedSetOf(7, 9),
                     featureKeys = linkedSetOf("epic:current-feature"),
                 ),
+                expectedCanonicalId = grouped.canonicalId.value,
                 nowEpochMs = 456L,
             )
+        }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `legacy bridge unsupported copy can separate when fresh runtime metadata is available`() = runTest(dispatcher) {
+        val unsupportedCopy = copy(
+            key = epicKey,
+            nativeTitle = "Unsupported bridge",
+        ).copy(
+            unavailableReason = CopyUnavailableReason.LEGACY_BRIDGE_UNSUPPORTED,
+            canSeparateMatch = true,
+        )
+        val grouped = card(
+            name = "Grouped unsupported bridge",
+            copyKeys = listOf(steamKey, epicKey),
+        ).copy(copies = listOf(copy(steamKey, "Steam copy"), unsupportedCopy))
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(
+            runtime(epicKey).copy(libraryItem = null),
+        )
+        val mutations = mockk<CanonicalMutationRepository>()
+        coEvery {
+            mutations.guardedUnmergeCopy(any(), any(), any(), any())
+        } returns CanonicalGuardedMutationResult.APPLIED
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.SUCCESS,
+            vm.separateCanonicalCopy(grouped.key, epicKey),
+        )
+        coVerify(exactly = 1) { registry.resolve(epicKey) }
+        coVerify(exactly = 1) {
+            mutations.guardedUnmergeCopy(epicKey, any(), grouped.canonicalId.value, any())
         }
         viewModelStore.clear()
     }
@@ -2908,7 +3003,9 @@ class CanonicalLibraryViewModelTest {
         val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
         coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(runtime(epicKey))
         val mutations = mockk<CanonicalMutationRepository>()
-        coEvery { mutations.unmergeCopy(any(), any(), any()) } throws IllegalStateException("private transaction detail")
+        coEvery {
+            mutations.guardedUnmergeCopy(any(), any(), any(), any())
+        } throws IllegalStateException("private transaction detail")
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(grouped))),
             gateEnabled = true,
@@ -2931,7 +3028,36 @@ class CanonicalLibraryViewModelTest {
             vm.separateCanonicalCopy(grouped.key, epicKey),
         )
         coVerify(exactly = 1) { registry.resolve(epicKey) }
-        coVerify(exactly = 1) { mutations.unmergeCopy(any(), any(), any()) }
+        coVerify(exactly = 1) { mutations.guardedUnmergeCopy(any(), any(), any(), any()) }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `guarded separate stale-state result maps to fixed copy-state feedback`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Stale grouped copy",
+            copyKeys = listOf(steamKey, epicKey),
+        )
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(runtime(epicKey))
+        val mutations = mockk<CanonicalMutationRepository>()
+        coEvery {
+            mutations.guardedUnmergeCopy(any(), any(), any(), any())
+        } returns CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+            vm.separateCanonicalCopy(grouped.key, epicKey),
+        )
+        assertEquals(grouped, vm.canonicalCard(grouped.key))
         viewModelStore.clear()
     }
 
@@ -2957,7 +3083,7 @@ class CanonicalLibraryViewModelTest {
             CanonicalCopyChangeResult.COPY_STATE_CHANGED,
             vm.separateCanonicalCopy(grouped.key, epicKey),
         )
-        coVerify(exactly = 0) { mutations.unmergeCopy(any(), any(), any()) }
+        coVerify(exactly = 0) { mutations.guardedUnmergeCopy(any(), any(), any(), any()) }
         viewModelStore.clear()
     }
 
@@ -2990,7 +3116,46 @@ class CanonicalLibraryViewModelTest {
             CanonicalCopyChangeResult.COPY_STATE_CHANGED,
             vm.resetCanonicalDecision(independent.key, gogKey),
         )
-        coVerify(exactly = 0) { mutations.resetDecision(any(), any()) }
+        coVerify(exactly = 0) { mutations.guardedResetDecision(any(), any(), any(), any()) }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `guarded reset stale-state result maps to fixed copy-state feedback`() = runTest(dispatcher) {
+        val rejectedCopy = copy(
+            key = gogKey,
+            nativeTitle = "Stale rejected copy",
+            confidence = MatchConfidence.REJECTED,
+        ).copy(decisionSource = MatchDecisionSource.USER)
+        val independent = card(name = "Stale rejection", copyKeys = listOf(gogKey)).copy(
+            key = CanonicalCardKey.Independent(gogKey),
+            copies = listOf(rejectedCopy),
+            ownedSources = setOf(GameSource.GOG),
+            preferredCopy = null,
+        )
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(gogKey) } returns OwnedCopyRuntimeResult.Unavailable(
+            key = gogKey,
+            reason = CopyUnavailableReason.SOURCE_READ_FAILED,
+        )
+        val mutations = mockk<CanonicalMutationRepository>()
+        coEvery {
+            mutations.guardedResetDecision(any(), any(), any(), any())
+        } returns CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(independent))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+            vm.resetCanonicalDecision(independent.key, gogKey),
+        )
+        assertEquals(independent, vm.canonicalCard(independent.key))
         viewModelStore.clear()
     }
 
@@ -3013,6 +3178,9 @@ class CanonicalLibraryViewModelTest {
             reason = CopyUnavailableReason.SOURCE_READ_FAILED,
         )
         val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
+        coEvery {
+            mutations.guardedResetDecision(any(), any(), any(), any())
+        } returns CanonicalGuardedMutationResult.APPLIED
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(independent))),
             gateEnabled = true,
@@ -3024,14 +3192,28 @@ class CanonicalLibraryViewModelTest {
         runCurrent()
 
         assertEquals(CanonicalCopyChangeResult.SUCCESS, vm.resetCanonicalDecision(independent.key, gogKey))
-        coVerify(exactly = 1) { mutations.resetDecision(gogKey, 789L) }
+        coVerify(exactly = 1) {
+            mutations.guardedResetDecision(
+                gogKey,
+                independent.canonicalId.value,
+                rejectedCopy.matchMethod,
+                789L,
+            )
+        }
 
         coEvery { registry.resolve(gogKey) } returns OwnedCopyRuntimeResult.Hidden
         assertEquals(
             CanonicalCopyChangeResult.COPY_STATE_CHANGED,
             vm.resetCanonicalDecision(independent.key, gogKey),
         )
-        coVerify(exactly = 1) { mutations.resetDecision(gogKey, 789L) }
+        coVerify(exactly = 1) {
+            mutations.guardedResetDecision(
+                gogKey,
+                independent.canonicalId.value,
+                rejectedCopy.matchMethod,
+                789L,
+            )
+        }
         viewModelStore.clear()
     }
 

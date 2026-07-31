@@ -84,8 +84,12 @@ class OwnedCopyActionRouter @Inject constructor(
                 }
         }
 
-        val available = when (val result = runtimeRegistry.resolve(selection.key)) {
-            is OwnedCopyRuntimeResult.Available -> result.copy
+        val runtimeResult = runtimeRegistry.resolve(selection.key)
+        if (!publicGate.isEnabled()) {
+            return OwnedCopyRouteResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED)
+        }
+        val available = when (runtimeResult) {
+            is OwnedCopyRuntimeResult.Available -> runtimeResult.copy
             OwnedCopyRuntimeResult.Hidden,
             is OwnedCopyRuntimeResult.Unavailable,
             -> return OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
@@ -104,11 +108,17 @@ class OwnedCopyActionRouter @Inject constructor(
             runtimeRegistry = runtimeRegistry,
             publicGate = publicGate,
         )
+        if (!publicGate.isEnabled()) {
+            return OwnedCopyRouteResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED)
+        }
         val warning = rememberExplicitChoice(
             card = card,
             selection = selection,
             rememberChoice = rememberChoice,
         )
+        if (!publicGate.isEnabled()) {
+            return OwnedCopyRouteResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED)
+        }
         return OwnedCopyRouteResult.Ready(
             guard = guard,
             policy = selection.policy,

@@ -35,6 +35,8 @@ import io.mockk.every
 import io.mockk.mockk
 import java.util.AbstractList
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
@@ -420,6 +422,93 @@ class OwnedCopyActionRouterTest {
         assertEquals(0, fixture.totalResolveCalls())
         coVerify(exactly = 0) {
             fixture.preferences.setPreferredCopy(canonicalId, explicitKey, 1000L)
+        }
+    }
+
+    @Test
+    fun gateDisabledDuringRuntimeResolutionReturnsDisabledWithoutPreferenceWrite() = runTest {
+        val gate = MutableGate()
+        val fixture = fixture(gate)
+        val steam = key(GameSource.STEAM, "1")
+        val resolutionStarted = CompletableDeferred<Unit>()
+        val releaseResolution = CompletableDeferred<Unit>()
+        fixture.adapters.getValue(GameSource.STEAM).handler = {
+            resolutionStarted.complete(Unit)
+            releaseResolution.await()
+            OwnedCopyRuntimeResult.Available(
+                runtime(it, capabilities = setOf(OwnedCopyOperation.INSTALL)),
+            )
+        }
+
+        val request = async {
+            fixture.router.route(
+                card = card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL)))),
+                operation = OwnedCopyOperation.INSTALL,
+                explicitKey = steam,
+                rememberChoice = true,
+            )
+        }
+        resolutionStarted.await()
+        gate.enabled = false
+        releaseResolution.complete(Unit)
+
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED),
+            request.await(),
+        )
+        coVerify(exactly = 0) {
+            fixture.preferences.setPreferredCopy(canonicalId, steam, 1000L)
+        }
+    }
+
+    @Test
+    fun gateIsRecheckedImmediatelyBeforePreferencePersistence() = runTest {
+        val gate = MutableGate(check = { call -> call < 3 })
+        val fixture = fixture(gate)
+        val steam = key(GameSource.STEAM, "1")
+        fixture.available(steam, setOf(OwnedCopyOperation.INSTALL))
+
+        val result = fixture.router.route(
+            card = card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL)))),
+            operation = OwnedCopyOperation.INSTALL,
+            explicitKey = steam,
+            rememberChoice = true,
+        )
+
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED),
+            result,
+        )
+        coVerify(exactly = 0) {
+            fixture.preferences.setPreferredCopy(canonicalId, steam, 1000L)
+        }
+    }
+
+    @Test
+    fun gateDisabledDuringPreferencePersistenceNeverReturnsReady() = runTest {
+        val gate = MutableGate()
+        val fixture = fixture(gate)
+        val steam = key(GameSource.STEAM, "1")
+        fixture.available(steam, setOf(OwnedCopyOperation.INSTALL))
+        coEvery {
+            fixture.preferences.setPreferredCopy(canonicalId, steam, 1000L)
+        } coAnswers {
+            gate.enabled = false
+        }
+
+        val result = fixture.router.route(
+            card = card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL)))),
+            operation = OwnedCopyOperation.INSTALL,
+            explicitKey = steam,
+            rememberChoice = true,
+        )
+
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED),
+            result,
+        )
+        coVerify(exactly = 1) {
+            fixture.preferences.setPreferredCopy(canonicalId, steam, 1000L)
         }
     }
 
@@ -1003,7 +1092,9 @@ class OwnedCopyActionRouterTest {
         override val source: GameSource,
     ) : OwnedCopyRuntimeAdapter {
         var resolveCalls = 0
-        var handler: (OwnedCopyKey) -> OwnedCopyRuntimeResult = { OwnedCopyRuntimeResult.Hidden }
+        var handler: suspend (OwnedCopyKey) -> OwnedCopyRuntimeResult = {
+            OwnedCopyRuntimeResult.Hidden
+        }
 
         override fun invalidations(): Flow<Unit> = emptyFlow()
 
@@ -1014,7 +1105,9 @@ class OwnedCopyActionRouterTest {
 
         override suspend fun resolveAll(
             keys: Set<OwnedCopyKey>,
-        ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> = keys.associateWith(handler)
+        ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> = buildMap {
+            keys.forEach { key -> put(key, handler(key)) }
+        }
     }
 
     private inner class Fixture(
@@ -1048,13 +1141,14 @@ class OwnedCopyActionRouterTest {
     private class MutableGate(
         var enabled: Boolean = true,
         private val failure: Throwable? = null,
+        private val check: ((Int) -> Boolean)? = null,
     ) : CanonicalPublicLibraryGate {
         var calls: Int = 0
 
         override fun isEnabled(): Boolean {
             calls += 1
             failure?.let { throw it }
-            return enabled
+            return check?.invoke(calls) ?: enabled
         }
     }
 

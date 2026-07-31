@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -36,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +49,7 @@ import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
+import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
 
@@ -249,15 +252,24 @@ private fun CanonicalCopyRow(
                     }
                 }
 
+                val rememberEnabled = !actionInProgress && !unavailable
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = rememberChoice,
+                            enabled = rememberEnabled,
+                            role = Role.Checkbox,
+                            onValueChange = { rememberChoice = it },
+                        )
+                        .testTag("remember-copy:${copy.source.name}")
+                        .semantics(mergeDescendants = true) {},
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Checkbox(
                         checked = rememberChoice,
-                        onCheckedChange = { rememberChoice = it },
-                        enabled = !actionInProgress && !unavailable,
-                        modifier = Modifier.testTag("remember-copy:${copy.source.name}"),
+                        onCheckedChange = null,
+                        enabled = rememberEnabled,
                     )
                     Text(
                         text = stringResource(R.string.canonical_always_use_copy),
@@ -270,7 +282,10 @@ private fun CanonicalCopyRow(
                 card.copies.size >= 2 &&
                 copy.source != GameSource.STEAM &&
                 copy.canSeparateMatch &&
-                !unavailable
+                (
+                    copy.unavailableReason == null ||
+                        copy.unavailableReason == CopyUnavailableReason.LEGACY_BRIDGE_UNSUPPORTED
+                )
             if (canSeparate) {
                 TextButton(
                     onClick = onSeparate,

@@ -629,6 +629,80 @@ class CanonicalMutationRepositoryTest {
     }
 
     @Test
+    fun `guarded unmerge rejects copy moved to another canonical without clearing newer preference`() = runBlocking {
+        val expected = canonical(index = 1, steamAppId = 99, createdAt = 100)
+        val newer = canonical(index = 2, steamAppId = null, createdAt = 200)
+        val selectedKey = key(GameSource.EPIC, "selected")
+        val expectedPeer = key(GameSource.STEAM, "99")
+        db.canonicalGameDao().insert(expected)
+        db.canonicalGameDao().insert(newer)
+        val selected = match(
+            selectedKey,
+            expected.canonicalId,
+            method = MatchMethod.EXACT_METADATA,
+            confidence = MatchConfidence.HIGH,
+        )
+        db.storeMatchDao().upsert(selected)
+        db.storeMatchDao().upsert(directMatch(expectedPeer, expected.canonicalId, 99))
+
+        db.storeMatchDao().upsert(selected.copy(canonicalId = newer.canonicalId))
+        val newerPreference = preference(
+            newer.canonicalId,
+            selectedKey,
+            "Newer title",
+            "newer-art",
+            250,
+        )
+        db.canonicalPreferenceDao().upsert(newerPreference)
+        val before = databaseState()
+
+        val result = repository.guardedUnmergeCopy(
+            key = selectedKey,
+            current = ownedCopy(selectedKey, "Stale detached title"),
+            expectedCanonicalId = expected.canonicalId,
+            nowEpochMs = 300,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED, result)
+        assertEquals(before, databaseState())
+        assertEquals(
+            selectedKey,
+            requireNotNull(db.canonicalPreferenceDao().get(newer.canonicalId)).preferredCopyKeyOrNull(),
+        )
+    }
+
+    @Test
+    fun `guarded reset rejects newer manual decision and leaves relationship unchanged`() = runBlocking {
+        val canonical = canonical(index = 1, steamAppId = null, createdAt = 100)
+        val selectedKey = key(GameSource.GOG, "selected")
+        db.canonicalGameDao().insert(canonical)
+        val rejected = match(
+            selectedKey,
+            canonical.canonicalId,
+            method = MatchMethod.MANUAL,
+            confidence = MatchConfidence.REJECTED,
+        ).copy(decisionSource = MatchDecisionSource.USER)
+        db.storeMatchDao().upsert(rejected)
+
+        val newerDecision = rejected.copy(
+            candidateSteamAppId = 77,
+            confidence = MatchConfidence.VERIFIED,
+            matchedAt = 250,
+        )
+        db.storeMatchDao().upsert(newerDecision)
+
+        val result = repository.guardedResetDecision(
+            key = selectedKey,
+            expectedCanonicalId = canonical.canonicalId,
+            expectedMatchMethod = MatchMethod.MANUAL,
+            nowEpochMs = 300,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED, result)
+        assertEquals(newerDecision, db.storeMatchDao().get(selectedKey))
+    }
+
+    @Test
     fun `marking last copy absent retains canonical and user decision`() = runBlocking {
         val canonical = canonical(index = 1, steamAppId = null, createdAt = 100)
         val key = key(GameSource.GOG, "last")

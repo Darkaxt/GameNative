@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -124,6 +125,7 @@ import app.gamenative.service.gog.GOGService
 import app.gamenative.utils.CustomGameScanner
 import app.gamenative.utils.PlatformOAuthHandlers
 import app.gamenative.utils.SteamUtils
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import android.os.SystemClock
 
@@ -190,7 +192,7 @@ private fun isGameControllerConnected(): Boolean =
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun LibraryScreenContent(
+internal fun LibraryScreenContent(
     state: LibraryState,
     listState: LazyGridState,
     sheetState: SheetState,
@@ -231,6 +233,7 @@ private fun LibraryScreenContent(
 ) {
     val context = LocalContext.current
     val lifecycleScope = LocalLifecycleOwner.current.lifecycleScope
+    val uiScope = rememberCoroutineScope()
 
     val gogOAuthLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
@@ -342,13 +345,15 @@ private fun LibraryScreenContent(
     var selectedPresentationCard by remember { mutableStateOf<LibraryCard?>(null) }
     var activeActionGuard by remember { mutableStateOf<OwnedCopyActionGuard?>(null) }
     var pendingInitialOperation by remember { mutableStateOf<OwnedCopyOperation?>(null) }
-    var selectedOriginListIndex by remember { mutableIntStateOf(0) }
-    var selectedFocusRestoreListIndex by remember { mutableStateOf<Int?>(null) }
+    var selectedFocusRestoreIdentity by remember { mutableStateOf<LibraryCardIdentity?>(null) }
     var copiesSheetCardKey by remember { mutableStateOf<CanonicalCardKey?>(null) }
     var copiesSheetFeedback by remember { mutableStateOf<CanonicalCopiesFeedback?>(null) }
     var copiesActionInProgress by remember { mutableStateOf(false) }
-    var copiesOriginListIndex by remember { mutableIntStateOf(0) }
+    var copiesOriginIdentity by remember { mutableStateOf<LibraryCardIdentity?>(null) }
     var pendingCopiesFocusRestore by remember { mutableStateOf(false) }
+    var routeRequestJob by remember { mutableStateOf<Job?>(null) }
+    var routeRequestIdentity by remember { mutableStateOf<LibraryCardIdentity.Canonical?>(null) }
+    var routeRequestEpoch by remember { mutableLongStateOf(0L) }
     val carouselListState = rememberLazyListState()
     val isViewWide = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var currentPaneType by remember { mutableStateOf(PrefManager.libraryLayout) }
@@ -454,7 +459,12 @@ private fun LibraryScreenContent(
     fun requestCarouselFocusOrDefer(targetListIndex: Int = currentCarouselFocusTargetIndex()) {
         if (!isListFocusable()) return
         ensureKeyboardInputMode()
-        carouselFocusTargetListIndex = targetListIndex.coerceIn(0, getContentLastIndex())
+        val normalizedTarget = targetListIndex.coerceIn(0, getContentLastIndex())
+        if (carouselFocusTargetListIndex != normalizedTarget) {
+            carouselFocusTargetListIndex = normalizedTarget
+            pendingCarouselFocusRequest = true
+            return
+        }
         try {
             carouselFocusRequester.requestFocus()
             pendingCarouselFocusRequest = false
@@ -468,8 +478,10 @@ private fun LibraryScreenContent(
         if (!isListFocusable()) return
         if (currentPaneType == PaneType.CAROUSEL) {
             requestCarouselFocusOrDefer(targetListIndex)
-        } else {
+        } else if (gridFocusTargetListIndex != targetListIndex) {
             gridFocusTargetListIndex = targetListIndex
+            pendingGridFocusRequest = true
+        } else {
             requestGridFocusOrDefer()
         }
     }
@@ -481,7 +493,16 @@ private fun LibraryScreenContent(
         } catch (_: IllegalStateException) {}
     }
 
+    fun supersedeRouteRequests(): Long {
+        routeRequestJob?.cancel()
+        routeRequestJob = null
+        routeRequestIdentity = null
+        routeRequestEpoch += 1L
+        return routeRequestEpoch
+    }
+
     fun clearSelectedSource() {
+        supersedeRouteRequests()
         selectedCardIdentity = null
         selectedSourceItem = null
         selectedPresentationCard = null
@@ -489,7 +510,11 @@ private fun LibraryScreenContent(
         pendingInitialOperation = null
     }
 
-    fun dismissCopiesSheet(restoreCardFocus: Boolean = true) {
+    fun dismissCopiesSheet(
+        restoreCardFocus: Boolean = true,
+        supersedeRoute: Boolean = true,
+    ) {
+        if (supersedeRoute) supersedeRouteRequests()
         copiesSheetCardKey = null
         copiesSheetFeedback = null
         copiesActionInProgress = false
@@ -498,13 +523,18 @@ private fun LibraryScreenContent(
         }
     }
 
-    fun openCopiesSheet(key: CanonicalCardKey, originatingListIndex: Int) {
+    fun openCopiesSheet(
+        key: CanonicalCardKey,
+        originatingIdentity: LibraryCardIdentity,
+        supersedeRoute: Boolean = true,
+    ) {
+        if (supersedeRoute) supersedeRouteRequests()
         if (canonicalCard(key) == null) {
             SnackbarManager.show(context.getString(R.string.canonical_copy_state_changed))
             onRefresh()
             return
         }
-        copiesOriginListIndex = originatingListIndex
+        copiesOriginIdentity = originatingIdentity
         copiesSheetFeedback = null
         copiesActionInProgress = false
         pendingGridFocusRequest = false
@@ -512,48 +542,65 @@ private fun LibraryScreenContent(
         copiesSheetCardKey = key
     }
 
-    fun openCard(card: LibraryCard, originatingListIndex: Int = card.index) {
-        selectedOriginListIndex = originatingListIndex
+    fun openCard(card: LibraryCard) {
         when (val identity = card.identity) {
             is LibraryCardIdentity.SourceCopy -> {
+                supersedeRouteRequests()
                 activeActionGuard = null
                 pendingInitialOperation = null
-                selectedFocusRestoreListIndex = null
+                selectedFocusRestoreIdentity = null
                 selectedPresentationCard = card
                 selectedSourceItem = identity.item
                 selectedCardIdentity = identity
             }
             is LibraryCardIdentity.Promotion -> {
+                supersedeRouteRequests()
                 activeActionGuard = null
                 pendingInitialOperation = null
-                selectedFocusRestoreListIndex = null
+                selectedFocusRestoreIdentity = null
                 selectedPresentationCard = card
                 selectedSourceItem = null
                 selectedCardIdentity = identity
             }
-            is LibraryCardIdentity.Canonical -> lifecycleScope.launch {
-                when (
-                    val result = onRouteCanonicalAction(
-                        identity.key,
-                        OwnedCopyOperation.OPEN_SOURCE_DETAILS,
-                        null,
-                        false,
-                    )
-                ) {
-                    is OwnedCopyRouteResult.Ready -> {
-                        activeActionGuard = result.guard
-                        pendingInitialOperation = null
-                        selectedFocusRestoreListIndex = originatingListIndex
-                        selectedPresentationCard = card
-                        selectedSourceItem = result.guard.initialLibraryItem
-                        selectedCardIdentity = identity
-                    }
-                    is OwnedCopyRouteResult.NeedsChooser -> {
-                        openCopiesSheet(identity.key, originatingListIndex)
-                    }
-                    is OwnedCopyRouteResult.Unavailable -> {
-                        SnackbarManager.show(context.getString(R.string.canonical_copy_state_changed))
-                        onRefresh()
+            is LibraryCardIdentity.Canonical -> {
+                val requestEpoch = supersedeRouteRequests()
+                routeRequestIdentity = identity
+                routeRequestJob = uiScope.launch {
+                    when (
+                        val result = onRouteCanonicalAction(
+                            identity.key,
+                            OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                            null,
+                            false,
+                        )
+                    ) {
+                        is OwnedCopyRouteResult.Ready -> {
+                            if (requestEpoch != routeRequestEpoch) return@launch
+                            routeRequestIdentity = null
+                            activeActionGuard = result.guard
+                            pendingInitialOperation = null
+                            selectedFocusRestoreIdentity = identity
+                            selectedPresentationCard = card
+                            selectedSourceItem = result.guard.initialLibraryItem
+                            selectedCardIdentity = identity
+                        }
+                        is OwnedCopyRouteResult.NeedsChooser -> {
+                            if (requestEpoch != routeRequestEpoch) return@launch
+                            routeRequestIdentity = null
+                            openCopiesSheet(
+                                key = identity.key,
+                                originatingIdentity = identity,
+                                supersedeRoute = false,
+                            )
+                        }
+                        is OwnedCopyRouteResult.Unavailable -> {
+                            if (requestEpoch != routeRequestEpoch) return@launch
+                            routeRequestIdentity = null
+                            SnackbarManager.show(
+                                context.getString(R.string.canonical_copy_state_changed),
+                            )
+                            onRefresh()
+                        }
                     }
                 }
             }
@@ -566,9 +613,11 @@ private fun LibraryScreenContent(
         operation: OwnedCopyOperation,
         rememberChoice: Boolean,
     ) {
+        val requestEpoch = supersedeRouteRequests()
+        routeRequestIdentity = LibraryCardIdentity.Canonical(cardKey)
         copiesActionInProgress = true
         copiesSheetFeedback = null
-        lifecycleScope.launch {
+        routeRequestJob = uiScope.launch {
             when (
                 val result = onRouteCanonicalAction(
                     cardKey,
@@ -578,6 +627,8 @@ private fun LibraryScreenContent(
                 )
             ) {
                 is OwnedCopyRouteResult.Ready -> {
+                    if (requestEpoch != routeRequestEpoch) return@launch
+                    routeRequestIdentity = null
                     if (result.warning == ActionFailureReason.PREFERENCE_WRITE_FAILED) {
                         SnackbarManager.show(
                             context.getString(R.string.canonical_preference_not_remembered),
@@ -587,7 +638,7 @@ private fun LibraryScreenContent(
                     pendingInitialOperation = operation.takeUnless {
                         it == OwnedCopyOperation.OPEN_SOURCE_DETAILS
                     }
-                    selectedFocusRestoreListIndex = copiesOriginListIndex
+                    selectedFocusRestoreIdentity = copiesOriginIdentity
                     selectedPresentationCard = state.cards.firstOrNull { candidate ->
                         (candidate.identity as? LibraryCardIdentity.Canonical)?.key == cardKey
                     } ?: selectedPresentationCard?.takeIf { candidate ->
@@ -595,13 +646,18 @@ private fun LibraryScreenContent(
                     }
                     selectedSourceItem = result.guard.initialLibraryItem
                     selectedCardIdentity = LibraryCardIdentity.Canonical(cardKey)
-                    dismissCopiesSheet(restoreCardFocus = false)
+                    dismissCopiesSheet(restoreCardFocus = false, supersedeRoute = false)
                 }
                 is OwnedCopyRouteResult.NeedsChooser,
                 is OwnedCopyRouteResult.Unavailable,
                 -> {
+                    if (requestEpoch != routeRequestEpoch) return@launch
+                    routeRequestIdentity = null
                     copiesActionInProgress = false
                     copiesSheetFeedback = CanonicalCopiesFeedback.COPY_STATE_CHANGED
+                    SnackbarManager.show(
+                        context.getString(R.string.canonical_copy_state_changed),
+                    )
                     onRefresh()
                 }
             }
@@ -666,6 +722,18 @@ private fun LibraryScreenContent(
         dismissCopiesSheet()
     }
 
+    fun restoreContentFocus(identity: LibraryCardIdentity?) {
+        val currentIndex = identity?.let { target ->
+            state.cards.indexOfFirst { card -> card.identity == target }.takeIf { it >= 0 }
+        }
+        when {
+            currentIndex != null -> requestContentFocusOrDefer(currentIndex)
+            identity != null -> requestRootFocusSafe()
+            isListFocusable() -> requestContentFocusOrDefer(preferredContentFocusIndex())
+            else -> requestRootFocusSafe()
+        }
+    }
+
     // Restore focus when returning from game detail (without reloading list)
     LaunchedEffect(selectedCardIdentity) {
         if (selectedCardIdentity != null) {
@@ -674,16 +742,8 @@ private fun LibraryScreenContent(
         if (selectedCardIdentity == null) {
             // Brief delay to let the UI settle after transition
             kotlinx.coroutines.delay(100)
-            // Canonical routes restore their exact origin; source-native routes preserve legacy focus behavior.
-            if (isListFocusable()) {
-                requestContentFocusOrDefer(
-                    selectedFocusRestoreListIndex ?: preferredContentFocusIndex(),
-                )
-                selectedFocusRestoreListIndex = null
-            } else {
-                selectedFocusRestoreListIndex = null
-                requestRootFocusSafe()
-            }
+            restoreContentFocus(selectedFocusRestoreIdentity)
+            selectedFocusRestoreIdentity = null
         }
     }
 
@@ -691,11 +751,8 @@ private fun LibraryScreenContent(
         if (pendingCopiesFocusRestore && copiesSheetCardKey == null) {
             pendingCopiesFocusRestore = false
             kotlinx.coroutines.delay(100)
-            if (isListFocusable()) {
-                requestContentFocusOrDefer(copiesOriginListIndex)
-            } else {
-                requestRootFocusSafe()
-            }
+            restoreContentFocus(copiesOriginIdentity)
+            copiesOriginIdentity = null
         }
     }
 
@@ -947,6 +1004,7 @@ private fun LibraryScreenContent(
         PluviaApp.events.on<AndroidEvent.MotionEvent, Boolean>(onGlobalMotionEvent)
 
         onDispose {
+            routeRequestJob?.cancel()
             PluviaApp.events.off<AndroidEvent.KeyEvent, Boolean>(onGlobalKeyEvent)
             PluviaApp.events.off<AndroidEvent.MotionEvent, Boolean>(onGlobalMotionEvent)
         }
@@ -1111,7 +1169,7 @@ private fun LibraryScreenContent(
                         RecommendedTabPane(
                             currentPaneType = currentPaneType,
                             onNavigate = { item ->
-                                openCard(LibraryCard.fromPromotion(item), item.index)
+                                openCard(LibraryCard.fromPromotion(item))
                             },
                             modifier = Modifier.fillMaxSize(),
                             firstCarouselItemFocusRequester = carouselFocusRequester,
@@ -1183,12 +1241,12 @@ private fun LibraryScreenContent(
                             listState = carouselListState,
                             onPageChange = onPageChange,
                             onNavigate = { card ->
-                                openCard(card, card.index)
+                                openCard(card)
                             },
-                            onCopies = { card, listIndex ->
+                            onCopies = { card, _ ->
                                 val canonical = card.identity as? LibraryCardIdentity.Canonical
                                 if (canonical != null) {
-                                    openCopiesSheet(canonical.key, listIndex)
+                                    openCopiesSheet(canonical.key, card.identity)
                                 }
                             },
                             onRefresh = onRefresh,
@@ -1206,12 +1264,12 @@ private fun LibraryScreenContent(
                             focusTargetListIndex = gridFocusTargetListIndex,
                             onPageChange = onPageChange,
                             onNavigate = { card ->
-                                openCard(card, card.index)
+                                openCard(card)
                             },
-                            onCopies = { card, listIndex ->
+                            onCopies = { card, _ ->
                                 val canonical = card.identity as? LibraryCardIdentity.Canonical
                                 if (canonical != null) {
-                                    openCopiesSheet(canonical.key, listIndex)
+                                    openCopiesSheet(canonical.key, card.identity)
                                 }
                             },
                             onRefresh = onRefresh,
@@ -1288,7 +1346,7 @@ private fun LibraryScreenContent(
                 sourceItem = selectedSourceItem,
                 onCopies = (selectedCardIdentity as? LibraryCardIdentity.Canonical)?.let { canonical ->
                     {
-                        openCopiesSheet(canonical.key, selectedOriginListIndex)
+                        openCopiesSheet(canonical.key, canonical)
                     }
                 },
                 onBack = ::clearSelectedSource,
@@ -1442,6 +1500,8 @@ private fun LibraryScreenContent(
         }
 
         val currentCopiesCard = copiesSheetCardKey?.let(canonicalCard)
+        val currentSelectedCanonicalCard =
+            (selectedCardIdentity as? LibraryCardIdentity.Canonical)?.key?.let(canonicalCard)
         if (currentCopiesCard != null) {
             CanonicalCopiesSheet(
                 card = currentCopiesCard,
@@ -1525,8 +1585,30 @@ private fun LibraryScreenContent(
             )
         }
 
-        LaunchedEffect(copiesSheetCardKey, currentCopiesCard) {
-            if (copiesSheetCardKey != null && currentCopiesCard == null) {
+        LaunchedEffect(
+            state.canonicalSnapshotRevision,
+            selectedCardIdentity,
+            copiesSheetCardKey,
+            currentCopiesCard,
+            currentSelectedCanonicalCard,
+            routeRequestIdentity,
+        ) {
+            val routeIdentity = routeRequestIdentity
+            if (routeIdentity != null && canonicalCard(routeIdentity.key) == null) {
+                supersedeRouteRequests()
+                copiesActionInProgress = false
+            }
+            val selectedCanonical = selectedCardIdentity as? LibraryCardIdentity.Canonical
+            val selectedRemoved = selectedCanonical != null && currentSelectedCanonicalCard == null
+            if (selectedRemoved) {
+                clearSelectedSource()
+                if (copiesSheetCardKey != null) {
+                    dismissCopiesSheet(
+                        restoreCardFocus = false,
+                        supersedeRoute = false,
+                    )
+                }
+            } else if (copiesSheetCardKey != null && currentCopiesCard == null) {
                 dismissCopiesSheet(restoreCardFocus = selectedCardIdentity == null)
             }
         }
