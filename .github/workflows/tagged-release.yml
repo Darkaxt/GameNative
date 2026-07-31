@@ -38,6 +38,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Configure Keystore
+        if: ${{ github.repository != 'Darkaxt/GameNative' }}
         env:
           KEYSTORE: ${{ secrets.KEYSTORE }}
           KEYSTORE_KEY_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}
@@ -52,6 +53,7 @@ jobs:
           echo "keyPassword=$KEYSTORE_KEY_PASSWORD" >> app/keystores/keystore.properties
 
       - name: Configure Production Keystore
+        if: ${{ github.repository != 'Darkaxt/GameNative' }}
         env:
           PROD_KEYSTORE: ${{ secrets.PROD_KEYSTORE }}
           PROD_KEYSTORE_KEY_ALIAS: ${{ secrets.PROD_KEYSTORE_KEY_ALIAS }}
@@ -65,6 +67,26 @@ jobs:
           keyPassword=$PROD_KEYSTORE_KEY_PASSWORD
           storePassword=$PROD_KEYSTORE_STORE_PASSWORD
           EOF
+
+      - name: Configure Fork Keystore
+        if: ${{ github.repository == 'Darkaxt/GameNative' }}
+        env:
+          FORK_KEYSTORE: ${{ secrets.FORK_KEYSTORE }}
+          FORK_KEYSTORE_ALIAS: ${{ secrets.FORK_KEYSTORE_ALIAS }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEY_PASSWORD: ${{ secrets.FORK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in FORK_KEYSTORE FORK_KEYSTORE_ALIAS FORK_KEYSTORE_PASSWORD FORK_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "Required fork signing secret is not configured: $name" >&2
+              exit 1
+            fi
+          done
+          mkdir -p app/keystores
+          printf '%s' "$FORK_KEYSTORE" | base64 --decode > app/keystores/fork-release.jks
+          chmod 600 app/keystores/fork-release.jks
+          test -s app/keystores/fork-release.jks
 
       - name: Inject credentials
         env:
@@ -111,11 +133,13 @@ jobs:
           unzip -p app-legacy-xr-release.apks universal.apk > universal-legacy-xr.apk
 
       - name: Copy lineage file
+        if: ${{ github.repository != 'Darkaxt/GameNative' }}
         run: |
           mkdir -p app/keystores
           cp prod-debug.lineage app/keystores/prod-debug.lineage
 
       - name: Dual sign universal APKs
+        if: ${{ github.repository != 'Darkaxt/GameNative' }}
         env:
           DEBUG_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}
           DEBUG_KEY_PASS: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
@@ -144,6 +168,30 @@ jobs:
             mv "${apk%.apk}-signed.apk" "$apk"
           done
 
+      - name: Sign universal APKs with persistent fork key
+        if: ${{ github.repository == 'Darkaxt/GameNative' }}
+        env:
+          FORK_KEYSTORE_ALIAS: ${{ secrets.FORK_KEYSTORE_ALIAS }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEY_PASSWORD: ${{ secrets.FORK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS_DIR="${ANDROID_HOME}/build-tools/34.0.0"
+          if [ ! -d "$BUILD_TOOLS_DIR" ]; then
+            BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/34.0.0"
+          fi
+          for apk in universal.apk universal-legacy-xr.apk; do
+            "${BUILD_TOOLS_DIR}/apksigner" sign \
+              --ks app/keystores/fork-release.jks \
+              --ks-type JKS \
+              --ks-key-alias "$FORK_KEYSTORE_ALIAS" \
+              --ks-pass env:FORK_KEYSTORE_PASSWORD \
+              --key-pass env:FORK_KEY_PASSWORD \
+              --out "${apk%.apk}-signed.apk" \
+              "$apk"
+            mv "${apk%.apk}-signed.apk" "$apk"
+          done
+
       - name: Rename signed APKs
         run: |
           TAG="${GITHUB_REF_NAME}"
@@ -151,6 +199,8 @@ jobs:
           mv universal-legacy-xr.apk "gamenative-$TAG-legacy-xr.apk"
 
       - name: Verify APK signatures and generate checksums
+        env:
+          EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
         run: |
           set -euo pipefail
           BUILD_TOOLS_DIR="${ANDROID_HOME}/build-tools/34.0.0"
@@ -162,7 +212,24 @@ jobs:
             "gamenative-${GITHUB_REF_NAME}-legacy-xr.apk"
           )
           for apk in "${APKS[@]}"; do
-            "${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$apk"
+            verify_output=$("${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$apk")
+            if [ "$GITHUB_REPOSITORY" = "Darkaxt/GameNative" ]; then
+              actual_digest=""
+              while IFS= read -r line; do
+                if [[ "$line" == *"certificate SHA-256 digest: "* ]]; then
+                  actual_digest="${line##*: }"
+                  actual_digest="${actual_digest,,}"
+                  break
+                fi
+              done <<< "$verify_output"
+              if [ "$actual_digest" != "$EXPECTED_FORK_CERT_SHA256" ]; then
+                echo "Unexpected fork signer certificate SHA-256 for $apk: $actual_digest" >&2
+                exit 1
+              fi
+              echo "$apk signer certificate SHA-256: $actual_digest"
+            else
+              printf '%s\n' "$verify_output"
+            fi
           done
           sha256sum "${APKS[@]}" > SHA256SUMS
           sha256sum --check SHA256SUMS
@@ -188,6 +255,47 @@ jobs:
           name: release-assets-${{ github.ref_name }}
           path: ./
 
+      - name: Build release notes
+        run: |
+          : > release-body.md
+          if [ "$GITHUB_REPOSITORY" = "Darkaxt/GameNative" ]; then
+            cat <<'EOF' >> release-body.md
+          ## Fork-only signing identity
+
+          This prerelease is signed with the persistent Darkaxt fork release key (certificate SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`), not the official GameNative signing identity.
+
+          - Uninstall an official-signed GameNative build before installing this prerelease.
+          - Subsequent Darkaxt fork builds using this signing identity can upgrade this prerelease in place.
+
+          EOF
+          fi
+          cat <<'EOF' >> release-body.md
+          ## Experimental opt-in canonical library
+
+          Canonical library testing is experimental and remains off by default.
+
+          ### Enable + restart for testing
+          1. Open **Settings → Debug**.
+          2. Enable **Experimental canonical library** (canonical library cards).
+          3. Restart GameNative.
+
+          ### Disable + restart for legacy fallback
+          1. Open **Settings → Debug**.
+          2. Disable **Experimental canonical library**.
+          3. Restart GameNative.
+
+          Disabling and restarting restores source-native cards/actions. Readiness or assembly failures also fall back automatically, and the independent canonical projection kill switch remains available.
+
+          Tasks 11–14 and full signed-in validation are deferred. This prerelease does not claim exhaustive validation.
+
+          ## Downloads
+          EOF
+          printf '%s\n' \
+            "- **\`gamenative-${GITHUB_REF_NAME}.apk\`** — Standard build. Recommended for most users." \
+            "- **\`gamenative-${GITHUB_REF_NAME}-legacy-xr.apk\`** — XR build for Quest headsets." \
+            '- **`SHA256SUMS`** — SHA-256 checksums for both APKs.' \
+            >> release-body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -196,29 +304,7 @@ jobs:
           prerelease: true
           generate_release_notes: true
           append_body: true
-          body: |
-            ## Experimental opt-in canonical library
-
-            Canonical library testing is experimental and remains off by default.
-
-            ### Enable + restart for testing
-            1. Open **Settings → Debug**.
-            2. Enable **Experimental canonical library**.
-            3. Restart GameNative.
-
-            ### Disable + restart for legacy fallback
-            1. Open **Settings → Debug**.
-            2. Disable **Experimental canonical library**.
-            3. Restart GameNative.
-
-            Disabling and restarting restores source-native cards/actions. Readiness or assembly failures also fall back automatically, and the independent canonical projection kill switch remains available.
-
-            Tasks 11–14 and full signed-in validation are deferred. This prerelease does not claim exhaustive validation.
-
-            ## Downloads
-            - **`gamenative-${{ github.ref_name }}.apk`** — Standard build. Recommended for most users.
-            - **`gamenative-${{ github.ref_name }}-legacy-xr.apk`** — XR build for Quest headsets.
-            - **`SHA256SUMS`** — SHA-256 checksums for both APKs.
+          body_path: release-body.md
           files: |
             gamenative-${{ github.ref_name }}.apk
             gamenative-${{ github.ref_name }}-legacy-xr.apk
