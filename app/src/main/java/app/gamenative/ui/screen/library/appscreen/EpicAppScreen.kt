@@ -29,6 +29,7 @@ import app.gamenative.ui.data.AppMenuOption
 import app.gamenative.ui.data.GameDisplayInfo
 import app.gamenative.ui.enums.AppOptionMenuType
 import app.gamenative.enums.Marker
+import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.ContainerUtils.extractGameIdFromContainerId
 import app.gamenative.utils.MarkerUtils
@@ -101,20 +102,29 @@ class EpicAppScreen : BaseAppScreen() {
 
         // Shared state for game manager dialog - map of gameId to GameManagerDialogState
         private val gameManagerDialogStates = mutableStateMapOf<Int, app.gamenative.ui.component.dialog.state.GameManagerDialogState>()
+        private val gameManagerOperations = mutableStateMapOf<Int, OwnedCopyOperation>()
 
-        fun showGameManagerDialog(gameId: Int, state: app.gamenative.ui.component.dialog.state.GameManagerDialogState) {
+        fun showGameManagerDialog(
+            gameId: Int,
+            state: app.gamenative.ui.component.dialog.state.GameManagerDialogState,
+            operation: OwnedCopyOperation,
+        ) {
             Timber.tag(TAG).d("showGameManagerDialog: gameId=$gameId")
             gameManagerDialogStates[gameId] = state
+            gameManagerOperations[gameId] = operation
         }
 
         fun hideGameManagerDialog(gameId: Int) {
             Timber.tag(TAG).d("hideGameManagerDialog: gameId=$gameId")
             gameManagerDialogStates.remove(gameId)
+            gameManagerOperations.remove(gameId)
         }
 
         fun getGameManagerDialogState(gameId: Int): app.gamenative.ui.component.dialog.state.GameManagerDialogState? {
             return gameManagerDialogStates[gameId]
         }
+
+        fun getGameManagerOperation(gameId: Int): OwnedCopyOperation? = gameManagerOperations[gameId]
     }
 
     @Composable
@@ -361,13 +371,15 @@ class EpicAppScreen : BaseAppScreen() {
             showGameManagerDialog(
                 gameId,
                 app.gamenative.ui.component.dialog.state.GameManagerDialogState(visible = true),
+                OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
             )
         } else {
             // Show game manager dialog with DLC selection
             Timber.tag(TAG).i("Showing game manager dialog for: ${libraryItem.appId}")
             showGameManagerDialog(
                 gameId,
-                app.gamenative.ui.component.dialog.state.GameManagerDialogState(visible = true)
+                app.gamenative.ui.component.dialog.state.GameManagerDialogState(visible = true),
+                OwnedCopyOperation.INSTALL,
             )
         }
     }
@@ -445,6 +457,7 @@ class EpicAppScreen : BaseAppScreen() {
             showGameManagerDialog(
                 gameId,
                 app.gamenative.ui.component.dialog.state.GameManagerDialogState(visible = true),
+                OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
             )
         } else {
             // Fresh start: show DLC manager/install selection dialog.
@@ -452,6 +465,7 @@ class EpicAppScreen : BaseAppScreen() {
             showGameManagerDialog(
                 gameId,
                 app.gamenative.ui.component.dialog.state.GameManagerDialogState(visible = true),
+                OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
             )
         }
     }
@@ -752,6 +766,10 @@ class EpicAppScreen : BaseAppScreen() {
         onDismiss: () -> Unit,
         onEditContainer: () -> Unit,
         onBack: () -> Unit,
+        guardedAction: (
+            operation: OwnedCopyOperation,
+            action: (LibraryItem) -> Unit,
+        ) -> Unit,
     ) {
         Timber.tag(TAG).d("AdditionalDialogs: composing for appId=${libraryItem.appId}")
         val context = LocalContext.current
@@ -803,35 +821,46 @@ class EpicAppScreen : BaseAppScreen() {
             val onConfirmClick: (() -> Unit)? = when (installDialogState.type) {
                 app.gamenative.ui.enums.DialogType.INSTALL_APP -> {
                     {
-                        BaseAppScreen.hideInstallDialog(appId)
-                        performDownload(scope, context, libraryItem, listOf(libraryItem.gameId)) {}
+                        executeGuardedConfirmation(
+                            operation = OwnedCopyOperation.INSTALL,
+                            onDismiss = { BaseAppScreen.hideInstallDialog(appId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            performDownload(scope, context, currentItem, listOf(currentItem.gameId)) {}
+                        }
                     }
                 }
                 app.gamenative.ui.enums.DialogType.CANCEL_APP_DOWNLOAD -> {
                     {
-                        Timber.tag(TAG).i("Cancelling/deleting Epic download for: $gameId")
-                        BaseAppScreen.hideInstallDialog(appId)
-                        showDeletingDialog = true
-                        val downloadInfo = EpicService.getDownloadInfo(gameId)
-                        downloadInfo?.cancel()
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                downloadInfo?.awaitCompletion()
-                                EpicService.cleanupDownload(context, gameId)
-                                val result = EpicService.deleteGame(context, gameId)
-                                DownloadService.invalidateCache()
-                                withContext(Dispatchers.Main) {
-                                    if (result.isSuccess) {
-                                        app.gamenative.PluviaApp.events.emit(app.gamenative.events.AndroidEvent.DownloadStatusChanged(gameId, false))
-                                        app.gamenative.PluviaApp.events.emit(app.gamenative.events.AndroidEvent.LibraryInstallStatusChanged(gameId, app.gamenative.data.GameSource.EPIC))
-                                    } else {
-                                        Timber.tag(TAG).e("Failed to delete Epic game after cancel: $gameId - ${result.exceptionOrNull()?.message}")
-                                        SnackbarManager.show("Failed to delete download: ${result.exceptionOrNull()?.message ?: ""}")
+                        executeGuardedConfirmation(
+                            operation = OwnedCopyOperation.CANCEL_DOWNLOAD,
+                            onDismiss = { BaseAppScreen.hideInstallDialog(appId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            val currentGameId = currentItem.gameId
+                            Timber.tag(TAG).i("Cancelling/deleting Epic download for: $gameId")
+                            showDeletingDialog = true
+                            val downloadInfo = EpicService.getDownloadInfo(currentGameId)
+                            downloadInfo?.cancel()
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    downloadInfo?.awaitCompletion()
+                                    EpicService.cleanupDownload(context, currentGameId)
+                                    val result = EpicService.deleteGame(context, currentGameId)
+                                    DownloadService.invalidateCache()
+                                    withContext(Dispatchers.Main) {
+                                        if (result.isSuccess) {
+                                            app.gamenative.PluviaApp.events.emit(app.gamenative.events.AndroidEvent.DownloadStatusChanged(currentGameId, false))
+                                            app.gamenative.PluviaApp.events.emit(app.gamenative.events.AndroidEvent.LibraryInstallStatusChanged(currentGameId, app.gamenative.data.GameSource.EPIC))
+                                        } else {
+                                            Timber.tag(TAG).e("Failed to delete Epic game after cancel: $gameId - ${result.exceptionOrNull()?.message}")
+                                            SnackbarManager.show("Failed to delete download: ${result.exceptionOrNull()?.message ?: ""}")
+                                        }
                                     }
-                                }
-                            } finally {
-                                withContext(NonCancellable + Dispatchers.Main) {
-                                    showDeletingDialog = false
+                                } finally {
+                                    withContext(NonCancellable + Dispatchers.Main) {
+                                        showDeletingDialog = false
+                                    }
                                 }
                             }
                         }
@@ -860,8 +889,16 @@ class EpicAppScreen : BaseAppScreen() {
                     getGameDisplayInfo(context, libraryItem)
                 },
                 onInstall = { selectedGameIds ->
-                    hideGameManagerDialog(gameId)
-                    performDownload(scope, context, libraryItem, selectedGameIds) {}
+                    val operation = getGameManagerOperation(gameId)
+                    if (operation != null) {
+                        executeGuardedConfirmation(
+                            operation = operation,
+                            onDismiss = { hideGameManagerDialog(gameId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            performDownload(scope, context, currentItem, selectedGameIds) {}
+                        }
+                    }
                 },
                 onDismissRequest = {
                     hideGameManagerDialog(gameId)
@@ -891,8 +928,13 @@ class EpicAppScreen : BaseAppScreen() {
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            hideUninstallDialog(libraryItem.appId)
-                            performUninstall(context, libraryItem)
+                            executeGuardedConfirmation(
+                                operation = OwnedCopyOperation.UNINSTALL,
+                                onDismiss = { hideUninstallDialog(libraryItem.appId) },
+                                guardedAction = guardedAction,
+                            ) { currentItem ->
+                                performUninstall(context, currentItem)
+                            }
                         },
                     ) {
                         Text(stringResource(R.string.uninstall))

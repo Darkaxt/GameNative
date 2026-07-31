@@ -1350,10 +1350,20 @@ internal fun LibraryScreenContent(
                     }
                 },
                 onBack = ::clearSelectedSource,
-                onClickPlay = { confirm ->
-                    selectedSourceItem?.let { libraryItem ->
-                        onClickPlay(libraryItem.appId, confirm)
+                actionGuard = activeActionGuard,
+                initialOperation = pendingInitialOperation,
+                onInitialOperationConsumed = { pendingInitialOperation = null },
+                onCanonicalActionUnavailable = {
+                    val canonicalIdentity = selectedCardIdentity as? LibraryCardIdentity.Canonical
+                    SnackbarManager.show(context.getString(R.string.canonical_copy_state_changed))
+                    clearSelectedSource()
+                    if (canonicalIdentity != null && canonicalCard(canonicalIdentity.key) != null) {
+                        openCopiesSheet(canonicalIdentity.key, canonicalIdentity)
                     }
+                    onRefresh()
+                },
+                onClickPlay = { currentItem, confirm ->
+                    onClickPlay(currentItem.appId, confirm)
                 },
                 onTestGraphics = {
                     selectedSourceItem?.let { libraryItem ->

@@ -108,6 +108,9 @@ import app.gamenative.NetworkMonitor
 import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.LibraryItem
+import app.gamenative.library.canonical.OwnedCopyOperation
+import app.gamenative.library.canonical.action.ActionFailureReason
+import app.gamenative.library.canonical.action.OwnedCopyActionGuard
 import app.gamenative.service.SteamService
 import app.gamenative.ui.component.GamepadAction
 import app.gamenative.ui.component.GamepadActionBar
@@ -510,10 +513,14 @@ private fun HltbInfoBar(
 @Composable
 fun AppScreen(
     libraryItem: LibraryItem,
-    onClickPlay: (Boolean) -> Unit,
+    onClickPlay: (LibraryItem, Boolean) -> Unit,
     onTestGraphics: () -> Unit,
     onPlayWithDiagnostics: () -> Unit,
     onBack: () -> Unit,
+    actionGuard: OwnedCopyActionGuard? = null,
+    initialOperation: OwnedCopyOperation? = null,
+    onInitialOperationConsumed: () -> Unit = {},
+    onCanonicalActionUnavailable: (ActionFailureReason) -> Unit = {},
 ) {
     // Get the appropriate screen model based on game source
     val screenModel = remember(libraryItem.gameSource) {
@@ -533,6 +540,10 @@ fun AppScreen(
         onTestGraphics = onTestGraphics,
         onPlayWithDiagnostics = onPlayWithDiagnostics,
         onBack = onBack,
+        actionGuard = actionGuard,
+        initialOperation = initialOperation,
+        onInitialOperationConsumed = onInitialOperationConsumed,
+        onCanonicalActionUnavailable = onCanonicalActionUnavailable,
     )
 }
 
@@ -562,6 +573,7 @@ internal fun AppScreenContent(
     downloadProgress: Float,
     hasPartialDownload: Boolean,
     hasLeftoverInstall: Boolean = false,
+    showDeleteAction: Boolean = true,
     isUpdatePending: Boolean,
     downloadInfo: app.gamenative.data.DownloadInfo? = null,
     onDownloadInstallClick: () -> Unit,
@@ -962,7 +974,7 @@ internal fun AppScreenContent(
                             onClick = { optionsMenuVisible = true },
                         )
 
-                        if (isInstalled || hasPartialDownload || hasLeftoverInstall) {
+                        if (showDeleteAction && (isInstalled || hasPartialDownload || hasLeftoverInstall)) {
                             ActionIconButton(
                                 icon = Icons.Default.Delete,
                                 contentDescription = if (isInstalled || hasLeftoverInstall) stringResource(R.string.uninstall) else stringResource(R.string.delete_app),

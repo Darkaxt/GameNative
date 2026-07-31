@@ -29,6 +29,10 @@ import app.gamenative.R
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.events.AndroidEvent
+import app.gamenative.library.canonical.OwnedCopyOperation
+import app.gamenative.library.canonical.action.ActionFailureReason
+import app.gamenative.library.canonical.action.ActionRevalidationResult
+import app.gamenative.library.canonical.action.OwnedCopyActionGuard
 import app.gamenative.mods.ModContainerResolver
 import app.gamenative.mods.NexusModManager
 import app.gamenative.ui.component.dialog.ContainerConfigDialog
@@ -51,6 +55,7 @@ import com.winlator.container.ContainerData
 import com.winlator.core.GPUInformation
 import java.io.File
 import kotlin.text.Charsets
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -67,6 +72,87 @@ data class KnownConfigInstallState(
     val progress: Float,
     val label: String,
 )
+
+internal fun primaryOwnedCopyOperation(
+    isInstalled: Boolean,
+    isDownloading: Boolean,
+    hasPartialDownload: Boolean,
+): OwnedCopyOperation = when {
+    isDownloading || hasPartialDownload -> OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD
+    isInstalled -> OwnedCopyOperation.PLAY
+    else -> OwnedCopyOperation.INSTALL
+}
+
+internal fun deleteOwnedCopyOperation(
+    isInstalled: Boolean,
+    isDownloading: Boolean,
+    hasPartialDownload: Boolean,
+    hasLeftoverInstall: Boolean,
+): OwnedCopyOperation? = when {
+    isDownloading || hasPartialDownload -> OwnedCopyOperation.CANCEL_DOWNLOAD
+    isInstalled || hasLeftoverInstall -> OwnedCopyOperation.UNINSTALL
+    else -> null
+}
+
+internal suspend fun executeGuardedAction(
+    libraryItem: LibraryItem,
+    actionGuard: OwnedCopyActionGuard?,
+    operation: OwnedCopyOperation,
+    onUnavailable: (ActionFailureReason) -> Unit,
+    actionDispatcher: CoroutineDispatcher? = null,
+    action: suspend (LibraryItem) -> Unit,
+) {
+    if (actionGuard == null) {
+        action(libraryItem)
+        return
+    }
+
+    when (val result = actionGuard.revalidate(operation)) {
+        is ActionRevalidationResult.Ready -> {
+            if (actionDispatcher == null) {
+                action(result.libraryItem)
+            } else {
+                withContext(actionDispatcher) { action(result.libraryItem) }
+            }
+        }
+        is ActionRevalidationResult.Unavailable -> {
+            if (actionDispatcher == null) {
+                onUnavailable(result.reason)
+            } else {
+                withContext(actionDispatcher) { onUnavailable(result.reason) }
+            }
+        }
+    }
+}
+
+internal fun executeGuardedConfirmation(
+    operation: OwnedCopyOperation,
+    onDismiss: () -> Unit,
+    guardedAction: (
+        operation: OwnedCopyOperation,
+        action: (LibraryItem) -> Unit,
+    ) -> Unit,
+    action: (LibraryItem) -> Unit,
+) {
+    onDismiss()
+    guardedAction(operation, action)
+}
+
+internal suspend fun consumeInitialOperation(
+    actionGuard: OwnedCopyActionGuard?,
+    initialOperation: OwnedCopyOperation?,
+    onConsumed: () -> Unit,
+    onUnavailable: (ActionFailureReason) -> Unit,
+    execute: suspend (OwnedCopyOperation) -> Unit,
+) {
+    val operation = initialOperation ?: return
+    onConsumed()
+    if (actionGuard == null) {
+        onUnavailable(ActionFailureReason.COPY_UNAVAILABLE)
+        return
+    }
+    execute(operation)
+}
 
 internal suspend fun installMissingComponentsForConfig(
     context: Context,
@@ -997,10 +1083,14 @@ abstract class BaseAppScreen {
     @Composable
     fun Content(
         libraryItem: LibraryItem,
-        onClickPlay: (Boolean) -> Unit,
+        onClickPlay: (LibraryItem, Boolean) -> Unit,
         onTestGraphics: () -> Unit,
         onPlayWithDiagnostics: () -> Unit,
         onBack: () -> Unit,
+        actionGuard: OwnedCopyActionGuard? = null,
+        initialOperation: OwnedCopyOperation? = null,
+        onInitialOperationConsumed: () -> Unit = {},
+        onCanonicalActionUnavailable: (ActionFailureReason) -> Unit = {},
     ) {
         val context = LocalContext.current
         val displayInfoBase = getGameDisplayInfo(context, libraryItem)
@@ -1046,6 +1136,63 @@ abstract class BaseAppScreen {
         }
 
         val uiScope = rememberCoroutineScope()
+        var showReadiness by remember { mutableStateOf(false) }
+        var pendingReadinessOperation by remember { mutableStateOf<OwnedCopyOperation?>(null) }
+
+        fun executeGuarded(
+            operation: OwnedCopyOperation,
+            action: (LibraryItem) -> Unit,
+        ) {
+            val guard = actionGuard
+            if (guard == null) {
+                action(libraryItem)
+                return
+            }
+            uiScope.launch {
+                executeGuardedAction(
+                    libraryItem = libraryItem,
+                    actionGuard = guard,
+                    operation = operation,
+                    onUnavailable = onCanonicalActionUnavailable,
+                    actionDispatcher = Dispatchers.Main.immediate,
+                ) { currentItem ->
+                    action(currentItem)
+                }
+            }
+        }
+
+        fun executeDownloadInstall(operation: OwnedCopyOperation) {
+            executeGuarded(operation) { currentItem ->
+                onDownloadInstallClick(context, currentItem) { confirm ->
+                    onClickPlay(currentItem, confirm)
+                }
+            }
+        }
+
+        fun executePauseResume() {
+            executeGuarded(OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD) { currentItem ->
+                isDownloadingState = !isDownloadingState
+                onPauseResumeClick(context, currentItem)
+            }
+        }
+
+        fun executeDelete(operation: OwnedCopyOperation) {
+            executeGuarded(operation) { currentItem ->
+                onDeleteDownloadClick(context, currentItem)
+            }
+        }
+
+        fun executeUpdate() {
+            executeGuarded(OwnedCopyOperation.UPDATE) { currentItem ->
+                onUpdateClick(context, currentItem)
+            }
+        }
+
+        val guardedPlay: (Boolean) -> Unit = { confirm ->
+            executeGuarded(OwnedCopyOperation.PLAY) { currentItem ->
+                onClickPlay(currentItem, confirm)
+            }
+        }
 
         suspend fun performStateRefresh(includeUpdatePending: Boolean) {
             isInstalledState = isInstalled(context, libraryItem)
@@ -1063,6 +1210,19 @@ abstract class BaseAppScreen {
         fun requestStateRefresh(includeUpdatePending: Boolean) {
             uiScope.launch {
                 performStateRefresh(includeUpdatePending)
+            }
+        }
+
+        fun executePrimaryAction(operation: OwnedCopyOperation) {
+            if (app.gamenative.launch.LaunchReadiness.pending) {
+                pendingReadinessOperation = operation
+                showReadiness = true
+            } else {
+                executeDownloadInstall(operation)
+                uiScope.launch {
+                    delay(100)
+                    performStateRefresh(true)
+                }
             }
         }
 
@@ -1223,7 +1383,15 @@ abstract class BaseAppScreen {
 
                 uiScope.launch {
                     try {
-                        exportSaves(context, libraryItem, uri)
+                        executeGuardedAction(
+                            libraryItem = libraryItem,
+                            actionGuard = actionGuard,
+                            operation = OwnedCopyOperation.EXPORT_SAVES,
+                            onUnavailable = onCanonicalActionUnavailable,
+                            actionDispatcher = Dispatchers.Main.immediate,
+                        ) { currentItem ->
+                            exportSaves(context, currentItem, uri)
+                        }
                     } finally {
                         clearExportSavesRequest(appId)
                     }
@@ -1259,7 +1427,15 @@ abstract class BaseAppScreen {
 
                 uiScope.launch {
                     try {
-                        importSaves(context, libraryItem, uri)
+                        executeGuardedAction(
+                            libraryItem = libraryItem,
+                            actionGuard = actionGuard,
+                            operation = OwnedCopyOperation.IMPORT_SAVES,
+                            onUnavailable = onCanonicalActionUnavailable,
+                            actionDispatcher = Dispatchers.Main.immediate,
+                        ) { currentItem ->
+                            importSaves(context, currentItem, uri)
+                        }
                     } finally {
                         clearImportSavesRequest(appId)
                     }
@@ -1289,7 +1465,34 @@ abstract class BaseAppScreen {
                 }
         }
 
-        val optionsMenu = getOptionsMenu(context, libraryItem, onEditContainer, onBack, onClickPlay, onTestGraphics, onPlayWithDiagnostics, exportFrontendLauncher)
+        val optionsMenu = getOptionsMenu(context, libraryItem, onEditContainer, onBack, guardedPlay, onTestGraphics, onPlayWithDiagnostics, exportFrontendLauncher)
+
+        fun executeOwnedCopyOperation(operation: OwnedCopyOperation) {
+            when (operation) {
+                OwnedCopyOperation.PLAY,
+                OwnedCopyOperation.INSTALL,
+                -> executePrimaryAction(operation)
+                OwnedCopyOperation.UPDATE -> executeUpdate()
+                OwnedCopyOperation.UNINSTALL,
+                OwnedCopyOperation.CANCEL_DOWNLOAD,
+                -> executeDelete(operation)
+                OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD -> executePauseResume()
+                OwnedCopyOperation.EXPORT_SAVES -> requestExportSaves(appId)
+                OwnedCopyOperation.IMPORT_SAVES -> requestImportSaves(appId)
+                OwnedCopyOperation.OPEN_SOURCE_DETAILS -> Unit
+            }
+        }
+
+        LaunchedEffect(actionGuard, initialOperation) {
+            consumeInitialOperation(
+                actionGuard = actionGuard,
+                initialOperation = initialOperation,
+                onConsumed = onInitialOperationConsumed,
+                onUnavailable = onCanonicalActionUnavailable,
+            ) { operation ->
+                executeOwnedCopyOperation(operation)
+            }
+        }
 
         // Get download info based on game source for progress tracking
         val downloadInfo = when (libraryItem.gameSource) {
@@ -1320,7 +1523,6 @@ abstract class BaseAppScreen {
         }
 
         val launchActivity = context as? android.app.Activity
-        var showReadiness by remember { mutableStateOf(false) }
 
         // Render the common UI
         app.gamenative.ui.screen.library.AppScreenContent(
@@ -1331,28 +1533,28 @@ abstract class BaseAppScreen {
             downloadProgress = downloadProgressState,
             hasPartialDownload = hasPartialDownloadState,
             hasLeftoverInstall = hasLeftoverInstallState,
+            showDeleteAction = actionGuard == null || libraryItem.gameSource != GameSource.CUSTOM_GAME,
             isUpdatePending = isUpdatePendingState,
             downloadInfo = downloadInfo,
             onDownloadInstallClick = {
-                if (app.gamenative.launch.LaunchReadiness.pending) {
-                    showReadiness = true
-                } else {
-                    onDownloadInstallClick(context, libraryItem, onClickPlay)
-                    uiScope.launch {
-                        delay(100)
-                        performStateRefresh(true)
-                    }
-                }
+                val operation = primaryOwnedCopyOperation(
+                    isInstalled = isInstalledState,
+                    isDownloading = isDownloadingState,
+                    hasPartialDownload = hasPartialDownloadState,
+                )
+                executePrimaryAction(operation)
             },
-            onPauseResumeClick = {
-                isDownloadingState = !isDownloadingState
-                onPauseResumeClick(context, libraryItem)
-            },
+            onPauseResumeClick = ::executePauseResume,
             onDeleteDownloadClick = {
-                onDeleteDownloadClick(context, libraryItem)
+                deleteOwnedCopyOperation(
+                    isInstalled = isInstalledState,
+                    isDownloading = isDownloadingState,
+                    hasPartialDownload = hasPartialDownloadState,
+                    hasLeftoverInstall = hasLeftoverInstallState,
+                )?.let(::executeDelete)
             },
             onUpdateClick = {
-                onUpdateClick(context, libraryItem)
+                executeUpdate()
                 uiScope.launch {
                     performStateRefresh(true)
                 }
@@ -1365,8 +1567,10 @@ abstract class BaseAppScreen {
         if (showReadiness && launchActivity != null) {
             app.gamenative.launch.LaunchReadiness.Prompt(launchActivity) {
                 showReadiness = false
-                if (!app.gamenative.launch.LaunchReadiness.pending) {
-                    onDownloadInstallClick(context, libraryItem, onClickPlay)
+                val operation = pendingReadinessOperation
+                pendingReadinessOperation = null
+                if (!app.gamenative.launch.LaunchReadiness.pending && operation != null) {
+                    executeDownloadInstall(operation)
                     uiScope.launch {
                         delay(100)
                         performStateRefresh(true)
@@ -1461,7 +1665,13 @@ abstract class BaseAppScreen {
         }
 
         // Render any additional dialogs
-        AdditionalDialogs(libraryItem, onDismiss = {}, onEditContainer = onEditContainer, onBack = onBack)
+        AdditionalDialogs(
+            libraryItem = libraryItem,
+            onDismiss = {},
+            onEditContainer = onEditContainer,
+            onBack = onBack,
+            guardedAction = ::executeGuarded,
+        )
     }
 
     /**
@@ -1493,6 +1703,10 @@ abstract class BaseAppScreen {
         onDismiss: () -> Unit,
         onEditContainer: () -> Unit,
         onBack: () -> Unit,
+        guardedAction: (
+            operation: OwnedCopyOperation,
+            action: (LibraryItem) -> Unit,
+        ) -> Unit,
     ) {
         // Default: no additional dialogs
     }

@@ -29,6 +29,9 @@ import app.gamenative.data.LibraryItem
 import app.gamenative.data.RecommendationRepository
 import app.gamenative.data.RecommendedGame
 import app.gamenative.data.gog.GogRecommendationsRepository
+import app.gamenative.library.canonical.OwnedCopyOperation
+import app.gamenative.library.canonical.action.ActionFailureReason
+import app.gamenative.library.canonical.action.OwnedCopyActionGuard
 import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.data.LibraryState
@@ -56,7 +59,7 @@ internal fun LibraryDetailPane(
     }
     LibraryDetailPane(
         card = card,
-        onClickPlay = onClickPlay,
+        onClickPlay = { _, confirm -> onClickPlay(confirm) },
         onTestGraphics = onTestGraphics,
         onPlayWithDiagnostics = onPlayWithDiagnostics,
         onBack = onBack,
@@ -68,7 +71,11 @@ internal fun LibraryDetailPane(
     card: LibraryCard?,
     sourceItem: LibraryItem? = card?.sourceItemOrNull(),
     onCopies: (() -> Unit)? = null,
-    onClickPlay: (Boolean) -> Unit,
+    actionGuard: OwnedCopyActionGuard? = null,
+    initialOperation: OwnedCopyOperation? = null,
+    onInitialOperationConsumed: () -> Unit = {},
+    onCanonicalActionUnavailable: (ActionFailureReason) -> Unit = {},
+    onClickPlay: (LibraryItem, Boolean) -> Unit,
     onTestGraphics: () -> Unit,
     onPlayWithDiagnostics: () -> Unit,
     onBack: () -> Unit,
@@ -133,6 +140,10 @@ internal fun LibraryDetailPane(
                             onTestGraphics = onTestGraphics,
                             onPlayWithDiagnostics = onPlayWithDiagnostics,
                             onBack = onBack,
+                            actionGuard = actionGuard,
+                            initialOperation = initialOperation,
+                            onInitialOperationConsumed = onInitialOperationConsumed,
+                            onCanonicalActionUnavailable = onCanonicalActionUnavailable,
                         )
                         TextButton(
                             onClick = onCopies,
@@ -202,7 +213,7 @@ private fun Preview_LibraryDetailPane() {
                     gameSource = GameSource.STEAM,
                 ),
             ),
-            onClickPlay = { },
+            onClickPlay = { _, _ -> },
             onTestGraphics = { },
             onPlayWithDiagnostics = { },
             onBack = { },

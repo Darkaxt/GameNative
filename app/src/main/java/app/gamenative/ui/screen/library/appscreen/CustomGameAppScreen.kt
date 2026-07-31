@@ -14,6 +14,7 @@ import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.LibraryItem
 import app.gamenative.events.AndroidEvent
+import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.PluviaApp
 import app.gamenative.ui.data.AppMenuOption
 import app.gamenative.ui.data.GameDisplayInfo
@@ -463,7 +464,11 @@ class CustomGameAppScreen : BaseAppScreen() {
         libraryItem: LibraryItem,
         onDismiss: () -> Unit,
         onEditContainer: () -> Unit,
-        onBack: () -> Unit
+        onBack: () -> Unit,
+        guardedAction: (
+            operation: OwnedCopyOperation,
+            action: (LibraryItem) -> Unit,
+        ) -> Unit,
     ) {
         val context = LocalContext.current
         val scope = rememberCoroutineScope()

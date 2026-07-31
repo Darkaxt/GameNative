@@ -24,6 +24,7 @@ import app.gamenative.data.AmazonGame
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.events.AndroidEvent
+import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.service.DownloadService
 import app.gamenative.service.amazon.AmazonConstants
 import app.gamenative.service.amazon.AmazonService
@@ -628,6 +629,10 @@ override fun isInstalled(context: Context, libraryItem: LibraryItem): Boolean =
         onDismiss: () -> Unit,
         onEditContainer: () -> Unit,
         onBack: () -> Unit,
+        guardedAction: (
+            operation: OwnedCopyOperation,
+            action: (LibraryItem) -> Unit,
+        ) -> Unit,
     ) {
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
@@ -649,24 +654,30 @@ override fun isInstalled(context: Context, libraryItem: LibraryItem): Boolean =
             val onConfirmClick: (() -> Unit)? = when (installDialogState.type) {
                 DialogType.CANCEL_APP_DOWNLOAD -> {
                     {
-                        Timber.tag(TAG).i("Confirmed cancel/delete download for: $productId")
-                        BaseAppScreen.hideInstallDialog(appId)
-                        showDeletingDialog = true
-                        val downloadInfo = AmazonService.getDownloadInfo(productId)
-                        downloadInfo?.cancel()
-                        scope.launch {
-                            try {
-                                downloadInfo?.awaitCompletion()
-                                AmazonService.deleteGame(context, productId)
-                                DownloadService.invalidateCache()
-                                withContext(Dispatchers.Main) {
-                                    val gameId = libraryItem.gameId
-                                    PluviaApp.events.emitJava(AndroidEvent.DownloadStatusChanged(gameId, false))
-                                    PluviaApp.events.emitJava(AndroidEvent.LibraryInstallStatusChanged(gameId, GameSource.AMAZON))
-                                }
-                            } finally {
-                                withContext(NonCancellable + Dispatchers.Main) {
-                                    showDeletingDialog = false
+                        executeGuardedConfirmation(
+                            operation = OwnedCopyOperation.CANCEL_DOWNLOAD,
+                            onDismiss = { BaseAppScreen.hideInstallDialog(appId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            val currentProductId = productIdOf(currentItem)
+                            Timber.tag(TAG).i("Confirmed cancel/delete download for: $productId")
+                            showDeletingDialog = true
+                            val downloadInfo = AmazonService.getDownloadInfo(currentProductId)
+                            downloadInfo?.cancel()
+                            scope.launch {
+                                try {
+                                    downloadInfo?.awaitCompletion()
+                                    AmazonService.deleteGame(context, currentProductId)
+                                    DownloadService.invalidateCache()
+                                    withContext(Dispatchers.Main) {
+                                        val currentGameId = currentItem.gameId
+                                        PluviaApp.events.emitJava(AndroidEvent.DownloadStatusChanged(currentGameId, false))
+                                        PluviaApp.events.emitJava(AndroidEvent.LibraryInstallStatusChanged(currentGameId, GameSource.AMAZON))
+                                    }
+                                } finally {
+                                    withContext(NonCancellable + Dispatchers.Main) {
+                                        showDeletingDialog = false
+                                    }
                                 }
                             }
                         }
@@ -706,8 +717,13 @@ override fun isInstalled(context: Context, libraryItem: LibraryItem): Boolean =
                 availableSpace = currentInstallData.availableSpace,
                 installEnabled = currentInstallData.installEnabled,
                 onInstall = {
-                    hideAmazonInstallDialog(appId)
-                    performDownload(context, libraryItem)
+                    executeGuardedConfirmation(
+                        operation = OwnedCopyOperation.INSTALL,
+                        onDismiss = { hideAmazonInstallDialog(appId) },
+                        guardedAction = guardedAction,
+                    ) { currentItem ->
+                        performDownload(context, currentItem)
+                    }
                 },
                 onDismiss = {
                     hideAmazonInstallDialog(appId)
@@ -750,8 +766,13 @@ override fun isInstalled(context: Context, libraryItem: LibraryItem): Boolean =
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            hideUninstallDialog(libraryItem.appId)
-                            performUninstall(context, libraryItem)
+                            executeGuardedConfirmation(
+                                operation = OwnedCopyOperation.UNINSTALL,
+                                onDismiss = { hideUninstallDialog(libraryItem.appId) },
+                                guardedAction = guardedAction,
+                            ) { currentItem ->
+                                performUninstall(context, currentItem)
+                            }
                         },
                     ) {
                         Text(stringResource(R.string.uninstall))

@@ -19,6 +19,7 @@ import app.gamenative.R
 import app.gamenative.data.GOGGame
 import app.gamenative.data.LibraryItem
 import app.gamenative.enums.Marker
+import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.service.DownloadService
 import app.gamenative.service.gog.GOGConstants
 import app.gamenative.service.gog.GOGService
@@ -659,6 +660,10 @@ class GOGAppScreen : BaseAppScreen() {
         onDismiss: () -> Unit,
         onEditContainer: () -> Unit,
         onBack: () -> Unit,
+        guardedAction: (
+            operation: OwnedCopyOperation,
+            action: (LibraryItem) -> Unit,
+        ) -> Unit,
     ) {
         Timber.tag(TAG).d("AdditionalDialogs: composing for appId=${libraryItem.appId}")
         val context = LocalContext.current
@@ -696,44 +701,54 @@ class GOGAppScreen : BaseAppScreen() {
             val onConfirmClick: (() -> Unit)? = when (installDialogState.type) {
                 app.gamenative.ui.enums.DialogType.INSTALL_APP -> {
                     {
-                        BaseAppScreen.hideInstallDialog(appId)
-                        performDownload(context, libraryItem) {}
+                        executeGuardedConfirmation(
+                            operation = OwnedCopyOperation.INSTALL,
+                            onDismiss = { BaseAppScreen.hideInstallDialog(appId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            performDownload(context, currentItem) {}
+                        }
                     }
                 }
                 app.gamenative.ui.enums.DialogType.CANCEL_APP_DOWNLOAD -> {
                     {
-                        BaseAppScreen.hideInstallDialog(appId)
-                        showDeletingDialog = true
-                        val gameId = libraryItem.gameId.toString()
-                        CoroutineScope(Dispatchers.IO).launch {
-                            try {
-                                val downloadInfo = GOGService.getDownloadInfo(gameId)
-                                val wasDownloading = downloadInfo != null &&
-                                    downloadInfo.isActive() &&
-                                    (downloadInfo.getProgress() ?: 0f) < 1f
-                                downloadInfo?.cancel()
-                                downloadInfo?.awaitCompletion()
-                                GOGService.cleanupDownload(gameId)
+                        executeGuardedConfirmation(
+                            operation = OwnedCopyOperation.CANCEL_DOWNLOAD,
+                            onDismiss = { BaseAppScreen.hideInstallDialog(appId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            showDeletingDialog = true
+                            val currentGameId = currentItem.gameId.toString()
+                            CoroutineScope(Dispatchers.IO).launch {
+                                try {
+                                    val downloadInfo = GOGService.getDownloadInfo(currentGameId)
+                                    val wasDownloading = downloadInfo != null &&
+                                        downloadInfo.isActive() &&
+                                        (downloadInfo.getProgress() ?: 0f) < 1f
+                                    downloadInfo?.cancel()
+                                    downloadInfo?.awaitCompletion()
+                                    GOGService.cleanupDownload(currentGameId)
 
-                                val isInstalledAfterCancel = GOGService.isGameInstalled(gameId)
-                                if (isInstalledAfterCancel) {
-                                    // Download completed and game ended up installed; don't show "Download cancelled"
-                                    return@launch
-                                }
+                                    val isInstalledAfterCancel = GOGService.isGameInstalled(currentGameId)
+                                    if (isInstalledAfterCancel) {
+                                        // Download completed and game ended up installed; don't show "Download cancelled"
+                                        return@launch
+                                    }
 
-                                val result = GOGService.deleteGame(context, libraryItem)
-                                DownloadService.invalidateCache()
-                                withContext(Dispatchers.Main) {
-                                    if (wasDownloading && !isInstalledAfterCancel) {
-                                        SnackbarManager.show("Download cancelled")
+                                    val result = GOGService.deleteGame(context, currentItem)
+                                    DownloadService.invalidateCache()
+                                    withContext(Dispatchers.Main) {
+                                        if (wasDownloading && !isInstalledAfterCancel) {
+                                            SnackbarManager.show("Download cancelled")
+                                        }
+                                        if (result.isFailure) {
+                                            SnackbarManager.show("Failed to delete download: ${result.exceptionOrNull()?.message}")
+                                        }
                                     }
-                                    if (result.isFailure) {
-                                        SnackbarManager.show("Failed to delete download: ${result.exceptionOrNull()?.message}")
+                                } finally {
+                                    withContext(NonCancellable + Dispatchers.Main) {
+                                        showDeletingDialog = false
                                     }
-                                }
-                            } finally {
-                                withContext(NonCancellable + Dispatchers.Main) {
-                                    showDeletingDialog = false
                                 }
                             }
                         }
@@ -791,8 +806,13 @@ class GOGAppScreen : BaseAppScreen() {
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            hideUninstallDialog(libraryItem.appId)
-                            performUninstall(context, libraryItem)
+                            executeGuardedConfirmation(
+                                operation = OwnedCopyOperation.UNINSTALL,
+                                onDismiss = { hideUninstallDialog(libraryItem.appId) },
+                                guardedAction = guardedAction,
+                            ) { currentItem ->
+                                performUninstall(context, currentItem)
+                            }
                         },
                     ) {
                         Text(stringResource(R.string.uninstall))

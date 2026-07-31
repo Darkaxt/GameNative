@@ -47,6 +47,7 @@ import app.gamenative.enums.Marker
 import app.gamenative.enums.PathType
 import app.gamenative.enums.SyncResult
 import app.gamenative.events.AndroidEvent
+import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.SteamService.Companion.getAppDirPath
@@ -882,6 +883,10 @@ class SteamAppScreen : BaseAppScreen() {
         onDismiss: () -> Unit,
         onEditContainer: () -> Unit,
         onBack: () -> Unit,
+        guardedAction: (
+            operation: OwnedCopyOperation,
+            action: (LibraryItem) -> Unit,
+        ) -> Unit,
     ) {
         val context = LocalContext.current
         val gameId = libraryItem.gameId
@@ -1101,13 +1106,18 @@ class SteamAppScreen : BaseAppScreen() {
 
                 DialogType.INSTALL_APP -> {
                     {
-                        PostHog.capture(
-                            event = "game_install_started",
-                            properties = mapOf("game_name" to (appInfo?.name ?: "")),
-                        )
-                        hideInstallDialog(gameId)
-                        CoroutineScope(Dispatchers.IO).launch {
-                            SteamService.downloadApp(gameId)
+                        executeGuardedConfirmation(
+                            operation = OwnedCopyOperation.INSTALL,
+                            onDismiss = { hideInstallDialog(gameId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            PostHog.capture(
+                                event = "game_install_started",
+                                properties = mapOf("game_name" to (appInfo?.name ?: "")),
+                            )
+                            CoroutineScope(Dispatchers.IO).launch {
+                                SteamService.downloadApp(currentItem.gameId)
+                            }
                         }
                     }
                 }
@@ -1120,23 +1130,29 @@ class SteamAppScreen : BaseAppScreen() {
 
                 DialogType.CANCEL_APP_DOWNLOAD -> {
                     {
-                        PostHog.capture(
-                            event = "game_install_cancelled",
-                            properties = mapOf("game_name" to (appInfo?.name ?: "")),
-                        )
-                        val downloadInfo = SteamService.getAppDownloadInfo(gameId)
-                        downloadInfo?.cancel()
-                        SteamService.workshopPausedApps.remove(gameId)
-                        hideInstallDialog(gameId)
-                        showDeletingDialog = true
-                        CoroutineScope(Dispatchers.IO).launch {
-                            try {
-                                SteamService.deleteApp(gameId)
-                                DownloadService.invalidateCache()
-                                PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(gameId, GameSource.STEAM))
-                            } finally {
-                                withContext(NonCancellable + Dispatchers.Main) {
-                                    showDeletingDialog = false
+                        executeGuardedConfirmation(
+                            operation = OwnedCopyOperation.CANCEL_DOWNLOAD,
+                            onDismiss = { hideInstallDialog(gameId) },
+                            guardedAction = guardedAction,
+                        ) { currentItem ->
+                            val currentGameId = currentItem.gameId
+                            PostHog.capture(
+                                event = "game_install_cancelled",
+                                properties = mapOf("game_name" to (appInfo?.name ?: "")),
+                            )
+                            val downloadInfo = SteamService.getAppDownloadInfo(currentGameId)
+                            downloadInfo?.cancel()
+                            SteamService.workshopPausedApps.remove(currentGameId)
+                            showDeletingDialog = true
+                            CoroutineScope(Dispatchers.IO).launch {
+                                try {
+                                    SteamService.deleteApp(currentGameId)
+                                    DownloadService.invalidateCache()
+                                    PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(currentGameId, GameSource.STEAM))
+                                } finally {
+                                    withContext(NonCancellable + Dispatchers.Main) {
+                                        showDeletingDialog = false
+                                    }
                                 }
                             }
                         }
@@ -1145,38 +1161,53 @@ class SteamAppScreen : BaseAppScreen() {
 
                 DialogType.UPDATE_VERIFY_CONFIRM -> {
                     {
-                        hideInstallDialog(gameId)
-                        val operation = getPendingUpdateVerifyOperation(gameId)
-                        setPendingUpdateVerifyOperation(gameId, null)
+                        val pendingOperation = getPendingUpdateVerifyOperation(gameId)
+                        val dismiss = {
+                            hideInstallDialog(gameId)
+                            setPendingUpdateVerifyOperation(gameId, null)
+                        }
+                        val commit: (LibraryItem) -> Unit = { currentItem ->
+                            if (pendingOperation != null) {
+                                val currentGameId = currentItem.gameId
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    val container = ContainerUtils.getOrCreateContainer(context, currentItem.appId)
+                                    SteamService.downloadApp(currentGameId)
+                                    MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_DLL_REPLACED)
+                                    MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_DLL_RESTORED)
+                                    MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_COLDCLIENT_USED)
 
-                        if (operation != null) {
-                            CoroutineScope(Dispatchers.IO).launch {
-                                val container = ContainerUtils.getOrCreateContainer(context, libraryItem.appId)
-                                val downloadInfo = SteamService.downloadApp(gameId)
-                                MarkerUtils.removeMarker(getAppDirPath(gameId), Marker.STEAM_DLL_REPLACED)
-                                MarkerUtils.removeMarker(getAppDirPath(gameId), Marker.STEAM_DLL_RESTORED)
-                                MarkerUtils.removeMarker(getAppDirPath(gameId), Marker.STEAM_COLDCLIENT_USED)
-
-                                if (operation == AppOptionMenuType.VerifyFiles) {
-                                    MarkerUtils.clearInstalledPrerequisiteMarkers(getAppDirPath(gameId))
-                                    val steamId = SteamService.userSteamId
-                                    if (steamId != null) {
-                                        val prefixToPath: (String) -> String = { prefix ->
-                                            PathType.from(prefix).toAbsPath(container, gameId, steamId.accountID)
+                                    if (pendingOperation == AppOptionMenuType.VerifyFiles) {
+                                        MarkerUtils.clearInstalledPrerequisiteMarkers(getAppDirPath(currentGameId))
+                                        val steamId = SteamService.userSteamId
+                                        if (steamId != null) {
+                                            val prefixToPath: (String) -> String = { prefix ->
+                                                PathType.from(prefix).toAbsPath(container, currentGameId, steamId.accountID)
+                                            }
+                                            SteamService.forceSyncUserFiles(
+                                                appId = currentGameId,
+                                                prefixToPath = prefixToPath,
+                                                overrideLocalChangeNumber = -1,
+                                            ).await()
+                                        } else {
+                                            SnackbarManager.show(context.getString(R.string.steam_not_logged_in))
                                         }
-                                        SteamService.forceSyncUserFiles(
-                                            appId = gameId,
-                                            prefixToPath = prefixToPath,
-                                            overrideLocalChangeNumber = -1,
-                                        ).await()
-                                    } else {
-                                        SnackbarManager.show(context.getString(R.string.steam_not_logged_in))
                                     }
-                                }
 
-                                container.isNeedsUnpacking = true
-                                container.saveData()
+                                    container.isNeedsUnpacking = true
+                                    container.saveData()
+                                }
                             }
+                        }
+                        if (pendingOperation == AppOptionMenuType.Update) {
+                            executeGuardedConfirmation(
+                                operation = OwnedCopyOperation.UPDATE,
+                                onDismiss = dismiss,
+                                guardedAction = guardedAction,
+                                action = commit,
+                            )
+                        } else {
+                            dismiss()
+                            commit(libraryItem)
                         }
                     }
                 }
@@ -1254,49 +1285,55 @@ class SteamAppScreen : BaseAppScreen() {
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            hideUninstallDialog(libraryItem.appId)
-                            showDeletingDialog = true
+                            executeGuardedConfirmation(
+                                operation = OwnedCopyOperation.UNINSTALL,
+                                onDismiss = { hideUninstallDialog(libraryItem.appId) },
+                                guardedAction = guardedAction,
+                            ) { currentItem ->
+                                val currentGameId = currentItem.gameId
+                                showDeletingDialog = true
 
-                            CoroutineScope(Dispatchers.IO).launch {
-                                try {
-                                    val installedAppInfo = getInstalledApp(libraryItem.gameId)
-                                    val gameRootDir = getInstallPath(context, libraryItem)?.let(::File)
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    try {
+                                        val installedAppInfo = getInstalledApp(currentGameId)
+                                        val gameRootDir = getInstallPath(context, currentItem)?.let(::File)
 
-                                    val success = SteamService.deleteApp(gameId)
-                                    DownloadService.invalidateCache()
-                                    if (success) {
-                                        cleanupNexusModsForApp(context, libraryItem, gameRootDir)
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        ContainerUtils.deleteContainer(context, libraryItem.appId)
-                                    }
-                                    withContext(Dispatchers.Main) {
+                                        val success = SteamService.deleteApp(currentGameId)
+                                        DownloadService.invalidateCache()
                                         if (success) {
-                                            PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(gameId, GameSource.STEAM))
-                                            SnackbarManager.show(
-                                                context.getString(
-                                                    R.string.steam_uninstall_success,
-                                                    appInfo?.name ?: libraryItem.name,
-                                                ),
-                                            )
-                                            PostHog.capture(
-                                                event = "game_uninstalled",
-                                                properties = mapOf("game_name" to (appInfo?.name ?: "")),
-                                            )
-                                        } else {
-                                            SnackbarManager.show(context.getString(R.string.steam_uninstall_failed))
+                                            cleanupNexusModsForApp(context, currentItem, gameRootDir)
                                         }
-                                    }
-
-                                    // Back to home screen as the game is imported
-                                    if (success && installedAppInfo?.isImported == true) {
                                         withContext(Dispatchers.Main) {
-                                            onBack()
+                                            ContainerUtils.deleteContainer(context, currentItem.appId)
                                         }
-                                    }
-                                } finally {
-                                    withContext(NonCancellable + Dispatchers.Main) {
-                                        showDeletingDialog = false
+                                        withContext(Dispatchers.Main) {
+                                            if (success) {
+                                                PluviaApp.events.emit(AndroidEvent.LibraryInstallStatusChanged(currentGameId, GameSource.STEAM))
+                                                SnackbarManager.show(
+                                                    context.getString(
+                                                        R.string.steam_uninstall_success,
+                                                        appInfo?.name ?: currentItem.name,
+                                                    ),
+                                                )
+                                                PostHog.capture(
+                                                    event = "game_uninstalled",
+                                                    properties = mapOf("game_name" to (appInfo?.name ?: "")),
+                                                )
+                                            } else {
+                                                SnackbarManager.show(context.getString(R.string.steam_uninstall_failed))
+                                            }
+                                        }
+
+                                        // Back to home screen as the game is imported
+                                        if (success && installedAppInfo?.isImported == true) {
+                                            withContext(Dispatchers.Main) {
+                                                onBack()
+                                            }
+                                        }
+                                    } finally {
+                                        withContext(NonCancellable + Dispatchers.Main) {
+                                            showDeletingDialog = false
+                                        }
                                     }
                                 }
                             }
@@ -1341,24 +1378,30 @@ class SteamAppScreen : BaseAppScreen() {
                 },
                 branch = gameManagerDialogState.branch,
                 onInstall = { dlcAppIds ->
-                    val branch = gameManagerDialogState.branch
-                        ?: SteamService.getInstalledApp(gameId)?.branch
-                        ?: "public"
-                    hideGameManagerDialog(gameId)
+                    executeGuardedConfirmation(
+                        operation = OwnedCopyOperation.INSTALL,
+                        onDismiss = { hideGameManagerDialog(gameId) },
+                        guardedAction = guardedAction,
+                    ) { currentItem ->
+                        val currentGameId = currentItem.gameId
+                        val branch = gameManagerDialogState.branch
+                            ?: SteamService.getInstalledApp(currentGameId)?.branch
+                            ?: "public"
 
-                    val installedApp = SteamService.getInstalledApp(gameId)
-                    if (installedApp != null) {
-                        MarkerUtils.removeMarker(getAppDirPath(gameId), Marker.STEAM_DLL_REPLACED)
-                        MarkerUtils.removeMarker(getAppDirPath(gameId), Marker.STEAM_DLL_RESTORED)
-                        MarkerUtils.removeMarker(getAppDirPath(gameId), Marker.STEAM_COLDCLIENT_USED)
-                    }
+                        val installedApp = SteamService.getInstalledApp(currentGameId)
+                        if (installedApp != null) {
+                            MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_DLL_REPLACED)
+                            MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_DLL_RESTORED)
+                            MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_COLDCLIENT_USED)
+                        }
 
-                    PostHog.capture(
-                        event = "game_install_started",
-                        properties = mapOf("game_name" to (appInfo?.name ?: ""))
-                    )
-                    CoroutineScope(Dispatchers.IO).launch {
-                        SteamService.downloadApp(gameId, dlcAppIds, branch = branch, isUpdateOrVerify = false)
+                        PostHog.capture(
+                            event = "game_install_started",
+                            properties = mapOf("game_name" to (appInfo?.name ?: ""))
+                        )
+                        CoroutineScope(Dispatchers.IO).launch {
+                            SteamService.downloadApp(currentGameId, dlcAppIds, branch = branch, isUpdateOrVerify = false)
+                        }
                     }
                 },
                 onDismissRequest = {
