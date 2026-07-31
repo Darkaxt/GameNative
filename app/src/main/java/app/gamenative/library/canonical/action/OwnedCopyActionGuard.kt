@@ -37,7 +37,13 @@ class OwnedCopyActionGuard internal constructor(
                 ActionFailureReason.PUBLIC_FEATURE_DISABLED,
             )
         }
-        return when (val current = runtimeRegistry.resolve(key)) {
+        val current = runtimeRegistry.resolve(key)
+        if (!publicGate.isEnabled()) {
+            return ActionRevalidationResult.Unavailable(
+                ActionFailureReason.PUBLIC_FEATURE_DISABLED,
+            )
+        }
+        return when (current) {
             is OwnedCopyRuntimeResult.Available -> {
                 val copy = current.copy
                 copy.requireIdentity(key)
@@ -48,6 +54,8 @@ class OwnedCopyActionGuard internal constructor(
                         ActionRevalidationResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
                     operation !in copy.capabilities ->
                         ActionRevalidationResult.Unavailable(ActionFailureReason.CAPABILITY_CHANGED)
+                    !publicGate.isEnabled() ->
+                        ActionRevalidationResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED)
                     else -> ActionRevalidationResult.Ready(copy.libraryItem)
                 }
             }

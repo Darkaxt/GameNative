@@ -22,6 +22,8 @@ import io.mockk.mockk
 import java.io.Serializable
 import java.lang.reflect.Modifier
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
@@ -272,6 +274,58 @@ class OwnedCopyActionGuardTest {
         )
         assertEquals(1, fixture.gate.calls)
         assertEquals(0, fixture.totalResolveCalls())
+    }
+
+    @Test
+    fun disablingPublicGateWhileRuntimeResolveIsSuspendedFailsBeforeReady() = runTest {
+        val key = key(GameSource.STEAM, "42")
+        val reference = SourceOwnedCopyReference.Steam(key, 42)
+        val resolveStarted = CompletableDeferred<Unit>()
+        val releaseResolve = CompletableDeferred<Unit>()
+        val fixture = fixture(key)
+        fixture.selected.handler = {
+            resolveStarted.complete(Unit)
+            releaseResolve.await()
+            OwnedCopyRuntimeResult.Available(
+                runtime(key, reference, capabilities = setOf(OwnedCopyOperation.PLAY)),
+            )
+        }
+        val guard = guard(key, reference, fixture.registry, fixture.gate)
+
+        val result = async { guard.revalidate(OwnedCopyOperation.PLAY) }
+        resolveStarted.await()
+        fixture.gate.enabled = false
+        releaseResolve.complete(Unit)
+
+        assertEquals(
+            ActionRevalidationResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED),
+            result.await(),
+        )
+        assertEquals(2, fixture.gate.calls)
+        assertEquals(1, fixture.selected.resolveCalls)
+        assertEquals(0, fixture.siblingCalls())
+    }
+
+    @Test
+    fun publicGateIsCheckedImmediatelyBeforeReadyHandoff() = runTest {
+        val key = key(GameSource.STEAM, "42")
+        val reference = SourceOwnedCopyReference.Steam(key, 42)
+        val fixture = fixture(key)
+        fixture.gate.queueResults(true, true, false)
+        fixture.selected.handler = {
+            OwnedCopyRuntimeResult.Available(
+                runtime(key, reference, capabilities = setOf(OwnedCopyOperation.PLAY)),
+            )
+        }
+        val guard = guard(key, reference, fixture.registry, fixture.gate)
+
+        assertEquals(
+            ActionRevalidationResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED),
+            guard.revalidate(OwnedCopyOperation.PLAY),
+        )
+        assertEquals(3, fixture.gate.calls)
+        assertEquals(1, fixture.selected.resolveCalls)
+        assertEquals(0, fixture.siblingCalls())
     }
 
     @Test
@@ -623,7 +677,9 @@ class OwnedCopyActionGuardTest {
         override val source: GameSource,
     ) : OwnedCopyRuntimeAdapter {
         var resolveCalls = 0
-        var handler: (OwnedCopyKey) -> OwnedCopyRuntimeResult = { OwnedCopyRuntimeResult.Hidden }
+        var handler: suspend (OwnedCopyKey) -> OwnedCopyRuntimeResult = {
+            OwnedCopyRuntimeResult.Hidden
+        }
 
         override fun invalidations(): Flow<Unit> = emptyFlow()
 
@@ -634,7 +690,9 @@ class OwnedCopyActionGuardTest {
 
         override suspend fun resolveAll(
             keys: Set<OwnedCopyKey>,
-        ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> = keys.associateWith(handler)
+        ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> = buildMap {
+            for (key in keys) put(key, handler(key))
+        }
     }
 
     private data class Fixture(
@@ -652,11 +710,16 @@ class OwnedCopyActionGuardTest {
         private val failure: Throwable? = null,
     ) : CanonicalPublicLibraryGate {
         var calls = 0
+        private val queuedResults = ArrayDeque<Boolean>()
+
+        fun queueResults(vararg results: Boolean) {
+            queuedResults.addAll(results.toList())
+        }
 
         override fun isEnabled(): Boolean {
             calls += 1
             failure?.let { throw it }
-            return enabled
+            return queuedResults.removeFirstOrNull() ?: enabled
         }
     }
 

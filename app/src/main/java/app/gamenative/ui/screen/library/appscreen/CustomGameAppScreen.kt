@@ -199,6 +199,19 @@ class CustomGameAppScreen : BaseAppScreen() {
         return false
     }
 
+    internal override fun onCanonicalOwnedCopyOperation(
+        context: Context,
+        libraryItem: LibraryItem,
+        operation: OwnedCopyOperation,
+        onClickPlay: (LibraryItem, Boolean) -> Unit,
+    ): Boolean = when (operation) {
+        OwnedCopyOperation.PLAY -> {
+            onClickPlay(libraryItem, false)
+            true
+        }
+        else -> false
+    }
+
     override fun onDownloadInstallClick(
         context: Context,
         libraryItem: LibraryItem,

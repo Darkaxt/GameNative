@@ -512,6 +512,69 @@ class SteamAppScreen : BaseAppScreen() {
         }
     }
 
+    internal override fun onCanonicalOwnedCopyOperation(
+        context: Context,
+        libraryItem: LibraryItem,
+        operation: OwnedCopyOperation,
+        onClickPlay: (LibraryItem, Boolean) -> Unit,
+    ): Boolean = when (operation) {
+        OwnedCopyOperation.PLAY -> {
+            onClickPlay(libraryItem, false)
+            true
+        }
+        OwnedCopyOperation.INSTALL -> {
+            showGameManagerDialog(
+                libraryItem.gameId,
+                GameManagerDialogState(visible = true),
+            )
+            true
+        }
+        OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD -> {
+            val gameId = libraryItem.gameId
+            val downloadInfo = SteamService.getAppDownloadInfo(gameId)
+            when {
+                downloadInfo != null -> {
+                    downloadInfo.cancel()
+                    true
+                }
+                SteamService.workshopPausedApps.remove(gameId) -> {
+                    resumeWorkshopDownload(gameId, context)
+                    true
+                }
+                SteamService.hasPartialDownload(gameId) -> {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        SteamService.downloadApp(gameId)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+        OwnedCopyOperation.CANCEL_DOWNLOAD -> {
+            showInstallDialog(
+                libraryItem.gameId,
+                MessageDialogState(
+                    visible = true,
+                    type = DialogType.CANCEL_APP_DOWNLOAD,
+                    title = context.getString(R.string.cancel_download_prompt_title),
+                    message = context.getString(R.string.steam_delete_download_message),
+                    confirmBtnText = context.getString(R.string.yes),
+                    dismissBtnText = context.getString(R.string.no),
+                ),
+            )
+            true
+        }
+        OwnedCopyOperation.UPDATE -> {
+            onUpdateClick(context, libraryItem)
+            true
+        }
+        OwnedCopyOperation.UNINSTALL -> {
+            showUninstallDialog(libraryItem.appId)
+            true
+        }
+        else -> false
+    }
+
     override fun onDownloadInstallClick(
         context: Context,
         libraryItem: LibraryItem,

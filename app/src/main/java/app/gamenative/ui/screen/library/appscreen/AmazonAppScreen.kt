@@ -221,6 +221,59 @@ override fun isInstalled(context: Context, libraryItem: LibraryItem): Boolean =
         return AmazonService.hasPartialDownloadByAppId(context, libraryItem.gameId)
     }
 
+    internal override fun onCanonicalOwnedCopyOperation(
+        context: Context,
+        libraryItem: LibraryItem,
+        operation: OwnedCopyOperation,
+        onClickPlay: (LibraryItem, Boolean) -> Unit,
+    ): Boolean = when (operation) {
+        OwnedCopyOperation.PLAY -> {
+            onClickPlay(libraryItem, false)
+            true
+        }
+        OwnedCopyOperation.INSTALL -> {
+            showAmazonInstallConfirmation(context, libraryItem)
+            true
+        }
+        OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD -> {
+            val appId = libraryItem.gameId
+            when {
+                AmazonService.getDownloadInfoByAppId(appId) != null -> {
+                    AmazonService.cancelDownloadByAppId(appId)
+                    true
+                }
+                hasPartialDownload(context, libraryItem) -> {
+                    performDownload(context, libraryItem)
+                    true
+                }
+                else -> false
+            }
+        }
+        OwnedCopyOperation.CANCEL_DOWNLOAD -> {
+            showInstallDialog(
+                libraryItem.appId,
+                MessageDialogState(
+                    visible = true,
+                    type = DialogType.CANCEL_APP_DOWNLOAD,
+                    title = context.getString(R.string.cancel_download_prompt_title),
+                    message = context.getString(R.string.epic_delete_download_message),
+                    confirmBtnText = context.getString(R.string.yes),
+                    dismissBtnText = context.getString(R.string.no),
+                ),
+            )
+            true
+        }
+        OwnedCopyOperation.UPDATE -> {
+            onUpdateClick(context, libraryItem)
+            true
+        }
+        OwnedCopyOperation.UNINSTALL -> {
+            showUninstallDialog(libraryItem.appId)
+            true
+        }
+        else -> false
+    }
+
     override fun onDownloadInstallClick(
         context: Context,
         libraryItem: LibraryItem,
@@ -253,6 +306,11 @@ override fun isInstalled(context: Context, libraryItem: LibraryItem): Boolean =
             return
         }
 
+        showAmazonInstallConfirmation(context, libraryItem)
+    }
+
+    private fun showAmazonInstallConfirmation(context: Context, libraryItem: LibraryItem) {
+        val productId = productIdOf(libraryItem)
         // Show full-screen install confirmation (matches Steam GameManagerDialog style)
         Timber.tag(TAG).i("Showing install confirmation for: ${libraryItem.appId}")
         CoroutineScope(Dispatchers.IO).launch {

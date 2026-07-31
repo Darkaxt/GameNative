@@ -332,6 +332,68 @@ class EpicAppScreen : BaseAppScreen() {
         return EpicService.hasPartialDownload(context, libraryItem.gameId)
     }
 
+    internal override fun onCanonicalOwnedCopyOperation(
+        context: Context,
+        libraryItem: LibraryItem,
+        operation: OwnedCopyOperation,
+        onClickPlay: (LibraryItem, Boolean) -> Unit,
+    ): Boolean = when (operation) {
+        OwnedCopyOperation.PLAY -> {
+            onClickPlay(libraryItem, false)
+            true
+        }
+        OwnedCopyOperation.INSTALL -> {
+            showGameManagerDialog(
+                libraryItem.gameId,
+                app.gamenative.ui.component.dialog.state.GameManagerDialogState(visible = true),
+                OwnedCopyOperation.INSTALL,
+            )
+            true
+        }
+        OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD -> {
+            val gameId = libraryItem.gameId
+            val downloadInfo = EpicService.getDownloadInfo(gameId)
+            when {
+                downloadInfo?.isActive() == true -> {
+                    downloadInfo.cancel()
+                    CoroutineScope(Dispatchers.IO).launch {
+                        downloadInfo.awaitCompletion()
+                        EpicService.cleanupDownload(context, gameId)
+                    }
+                    true
+                }
+                hasPartialDownload(context, libraryItem) -> {
+                    showGameManagerDialog(
+                        gameId,
+                        app.gamenative.ui.component.dialog.state.GameManagerDialogState(visible = true),
+                        OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
+                    )
+                    true
+                }
+                else -> false
+            }
+        }
+        OwnedCopyOperation.CANCEL_DOWNLOAD -> {
+            showInstallDialog(
+                libraryItem.appId,
+                app.gamenative.ui.component.dialog.state.MessageDialogState(
+                    visible = true,
+                    type = app.gamenative.ui.enums.DialogType.CANCEL_APP_DOWNLOAD,
+                    title = context.getString(R.string.cancel_download_prompt_title),
+                    message = context.getString(R.string.epic_delete_download_message),
+                    confirmBtnText = context.getString(R.string.yes),
+                    dismissBtnText = context.getString(R.string.no),
+                ),
+            )
+            true
+        }
+        OwnedCopyOperation.UNINSTALL -> {
+            showUninstallDialog(libraryItem.appId)
+            true
+        }
+        else -> false
+    }
+
     override fun onDownloadInstallClick(context: Context, libraryItem: LibraryItem, onClickPlay: (Boolean) -> Unit) {
         Timber.tag(TAG).i("onDownloadInstallClick: appId=${libraryItem.appId}, name=${libraryItem.name}")
 

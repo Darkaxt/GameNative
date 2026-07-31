@@ -125,6 +125,69 @@ internal suspend fun executeGuardedAction(
     }
 }
 
+internal suspend fun executeGuardedSavePickerResult(
+    uri: android.net.Uri?,
+    libraryItem: LibraryItem,
+    actionGuard: OwnedCopyActionGuard?,
+    operation: OwnedCopyOperation,
+    onUnavailable: (ActionFailureReason) -> Unit,
+    onCleared: () -> Unit,
+    actionDispatcher: CoroutineDispatcher? = null,
+    transfer: suspend (LibraryItem, android.net.Uri) -> Unit,
+) {
+    try {
+        if (uri != null) {
+            executeGuardedAction(
+                libraryItem = libraryItem,
+                actionGuard = actionGuard,
+                operation = operation,
+                onUnavailable = onUnavailable,
+                actionDispatcher = actionDispatcher,
+            ) { currentItem ->
+                transfer(currentItem, uri)
+            }
+        }
+    } finally {
+        onCleared()
+    }
+}
+
+internal fun optionsForActionGuard(
+    actionGuard: OwnedCopyActionGuard?,
+    options: List<AppMenuOption>,
+): List<AppMenuOption> = if (actionGuard == null) {
+    options
+} else {
+    options.filterNot { it.optionType == AppOptionMenuType.ManageGameContent }
+}
+
+internal suspend fun executeGuardedSourceAction(
+    libraryItem: LibraryItem,
+    actionGuard: OwnedCopyActionGuard?,
+    operation: OwnedCopyOperation,
+    onUnavailable: (ActionFailureReason) -> Unit,
+    actionDispatcher: CoroutineDispatcher? = null,
+    legacyAction: suspend (LibraryItem) -> Unit,
+    sourceAction: suspend (LibraryItem, OwnedCopyOperation) -> Boolean,
+) {
+    if (actionGuard == null) {
+        legacyAction(libraryItem)
+        return
+    }
+
+    executeGuardedAction(
+        libraryItem = libraryItem,
+        actionGuard = actionGuard,
+        operation = operation,
+        onUnavailable = onUnavailable,
+        actionDispatcher = actionDispatcher,
+    ) { currentItem ->
+        if (!sourceAction(currentItem, operation)) {
+            onUnavailable(ActionFailureReason.CAPABILITY_CHANGED)
+        }
+    }
+}
+
 internal fun executeGuardedConfirmation(
     operation: OwnedCopyOperation,
     onDismiss: () -> Unit,
@@ -442,6 +505,17 @@ abstract class BaseAppScreen {
     open suspend fun isUpdatePendingSuspend(context: Context, libraryItem: LibraryItem): Boolean {
         return isUpdatePending(context, libraryItem)
     }
+
+    /**
+     * Dispatch a canonical operation without allowing a source callback to infer a different
+     * operation from mutable screen state.
+     */
+    internal open fun onCanonicalOwnedCopyOperation(
+        context: Context,
+        libraryItem: LibraryItem,
+        operation: OwnedCopyOperation,
+        onClickPlay: (LibraryItem, Boolean) -> Unit,
+    ): Boolean = false
 
     /**
      * Handle the play/install button click
@@ -1161,31 +1235,78 @@ abstract class BaseAppScreen {
             }
         }
 
-        fun executeDownloadInstall(operation: OwnedCopyOperation) {
-            executeGuarded(operation) { currentItem ->
-                onDownloadInstallClick(context, currentItem) { confirm ->
-                    onClickPlay(currentItem, confirm)
-                }
+        fun executeSourceOperation(
+            operation: OwnedCopyOperation,
+            legacyAction: (LibraryItem) -> Unit,
+            onCanonicalDispatched: () -> Unit = {},
+        ) {
+            val guard = actionGuard
+            if (guard == null) {
+                legacyAction(libraryItem)
+                return
             }
+            uiScope.launch {
+                executeGuardedSourceAction(
+                    libraryItem = libraryItem,
+                    actionGuard = guard,
+                    operation = operation,
+                    onUnavailable = onCanonicalActionUnavailable,
+                    actionDispatcher = Dispatchers.Main.immediate,
+                    legacyAction = { currentItem -> legacyAction(currentItem) },
+                    sourceAction = { currentItem, validatedOperation ->
+                        onCanonicalOwnedCopyOperation(
+                            context = context,
+                            libraryItem = currentItem,
+                            operation = validatedOperation,
+                            onClickPlay = onClickPlay,
+                        ).also { dispatched ->
+                            if (dispatched) onCanonicalDispatched()
+                        }
+                    },
+                )
+            }
+        }
+
+        fun executeDownloadInstall(operation: OwnedCopyOperation) {
+            executeSourceOperation(
+                operation = operation,
+                legacyAction = { currentItem ->
+                    onDownloadInstallClick(context, currentItem) { confirm ->
+                        onClickPlay(currentItem, confirm)
+                    }
+                },
+            )
         }
 
         fun executePauseResume() {
-            executeGuarded(OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD) { currentItem ->
-                isDownloadingState = !isDownloadingState
-                onPauseResumeClick(context, currentItem)
-            }
+            executeSourceOperation(
+                operation = OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
+                legacyAction = { currentItem ->
+                    isDownloadingState = !isDownloadingState
+                    onPauseResumeClick(context, currentItem)
+                },
+                onCanonicalDispatched = {
+                    isDownloadingState = !isDownloadingState
+                },
+            )
         }
 
         fun executeDelete(operation: OwnedCopyOperation) {
-            executeGuarded(operation) { currentItem ->
-                onDeleteDownloadClick(context, currentItem)
-            }
+            executeSourceOperation(
+                operation = operation,
+                legacyAction = { currentItem ->
+                    onDeleteDownloadClick(context, currentItem)
+                },
+            )
         }
 
         fun executeUpdate() {
-            executeGuarded(OwnedCopyOperation.UPDATE) { currentItem ->
-                onUpdateClick(context, currentItem)
-            }
+            executeSourceOperation(
+                operation = OwnedCopyOperation.UPDATE,
+                legacyAction = { currentItem ->
+                    onUpdateClick(context, currentItem)
+                },
+            )
         }
 
         val guardedPlay: (Boolean) -> Unit = { confirm ->
@@ -1382,18 +1503,16 @@ abstract class BaseAppScreen {
                 }
 
                 uiScope.launch {
-                    try {
-                        executeGuardedAction(
-                            libraryItem = libraryItem,
-                            actionGuard = actionGuard,
-                            operation = OwnedCopyOperation.EXPORT_SAVES,
-                            onUnavailable = onCanonicalActionUnavailable,
-                            actionDispatcher = Dispatchers.Main.immediate,
-                        ) { currentItem ->
-                            exportSaves(context, currentItem, uri)
-                        }
-                    } finally {
-                        clearExportSavesRequest(appId)
+                    executeGuardedSavePickerResult(
+                        uri = uri,
+                        libraryItem = libraryItem,
+                        actionGuard = actionGuard,
+                        operation = OwnedCopyOperation.EXPORT_SAVES,
+                        onUnavailable = onCanonicalActionUnavailable,
+                        onCleared = { clearExportSavesRequest(appId) },
+                        actionDispatcher = Dispatchers.Main.immediate,
+                    ) { currentItem, currentUri ->
+                        exportSaves(context, currentItem, currentUri)
                     }
                 }
             }
@@ -1426,18 +1545,16 @@ abstract class BaseAppScreen {
                 }
 
                 uiScope.launch {
-                    try {
-                        executeGuardedAction(
-                            libraryItem = libraryItem,
-                            actionGuard = actionGuard,
-                            operation = OwnedCopyOperation.IMPORT_SAVES,
-                            onUnavailable = onCanonicalActionUnavailable,
-                            actionDispatcher = Dispatchers.Main.immediate,
-                        ) { currentItem ->
-                            importSaves(context, currentItem, uri)
-                        }
-                    } finally {
-                        clearImportSavesRequest(appId)
+                    executeGuardedSavePickerResult(
+                        uri = uri,
+                        libraryItem = libraryItem,
+                        actionGuard = actionGuard,
+                        operation = OwnedCopyOperation.IMPORT_SAVES,
+                        onUnavailable = onCanonicalActionUnavailable,
+                        onCleared = { clearImportSavesRequest(appId) },
+                        actionDispatcher = Dispatchers.Main.immediate,
+                    ) { currentItem, currentUri ->
+                        importSaves(context, currentItem, currentUri)
                     }
                 }
             }
@@ -1465,7 +1582,19 @@ abstract class BaseAppScreen {
                 }
         }
 
-        val optionsMenu = getOptionsMenu(context, libraryItem, onEditContainer, onBack, guardedPlay, onTestGraphics, onPlayWithDiagnostics, exportFrontendLauncher)
+        val optionsMenu = optionsForActionGuard(
+            actionGuard,
+            getOptionsMenu(
+                context,
+                libraryItem,
+                onEditContainer,
+                onBack,
+                guardedPlay,
+                onTestGraphics,
+                onPlayWithDiagnostics,
+                exportFrontendLauncher,
+            ),
+        )
 
         fun executeOwnedCopyOperation(operation: OwnedCopyOperation) {
             when (operation) {
