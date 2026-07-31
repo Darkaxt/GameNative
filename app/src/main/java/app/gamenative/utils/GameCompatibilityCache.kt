@@ -14,9 +14,11 @@ import timber.log.Timber
 object GameCompatibilityCache {
     private const val CACHE_TTL_MS = 6 * 60 * 60 * 1000L // 6 hours
 
+    private val cacheLock = Any()
     private val inMemoryCache = mutableMapOf<String, GameCompatibilityService.GameCompatibilityResponse>()
     private val timestamps = mutableMapOf<String, Long>()
     private var cacheLoaded = false
+    private var cacheGeneration = 0L
 
     @Serializable
     data class CachedCompatibilityResponse(
@@ -66,7 +68,7 @@ object GameCompatibilityCache {
      * Loads cache from persistent storage into memory.
      * Only parses JSON, no expiration filtering (lazy expiration).
      */
-    private fun loadCache() {
+    private fun loadCacheLocked() {
         if (cacheLoaded) return
 
         try {
@@ -96,7 +98,7 @@ object GameCompatibilityCache {
     /**
      * Saves cache to persistent storage.
      */
-    private fun saveCache() {
+    private fun saveCacheLocked() {
         try {
             val now = System.currentTimeMillis()
             val cacheMap = inMemoryCache.mapValues { (gameName, response) ->
@@ -111,15 +113,18 @@ object GameCompatibilityCache {
         }
     }
 
+    /** Captures the authority generation for a compatibility network request. */
+    fun captureGeneration(): Long = synchronized(cacheLock) { cacheGeneration }
+
     /**
      * Gets cached compatibility response for a game, if available and not expired.
      * Uses lazy expiration - checks expiration on access.
      */
-    fun getCached(gameName: String): GameCompatibilityService.GameCompatibilityResponse? {
-        loadCache()
+    fun getCached(gameName: String): GameCompatibilityService.GameCompatibilityResponse? = synchronized(cacheLock) {
+        loadCacheLocked()
 
-        val cached = inMemoryCache[gameName] ?: return null
-        val timestamp = timestamps[gameName] ?: return null
+        val cached = inMemoryCache[gameName] ?: return@synchronized null
+        val timestamp = timestamps[gameName] ?: return@synchronized null
 
         // Lazy expiration check - only check when accessing
         val now = System.currentTimeMillis()
@@ -128,21 +133,17 @@ object GameCompatibilityCache {
             inMemoryCache.remove(gameName)
             timestamps.remove(gameName)
             Timber.tag("GameCompatibilityCache").d("Removed expired cache entry for: $gameName")
-            return null
+            return@synchronized null
         }
 
-        return cached
+        cached
     }
 
     /**
      * Caches a compatibility response for a game.
      */
     fun cache(gameName: String, response: GameCompatibilityService.GameCompatibilityResponse) {
-        loadCache()
-        val now = System.currentTimeMillis()
-        inMemoryCache[gameName] = response
-        timestamps[gameName] = now
-        saveCache()
+        cacheAll(mapOf(gameName to response))
         Timber.tag("GameCompatibilityCache").d("Cached compatibility for: $gameName")
     }
 
@@ -150,39 +151,51 @@ object GameCompatibilityCache {
      * Caches multiple compatibility responses at once.
      */
     fun cacheAll(responses: Map<String, GameCompatibilityService.GameCompatibilityResponse>) {
-        loadCache()
+        val generation = captureGeneration()
+        cacheAllIfCurrent(generation, responses)
+    }
+
+    /** Commits responses only while the authority captured before network I/O is still current. */
+    fun cacheAllIfCurrent(
+        capturedGeneration: Long,
+        responses: Map<String, GameCompatibilityService.GameCompatibilityResponse>,
+    ): Boolean = synchronized(cacheLock) {
+        if (capturedGeneration != cacheGeneration) return@synchronized false
+        loadCacheLocked()
         val now = System.currentTimeMillis()
         inMemoryCache.putAll(responses)
         responses.keys.forEach { gameName ->
             timestamps[gameName] = now
         }
-        saveCache()
+        saveCacheLocked()
         Timber.tag("GameCompatibilityCache").d("Cached ${responses.size} compatibility entries")
+        true
     }
 
     /**
      * Checks if a game's compatibility is cached and not expired.
      */
-    fun isCached(gameName: String): Boolean {
-        loadCache()
-        return getCached(gameName) != null
-    }
+    fun isCached(gameName: String): Boolean = getCached(gameName) != null
 
     /**
      * Clears the entire cache (both memory and persistent storage).
      */
     fun clear() {
-        inMemoryCache.clear()
-        timestamps.clear()
-        PrefManager.gameCompatibilityCache = "{}"
-        Timber.tag("GameCompatibilityCache").d("Cache cleared")
+        synchronized(cacheLock) {
+            cacheGeneration += 1L
+            inMemoryCache.clear()
+            timestamps.clear()
+            cacheLoaded = true
+            PrefManager.gameCompatibilityCache = "{}"
+            Timber.tag("GameCompatibilityCache").d("Cache cleared")
+        }
     }
 
     /**
      * Gets the current cache size.
      */
-    fun size(): Int {
-        loadCache()
-        return inMemoryCache.size
+    fun size(): Int = synchronized(cacheLock) {
+        loadCacheLocked()
+        inMemoryCache.size
     }
 }

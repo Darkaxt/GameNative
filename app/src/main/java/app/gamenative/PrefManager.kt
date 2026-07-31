@@ -58,7 +58,9 @@ object PrefManager {
 
         // Note: Should remove after a few release versions. we've moved to encrypted values.
         val oldPassword = stringPreferencesKey("password")
-        removePref(oldPassword)
+        runBlocking {
+            dataStore.edit { preferences -> preferences.remove(oldPassword) }
+        }
 
         val oldAccessToken = stringPreferencesKey("access_token")
         val oldRefreshToken = stringPreferencesKey("refresh_token")
@@ -1386,19 +1388,23 @@ object PrefManager {
 
     // Device-wide game stats cache (JSON string)
     private val DEVICE_GAME_STATS_CACHE = stringPreferencesKey("device_game_stats_cache")
-    var deviceGameStatsCache: String
+    val deviceGameStatsCache: String
         get() = getPref(DEVICE_GAME_STATS_CACHE, "{}")
-        set(value) {
-            setPref(DEVICE_GAME_STATS_CACHE, value)
-        }
+
+    /** Persists the device stats payload and returns only after DataStore commits it. */
+    suspend fun writeDeviceGameStatsCache(value: String) {
+        dataStore.edit { preferences -> preferences[DEVICE_GAME_STATS_CACHE] = value }
+    }
 
     // GPU-wide game stats cache (JSON string)
     private val GPU_GAME_STATS_CACHE = stringPreferencesKey("gpu_game_stats_cache")
-    var gpuGameStatsCache: String
+    val gpuGameStatsCache: String
         get() = getPref(GPU_GAME_STATS_CACHE, "{}")
-        set(value) {
-            setPref(GPU_GAME_STATS_CACHE, value)
-        }
+
+    /** Persists the GPU stats payload and returns only after DataStore commits it. */
+    suspend fun writeGpuGameStatsCache(value: String) {
+        dataStore.edit { preferences -> preferences[GPU_GAME_STATS_CACHE] = value }
+    }
 
     /* Security / Attestation */
     private val KEY_ATTESTATION_AVAILABLE = booleanPreferencesKey("key_attestation_available")

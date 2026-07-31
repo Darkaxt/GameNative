@@ -1612,10 +1612,27 @@ class LibraryViewModel @Inject constructor(
                 recordError = error as Exception
                 if (exactActiveToken) {
                     activeRenderToken = null
+                    paginationCurrentPage = 0
                     _state.update { current ->
                         current.copy(
+                            cards = emptyList(),
+                            totalAppsInFilter = 0,
+                            currentPaginationPage = 1,
+                            lastPaginationPage = 1,
+                            steamCollections = null,
+                            skippedDynamicCollections = false,
+                            steamCollectionCounts = emptyMap(),
+                            compatibilityMap = emptyMap(),
+                            deviceGameStats = emptyMap(),
+                            gpuGameStats = emptyMap(),
                             isLoading = false,
                             canonicalPublicFailure = (token.mode as LibraryRenderMode.Legacy).failure,
+                            allCount = 0,
+                            steamCount = 0,
+                            gogCount = 0,
+                            epicCount = 0,
+                            amazonCount = 0,
+                            localCount = 0,
                         )
                     }
                     if (pendingLegacyRequest == null) {
@@ -2780,13 +2797,14 @@ class LibraryViewModel @Inject constructor(
                     if (!isTokenCurrentForSideEffect(token)) return@launch
                     val batch = uncachedGames.subList(i, min(i + batchSize, uncachedGames.size))
                     Timber.tag("LibraryViewModel").d("Fetching batch ${i / batchSize + 1} with ${batch.size} games")
+                    val cacheGeneration = GameCompatibilityCache.captureGeneration()
                     val batchResults = GameCompatibilityService.fetchCompatibility(batch, gpuName)
 
                     if (batchResults != null) {
                         Timber.tag("LibraryViewModel").d("Received ${batchResults.size} results from API")
-                        // Cache all results using batch caching
-                        GameCompatibilityCache.cacheAll(batchResults)
-                        fetchedResults.putAll(batchResults)
+                        if (GameCompatibilityCache.cacheAllIfCurrent(cacheGeneration, batchResults)) {
+                            fetchedResults.putAll(batchResults)
+                        }
                     } else {
                         Timber.tag("LibraryViewModel").w("API returned null for batch")
                     }

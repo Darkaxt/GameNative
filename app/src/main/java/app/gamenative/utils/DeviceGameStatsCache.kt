@@ -4,6 +4,8 @@ import app.gamenative.PrefManager
 import app.gamenative.data.GameSource
 import app.gamenative.utils.DeviceGameStatsService.DeviceGameStats
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -20,6 +22,7 @@ object DeviceGameStatsCache {
     private const val CACHE_TTL_MS = 6 * 60 * 60 * 1000L // 6 hours
 
     private val cacheLock = Any()
+    private val mutationMutex = Mutex()
     private var inMemory: Map<GameSource, Map<String, DeviceGameStats>> = emptyMap()
     private var loadedTimestamp: Long = 0L
     private var cacheLoaded = false
@@ -77,21 +80,20 @@ object DeviceGameStatsCache {
             ),
         )
 
-    /**
-     * Fetches and persists fresh stats if the cache is empty or older than the TTL.
-     */
+    /** Fetches and persists fresh stats if the cache is empty or older than the TTL. */
     suspend fun refreshIfStale(deviceModel: String, gpuName: String, modernBuild: Boolean): Boolean {
         val now = System.currentTimeMillis()
-        val requestGeneration: Long
-        synchronized(cacheLock) {
-            loadCacheLocked()
-            latestRequestGeneration += 1L
-            requestGeneration = latestRequestGeneration
-            // Use the timestamp (not emptiness) so a valid empty response is still cached for the TTL.
-            if (loadedTimestamp != 0L && now - loadedTimestamp < CACHE_TTL_MS) {
-                Timber.tag("DeviceGameStatsCache").d("Cache is fresh, skipping fetch")
-                return true
+        val (requestGeneration, cacheIsFresh) = mutationMutex.withLock {
+            synchronized(cacheLock) {
+                loadCacheLocked()
+                latestRequestGeneration += 1L
+                latestRequestGeneration to
+                    (loadedTimestamp != 0L && now - loadedTimestamp < CACHE_TTL_MS)
             }
+        }
+        if (cacheIsFresh) {
+            Timber.tag("DeviceGameStatsCache").d("Cache is fresh, skipping fetch")
+            return true
         }
 
         val fetched = DeviceGameStatsService.fetchForDevice(deviceModel, gpuName, modernBuild) ?: return false
@@ -103,16 +105,28 @@ object DeviceGameStatsCache {
             Timber.tag("DeviceGameStatsCache").e(error, "Failed to encode cache for persistent storage")
             return false
         }
-        return synchronized(cacheLock) {
-            if (requestGeneration != latestRequestGeneration) {
-                false
-            } else {
-                PrefManager.deviceGameStatsCache = encoded
+
+        return mutationMutex.withLock {
+            if (synchronized(cacheLock) { requestGeneration != latestRequestGeneration }) {
+                return@withLock false
+            }
+            try {
+                PrefManager.writeDeviceGameStatsCache(encoded)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Timber.tag("DeviceGameStatsCache").e(
+                    "Failed to save cache to persistent storage: %s",
+                    error.javaClass.simpleName,
+                )
+                return@withLock false
+            }
+            synchronized(cacheLock) {
                 inMemory = fetched
                 loadedTimestamp = now
-                Timber.tag("DeviceGameStatsCache").d("Saved ${fetched.values.sumOf { it.size }} game stats to persistent storage")
-                true
             }
+            Timber.tag("DeviceGameStatsCache").d("Saved ${fetched.values.sumOf { it.size }} game stats to persistent storage")
+            true
         }
     }
 
@@ -128,14 +142,16 @@ object DeviceGameStatsCache {
         inMemory
     }
 
-    /** Clears the entire cache (both memory and persistent storage). */
-    fun clear() {
-        synchronized(cacheLock) {
-            latestRequestGeneration += 1L
-            inMemory = emptyMap()
-            loadedTimestamp = 0L
-            cacheLoaded = true
-            PrefManager.deviceGameStatsCache = "{}"
+    /** Clears memory and persistence as one acknowledged, serialized mutation. */
+    suspend fun clear() {
+        mutationMutex.withLock {
+            PrefManager.writeDeviceGameStatsCache("{}")
+            synchronized(cacheLock) {
+                latestRequestGeneration += 1L
+                inMemory = emptyMap()
+                loadedTimestamp = 0L
+                cacheLoaded = true
+            }
             Timber.tag("DeviceGameStatsCache").d("Cache cleared")
         }
     }

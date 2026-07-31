@@ -71,6 +71,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.runs
 import io.mockk.unmockkAll
+import io.mockk.unmockkObject
 import io.mockk.verify
 import java.util.EnumSet
 import java.util.concurrent.CountDownLatch
@@ -89,6 +90,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
@@ -172,16 +174,18 @@ class CanonicalLibraryViewModelTest {
         mockkObject(RecommendationRepository)
         coEvery { RecommendationRepository.getHero(any()) } returns HeroResponse()
         mockkObject(DeviceGameStatsCache)
-        every { DeviceGameStatsCache.clear() } just runs
+        coEvery { DeviceGameStatsCache.clear() } just runs
         coEvery { DeviceGameStatsCache.refreshIfStale(any(), any(), any()) } returns true
         every { DeviceGameStatsCache.getAll() } returns emptyMap()
         mockkObject(GpuGameStatsCache)
-        every { GpuGameStatsCache.clear() } just runs
+        coEvery { GpuGameStatsCache.clear() } just runs
         coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } returns true
         every { GpuGameStatsCache.getAll() } returns emptyMap()
         mockkObject(GameCompatibilityCache)
         every { GameCompatibilityCache.clear() } just runs
         every { GameCompatibilityCache.getCached(any()) } returns null
+        every { GameCompatibilityCache.captureGeneration() } returns 0L
+        every { GameCompatibilityCache.cacheAllIfCurrent(any(), any()) } returns true
     }
 
     @After
@@ -323,6 +327,70 @@ class CanonicalLibraryViewModelTest {
         assertEquals(9, attempts)
         assertEquals(listOf("Recovered"), vm.state.value.cards.map { it.name })
         assertNull(vm.state.value.canonicalPublicFailure)
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `authoritative canonical and legacy failure clears prior account cards and recovers`() = runTest(dispatcher) {
+        val priorCard = card(name = "Prior Account Title")
+        val recoveredCard = card(
+            canonicalId = canonicalId(2),
+            name = "Current Account Title",
+            copyKeys = listOf(key(GameSource.STEAM, "current-account")),
+        )
+        val priorDeviceStats = mapOf(
+            GameSource.STEAM to mapOf("Prior Account Native Title" to stats(1, 30, 1, 60)),
+        )
+        val priorGpuStats = mapOf(
+            GameSource.STEAM to mapOf("Prior Account Native Title" to stats(2, 40, 2, 120)),
+        )
+        every { DeviceGameStatsCache.getAll() } returns priorDeviceStats
+        every { GpuGameStatsCache.getAll() } returns priorGpuStats
+        val emissions = MutableStateFlow(listOf(priorCard))
+        val vm = viewModel(
+            repository = repository(emissions),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        runCurrent()
+        assertEquals(listOf("Prior Account Title"), vm.state.value.cards.map { it.name })
+        assertEquals(1, vm.state.value.totalAppsInFilter)
+        assertEquals(1, vm.state.value.allCount)
+        assertEquals(priorDeviceStats, vm.state.value.deviceGameStats)
+        assertEquals(priorGpuStats, vm.state.value.gpuGameStats)
+
+        every { DownloadService.getDownloadDirectoryApps() } throws
+            IllegalStateException("private fallback failure")
+        emissions.value = listOf(priorCard, priorCard.copy(displayName = "Invalid Duplicate"))
+        runCurrent()
+
+        with(vm.state.value) {
+            assertTrue("prior account title survived dual publication failure", cards.isEmpty())
+            assertEquals(0, totalAppsInFilter)
+            assertEquals(1, currentPaginationPage)
+            assertEquals(1, lastPaginationPage)
+            assertEquals(0, allCount)
+            assertEquals(0, steamCount)
+            assertEquals(0, gogCount)
+            assertEquals(0, epicCount)
+            assertEquals(0, amazonCount)
+            assertEquals(0, localCount)
+            assertTrue(steamCollectionCounts.isEmpty())
+            assertTrue(compatibilityMap.isEmpty())
+            assertTrue(deviceGameStats.isEmpty())
+            assertTrue(gpuGameStats.isEmpty())
+            assertFalse(isLoading)
+            assertEquals(CanonicalPublicFailure.INVALID_CARD_STATE, canonicalPublicFailure)
+        }
+
+        every { DownloadService.getDownloadDirectoryApps() } returns mutableListOf()
+        emissions.value = listOf(recoveredCard)
+        advanceTimeBy(1_000L)
+        runCurrent()
+
+        assertEquals(listOf("Current Account Title"), vm.state.value.cards.map { it.name })
+        assertNull(vm.state.value.canonicalPublicFailure)
+        assertFalse(vm.state.value.isLoading)
         viewModelStore.clear()
     }
 
@@ -898,7 +966,7 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `slow legacy render cannot overwrite canonical activation`() {
+    fun `superseded legacy failure cannot clear canonical activation`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
         val legacyStarted = CountDownLatch(1)
         val releaseLegacy = CountDownLatch(1)
@@ -907,6 +975,7 @@ class CanonicalLibraryViewModelTest {
             if (blockFirstLegacy.compareAndSet(true, false)) {
                 legacyStarted.countDown()
                 releaseLegacy.await(10, TimeUnit.SECONDS)
+                throw IllegalStateException("private stale legacy failure")
             }
             mutableListOf()
         }
@@ -931,9 +1000,10 @@ class CanonicalLibraryViewModelTest {
 
             releaseLegacy.countDown()
             assertFalse(
-                "superseded legacy render published after canonical activation",
+                "superseded legacy failure cleared or replaced canonical output",
                 awaitCondition(timeoutMs = 1_500L) {
-                    vm.state.value.cards.any { it.name == "Stale Legacy" }
+                    val names = vm.state.value.cards.map { it.name }
+                    names != listOf("Canonical Winner")
                 },
             )
             assertEquals(listOf("Canonical Winner"), vm.state.value.cards.map { it.name })
@@ -2041,6 +2111,105 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
+    fun `pre-refresh compatibility fetch cannot repopulate cleared cache or recovered state`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val oldFetchStarted = CountDownLatch(1)
+        val releaseOldFetch = CountDownLatch(1)
+        val oldFetchReturning = CountDownLatch(1)
+        val fetchCalls = AtomicInteger(0)
+        val gameName = "Compatibility Generation Race"
+        val staleCompatibility = GameCompatibilityService.GameCompatibilityResponse(
+            gameName = gameName,
+            totalPlayableCount = 0,
+            gpuPlayableCount = 0,
+            avgRating = 1f,
+            hasBeenTried = true,
+            isNotWorking = true,
+        )
+        val persistedCompatibility = AtomicReference("{}")
+        unmockkObject(GameCompatibilityCache)
+        mockkObject(PrefManager)
+        every { PrefManager.gameCompatibilityCache } answers { persistedCompatibility.get() }
+        every { PrefManager.gameCompatibilityCache = any() } answers {
+            persistedCompatibility.set(firstArg())
+        }
+        GameCompatibilityCache.clear()
+        awaitPreference { PrefManager.gameCompatibilityCache == "{}" }
+        mockkObject(GameCompatibilityService)
+        coEvery { GameCompatibilityService.fetchCompatibility(any(), any()) } coAnswers {
+            if (fetchCalls.incrementAndGet() == 1) {
+                oldFetchStarted.countDown()
+                awaitUninterruptibly(releaseOldFetch)
+                oldFetchReturning.countDown()
+                mapOf(gameName to staleCompatibility)
+            } else {
+                null
+            }
+        }
+        mockkObject(SnackbarManager)
+        every { SnackbarManager.show(any()) } just runs
+
+        try {
+            val emissions = MutableSharedFlow<List<CanonicalLibraryCard>>()
+            val vm = viewModel(
+                repository = repository(emissions),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+            )
+            setLazyStringField(vm, "gpuName", "Test GPU")
+            assertTrue(
+                "canonical collector did not subscribe",
+                awaitCondition { emissions.subscriptionCount.value > 0 },
+            )
+            runBlocking { emissions.emit(listOf(card(name = gameName))) }
+            awaitState { state -> state.cards.map { it.name } == listOf(gameName) && !state.isLoading }
+            awaitLatch(oldFetchStarted, "pre-refresh compatibility fetch")
+
+            vm.onFilterChanged(AppFilter.COMPATIBLE)
+            awaitState { state ->
+                state.appInfoSortType.contains(AppFilter.COMPATIBLE) &&
+                    state.cards.map { it.name } == listOf(gameName) &&
+                    !state.isLoading
+            }
+            coEvery { DeviceGameStatsCache.clear() } throws IllegalStateException("private post-clear failure")
+
+            vm.onRefresh()
+            assertTrue(
+                "refresh recovery did not complete after compatibility clear",
+                awaitCondition(timeoutMs = 4_000L) {
+                    scheduler.runCurrent()
+                    val state = vm.state.value
+                    !state.isRefreshing &&
+                        !state.isLoading &&
+                        state.cards.map { it.name } == listOf(gameName) &&
+                        state.cards.single().compatibilityStatus == null &&
+                        gameName !in state.compatibilityMap
+                },
+            )
+            awaitPreference { PrefManager.gameCompatibilityCache == "{}" }
+
+            releaseOldFetch.countDown()
+            awaitLatch(oldFetchReturning, "old compatibility response")
+            Thread.sleep(250L)
+
+            assertNull(GameCompatibilityCache.getCached(gameName))
+            assertFalse(PrefManager.gameCompatibilityCache.contains(gameName))
+            with(vm.state.value) {
+                assertEquals(listOf(gameName), cards.map { it.name })
+                assertNull(cards.single().compatibilityStatus)
+                assertFalse(gameName in compatibilityMap)
+            }
+        } finally {
+            releaseOldFetch.countDown()
+            viewModelStore.clear()
+            GameCompatibilityCache.clear()
+            awaitPreference { PrefManager.gameCompatibilityCache == "{}" }
+            io.close()
+        }
+    }
+
+    @Test
     fun `ordinary failures across refresh boundaries clear indicator without merging stats`() {
         val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
         val freshDeviceStats = mapOf(GameSource.STEAM to mapOf("Fresh Device" to stats(1, 60, 1, 60)))
@@ -2073,9 +2242,9 @@ class CanonicalLibraryViewModelTest {
                     RefreshFailureBoundary.COMPATIBILITY_CLEAR ->
                         every { GameCompatibilityCache.clear() } throws failure
                     RefreshFailureBoundary.DEVICE_CLEAR ->
-                        every { DeviceGameStatsCache.clear() } throws failure
+                        coEvery { DeviceGameStatsCache.clear() } throws failure
                     RefreshFailureBoundary.GPU_CLEAR ->
-                        every { GpuGameStatsCache.clear() } throws failure
+                        coEvery { GpuGameStatsCache.clear() } throws failure
                     RefreshFailureBoundary.STEAM_SYNC ->
                         coEvery { SteamService.refreshOwnedGamesFromServer() } throws failure
                     RefreshFailureBoundary.GOG_CREDENTIALS ->
@@ -2603,8 +2772,8 @@ class CanonicalLibraryViewModelTest {
         gpuStats: Map<GameSource, Map<String, DeviceGameStats>>,
     ) {
         every { GameCompatibilityCache.clear() } just runs
-        every { DeviceGameStatsCache.clear() } just runs
-        every { GpuGameStatsCache.clear() } just runs
+        coEvery { DeviceGameStatsCache.clear() } just runs
+        coEvery { GpuGameStatsCache.clear() } just runs
         coEvery { SteamService.refreshOwnedGamesFromServer() } returns 0
         every { GOGService.hasStoredCredentials(any()) } returns false
         every { GOGService.triggerLibrarySync(any()) } just runs

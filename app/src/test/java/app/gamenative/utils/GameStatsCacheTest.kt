@@ -12,9 +12,12 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,22 +31,20 @@ import org.robolectric.RobolectricTestRunner
 class GameStatsCacheTest {
 
     @Before
-    fun setUp() {
+    fun setUp() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         PrefManager.init(context)
         mockkObject(DeviceGameStatsService)
         DeviceGameStatsCache.clear()
         GpuGameStatsCache.clear()
-        awaitPreference {
-            PrefManager.deviceGameStatsCache == "{}" && PrefManager.gpuGameStatsCache == "{}"
-        }
+        assertTrue(PrefManager.deviceGameStatsCache == "{}" && PrefManager.gpuGameStatsCache == "{}")
     }
 
     @After
-    fun tearDown() {
+    fun tearDown() = runBlocking {
+        unmockkAll()
         DeviceGameStatsCache.clear()
         GpuGameStatsCache.clear()
-        unmockkAll()
     }
 
     @Test
@@ -124,6 +125,84 @@ class GameStatsCacheTest {
             releaseFirst.countDown()
             dispatcher.close()
         }
+    }
+
+    @Test
+    fun `device persistence finishes before a newer clear wins memory and storage`() = runBlocking {
+        val persistenceStarted = CompletableDeferred<Unit>()
+        val releasePersistence = CompletableDeferred<Unit>()
+        val persisted = AtomicReference("{}")
+        val older = statsMap("Persisting Device", 5)
+        mockkObject(PrefManager)
+        coEvery { PrefManager.writeDeviceGameStatsCache(any()) } coAnswers {
+            val payload = firstArg<String>()
+            if (payload.contains("Persisting Device")) {
+                persistenceStarted.complete(Unit)
+                releasePersistence.await()
+            }
+            persisted.set(payload)
+        }
+        coEvery { DeviceGameStatsService.fetchForDevice(any(), any(), any()) } returns older
+
+        val olderCommit = async {
+            DeviceGameStatsCache.refreshIfStale("device", "gpu", modernBuild = false)
+        }
+        persistenceStarted.await()
+        val newerClear = async { DeviceGameStatsCache.clear() }
+        yield()
+        assertFalse("clear bypassed the in-progress acknowledged write", newerClear.isCompleted)
+
+        releasePersistence.complete(Unit)
+        assertTrue(olderCommit.await())
+        newerClear.await()
+
+        assertEquals("{}", persisted.get())
+        assertTrue(DeviceGameStatsCache.getAll().isEmpty())
+    }
+
+    @Test
+    fun `gpu persistence finishes before a newer clear wins memory and storage`() = runBlocking {
+        val persistenceStarted = CompletableDeferred<Unit>()
+        val releasePersistence = CompletableDeferred<Unit>()
+        val persisted = AtomicReference("{}")
+        val older = statsMap("Persisting GPU", 6)
+        mockkObject(PrefManager)
+        coEvery { PrefManager.writeGpuGameStatsCache(any()) } coAnswers {
+            val payload = firstArg<String>()
+            if (payload.contains("Persisting GPU")) {
+                persistenceStarted.complete(Unit)
+                releasePersistence.await()
+            }
+            persisted.set(payload)
+        }
+        coEvery { DeviceGameStatsService.fetchForGpu(any(), any()) } returns older
+
+        val olderCommit = async {
+            GpuGameStatsCache.refreshIfStale("gpu", modernBuild = false)
+        }
+        persistenceStarted.await()
+        val newerClear = async { GpuGameStatsCache.clear() }
+        yield()
+        assertFalse("clear bypassed the in-progress acknowledged write", newerClear.isCompleted)
+
+        releasePersistence.complete(Unit)
+        assertTrue(olderCommit.await())
+        newerClear.await()
+
+        assertEquals("{}", persisted.get())
+        assertTrue(GpuGameStatsCache.getAll().isEmpty())
+    }
+
+    @Test
+    fun `device write failure is reported without publishing unpersisted memory`() = runBlocking {
+        val fetched = statsMap("Unpersisted Device", 7)
+        mockkObject(PrefManager)
+        coEvery { PrefManager.writeDeviceGameStatsCache(any()) } throws
+            IllegalStateException("private persistence failure")
+        coEvery { DeviceGameStatsService.fetchForDevice(any(), any(), any()) } returns fetched
+
+        assertFalse(DeviceGameStatsCache.refreshIfStale("device", "gpu", modernBuild = false))
+        assertTrue(DeviceGameStatsCache.getAll().isEmpty())
     }
 
     private fun statsMap(name: String, value: Int): Map<GameSource, Map<String, DeviceGameStats>> = mapOf(

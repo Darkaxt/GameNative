@@ -104,9 +104,11 @@ class GogRecommendationsViewModel @Inject constructor(
         }
         if (gpuName != "Unknown GPU") {
             uncached.chunked(25).forEach { batch ->
-                GameCompatibilityService.fetchCompatibility(batch, gpuName)?.let {
-                    GameCompatibilityCache.cacheAll(it)
-                    responses.putAll(it)
+                val cacheGeneration = GameCompatibilityCache.captureGeneration()
+                GameCompatibilityService.fetchCompatibility(batch, gpuName)?.let { fetched ->
+                    if (GameCompatibilityCache.cacheAllIfCurrent(cacheGeneration, fetched)) {
+                        responses.putAll(fetched)
+                    }
                 }
             }
         }
