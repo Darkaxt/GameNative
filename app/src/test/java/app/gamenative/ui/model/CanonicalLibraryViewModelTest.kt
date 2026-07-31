@@ -232,9 +232,9 @@ class CanonicalLibraryViewModelTest {
 
     @Test
     fun `debug setting explains prerequisite restart and source-native recovery`() {
-        assertEquals("Canonical library cards", context.getString(R.string.settings_debug_canonical_library_title))
+        assertEquals("Experimental canonical library", context.getString(R.string.settings_debug_canonical_library_title))
         assertEquals(
-            "Requires Stage 1 projection. A library restart is required. Disable to restore source-native cards.",
+            "Enable + restart GameNative to test canonical cards/actions. Disable + restart GameNative to restore source-native cards/actions.",
             context.getString(R.string.settings_debug_canonical_library_subtitle),
         )
     }

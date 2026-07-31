@@ -4,7 +4,9 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -12,6 +14,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid release tag: $TAG" >&2
+            exit 1
+          fi
 
       - name: set up Java 17
         uses: actions/setup-java@v4
@@ -127,45 +138,84 @@ jobs:
             mv "${apk%.apk}-signed.apk" "$apk"
           done
 
-      - name: Upload APKs for next job
+      - name: Rename signed APKs
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          mv universal.apk "gamenative-$TAG.apk"
+          mv universal-legacy-xr.apk "gamenative-$TAG-legacy-xr.apk"
+
+      - name: Verify APK signatures and generate checksums
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS_DIR="${ANDROID_HOME}/build-tools/34.0.0"
+          if [ ! -d "$BUILD_TOOLS_DIR" ]; then
+            BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/34.0.0"
+          fi
+          APKS=(
+            "gamenative-${GITHUB_REF_NAME}.apk"
+            "gamenative-${GITHUB_REF_NAME}-legacy-xr.apk"
+          )
+          for apk in "${APKS[@]}"; do
+            "${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$apk"
+          done
+          sha256sum "${APKS[@]}" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Upload release assets for next job
         uses: actions/upload-artifact@v4
         with:
-          name: universal-apk
+          name: release-assets-${{ github.ref_name }}
+          if-no-files-found: error
           path: |
-            universal.apk
-            universal-legacy-xr.apk
+            gamenative-${{ github.ref_name }}.apk
+            gamenative-${{ github.ref_name }}-legacy-xr.apk
+            SHA256SUMS
 
   release:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download built APK
+      - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: universal-apk
+          name: release-assets-${{ github.ref_name }}
           path: ./
-
-      - name: Rename APKs
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          mv universal.apk "gamenative-$TAG.apk"
-          mv universal-legacy-xr.apk "gamenative-$TAG-legacy-xr.apk"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          name: Experimental opt-in canonical library — ${{ github.ref_name }}
           prerelease: true
           generate_release_notes: true
           append_body: true
           body: |
+            ## Experimental opt-in canonical library
+
+            Canonical library testing is experimental and remains off by default.
+
+            ### Enable + restart for testing
+            1. Open **Settings → Debug**.
+            2. Enable **Experimental canonical library**.
+            3. Restart GameNative.
+
+            ### Disable + restart for legacy fallback
+            1. Open **Settings → Debug**.
+            2. Disable **Experimental canonical library**.
+            3. Restart GameNative.
+
+            Disabling and restarting restores source-native cards/actions. Readiness or assembly failures also fall back automatically, and the independent canonical projection kill switch remains available.
+
+            Tasks 11–14 and full signed-in validation are deferred. This prerelease does not claim exhaustive validation.
+
             ## Downloads
             - **`gamenative-${{ github.ref_name }}.apk`** — Standard build. Recommended for most users.
             - **`gamenative-${{ github.ref_name }}-legacy-xr.apk`** — XR build for Quest headsets.
+            - **`SHA256SUMS`** — SHA-256 checksums for both APKs.
           files: |
             gamenative-${{ github.ref_name }}.apk
             gamenative-${{ github.ref_name }}-legacy-xr.apk
+            SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
