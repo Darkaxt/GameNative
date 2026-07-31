@@ -1372,11 +1372,13 @@ object PrefManager {
 
     // Game compatibility cache (JSON string)
     private val GAME_COMPATIBILITY_CACHE = stringPreferencesKey("game_compatibility_cache")
-    var gameCompatibilityCache: String
+    val gameCompatibilityCache: String
         get() = getPref(GAME_COMPATIBILITY_CACHE, "{}")
-        set(value) {
-            setPref(GAME_COMPATIBILITY_CACHE, value)
-        }
+
+    /** Persists the compatibility payload and returns only after DataStore commits it. */
+    suspend fun writeGameCompatibilityCache(value: String) {
+        dataStore.edit { preferences -> preferences[GAME_COMPATIBILITY_CACHE] = value }
+    }
 
     // HLTB cache (JSON string)
     private val HLTB_CACHE = stringPreferencesKey("hltb_cache")

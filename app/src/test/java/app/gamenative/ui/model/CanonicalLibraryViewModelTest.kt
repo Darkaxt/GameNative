@@ -182,10 +182,10 @@ class CanonicalLibraryViewModelTest {
         coEvery { GpuGameStatsCache.refreshIfStale(any(), any()) } returns true
         every { GpuGameStatsCache.getAll() } returns emptyMap()
         mockkObject(GameCompatibilityCache)
-        every { GameCompatibilityCache.clear() } just runs
+        coEvery { GameCompatibilityCache.clear() } just runs
         every { GameCompatibilityCache.getCached(any()) } returns null
         every { GameCompatibilityCache.captureGeneration() } returns 0L
-        every { GameCompatibilityCache.cacheAllIfCurrent(any(), any()) } returns true
+        coEvery { GameCompatibilityCache.cacheAllIfCurrent(any(), any()) } returns true
     }
 
     @After
@@ -2058,7 +2058,7 @@ class CanonicalLibraryViewModelTest {
             hasBeenTried = true,
             isNotWorking = false,
         )
-        every { GameCompatibilityCache.clear() } answers {
+        coEvery { GameCompatibilityCache.clear() } coAnswers {
             compatibilityCleared.set(true)
             Unit
         }
@@ -2126,15 +2126,9 @@ class CanonicalLibraryViewModelTest {
             hasBeenTried = true,
             isNotWorking = true,
         )
-        val persistedCompatibility = AtomicReference("{}")
         unmockkObject(GameCompatibilityCache)
-        mockkObject(PrefManager)
-        every { PrefManager.gameCompatibilityCache } answers { persistedCompatibility.get() }
-        every { PrefManager.gameCompatibilityCache = any() } answers {
-            persistedCompatibility.set(firstArg())
-        }
-        GameCompatibilityCache.clear()
-        awaitPreference { PrefManager.gameCompatibilityCache == "{}" }
+        runBlocking { GameCompatibilityCache.clear() }
+        assertEquals("{}", PrefManager.gameCompatibilityCache)
         mockkObject(GameCompatibilityService)
         coEvery { GameCompatibilityService.fetchCompatibility(any(), any()) } coAnswers {
             if (fetchCalls.incrementAndGet() == 1) {
@@ -2187,7 +2181,7 @@ class CanonicalLibraryViewModelTest {
                         gameName !in state.compatibilityMap
                 },
             )
-            awaitPreference { PrefManager.gameCompatibilityCache == "{}" }
+            assertEquals("{}", PrefManager.gameCompatibilityCache)
 
             releaseOldFetch.countDown()
             awaitLatch(oldFetchReturning, "old compatibility response")
@@ -2203,8 +2197,8 @@ class CanonicalLibraryViewModelTest {
         } finally {
             releaseOldFetch.countDown()
             viewModelStore.clear()
-            GameCompatibilityCache.clear()
-            awaitPreference { PrefManager.gameCompatibilityCache == "{}" }
+            runBlocking { GameCompatibilityCache.clear() }
+            assertEquals("{}", PrefManager.gameCompatibilityCache)
             io.close()
         }
     }
@@ -2240,7 +2234,7 @@ class CanonicalLibraryViewModelTest {
                 val failure = IllegalStateException("private ${boundary.name} refresh failure")
                 when (boundary) {
                     RefreshFailureBoundary.COMPATIBILITY_CLEAR ->
-                        every { GameCompatibilityCache.clear() } throws failure
+                        coEvery { GameCompatibilityCache.clear() } throws failure
                     RefreshFailureBoundary.DEVICE_CLEAR ->
                         coEvery { DeviceGameStatsCache.clear() } throws failure
                     RefreshFailureBoundary.GPU_CLEAR ->
@@ -2771,7 +2765,7 @@ class CanonicalLibraryViewModelTest {
         deviceStats: Map<GameSource, Map<String, DeviceGameStats>>,
         gpuStats: Map<GameSource, Map<String, DeviceGameStats>>,
     ) {
-        every { GameCompatibilityCache.clear() } just runs
+        coEvery { GameCompatibilityCache.clear() } just runs
         coEvery { DeviceGameStatsCache.clear() } just runs
         coEvery { GpuGameStatsCache.clear() } just runs
         coEvery { SteamService.refreshOwnedGamesFromServer() } returns 0

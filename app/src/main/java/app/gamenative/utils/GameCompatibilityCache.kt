@@ -1,9 +1,11 @@
 package app.gamenative.utils
 
 import app.gamenative.PrefManager
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
 
@@ -15,10 +17,12 @@ object GameCompatibilityCache {
     private const val CACHE_TTL_MS = 6 * 60 * 60 * 1000L // 6 hours
 
     private val cacheLock = Any()
+    private val mutationMutex = Mutex()
     private val inMemoryCache = mutableMapOf<String, GameCompatibilityService.GameCompatibilityResponse>()
     private val timestamps = mutableMapOf<String, Long>()
     private var cacheLoaded = false
     private var cacheGeneration = 0L
+    private var pendingClearGeneration: Long? = null
 
     @Serializable
     data class CachedCompatibilityResponse(
@@ -34,6 +38,12 @@ object GameCompatibilityCache {
         val avgRating: Float,
         val hasBeenTried: Boolean,
         val isNotWorking: Boolean
+    )
+
+    private data class CacheCommit(
+        val responses: Map<String, GameCompatibilityService.GameCompatibilityResponse>,
+        val timestamps: Map<String, Long>,
+        val encoded: String,
     )
 
     /**
@@ -95,22 +105,16 @@ object GameCompatibilityCache {
         }
     }
 
-    /**
-     * Saves cache to persistent storage.
-     */
-    private fun saveCacheLocked() {
-        try {
-            val now = System.currentTimeMillis()
-            val cacheMap = inMemoryCache.mapValues { (gameName, response) ->
-                val timestamp = timestamps[gameName] ?: now
-                CachedCompatibilityResponse(response.toData(), timestamp)
-            }
-            val cacheJson = Json.encodeToString(cacheMap)
-            PrefManager.gameCompatibilityCache = cacheJson
-            Timber.tag("GameCompatibilityCache").d("Saved ${cacheMap.size} entries to persistent storage")
-        } catch (e: Exception) {
-            Timber.tag("GameCompatibilityCache").e(e, "Failed to save cache to persistent storage")
+    private fun encodeCache(
+        responses: Map<String, GameCompatibilityService.GameCompatibilityResponse>,
+        responseTimestamps: Map<String, Long>,
+    ): String {
+        val now = System.currentTimeMillis()
+        val cacheMap = responses.mapValues { (gameName, response) ->
+            val timestamp = responseTimestamps[gameName] ?: now
+            CachedCompatibilityResponse(response.toData(), timestamp)
         }
+        return Json.encodeToString(cacheMap)
     }
 
     /** Captures the authority generation for a compatibility network request. */
@@ -142,32 +146,56 @@ object GameCompatibilityCache {
     /**
      * Caches a compatibility response for a game.
      */
-    fun cache(gameName: String, response: GameCompatibilityService.GameCompatibilityResponse) {
-        cacheAll(mapOf(gameName to response))
-        Timber.tag("GameCompatibilityCache").d("Cached compatibility for: $gameName")
+    suspend fun cache(
+        gameName: String,
+        response: GameCompatibilityService.GameCompatibilityResponse,
+    ): Boolean {
+        val cached = cacheAll(mapOf(gameName to response))
+        if (cached) Timber.tag("GameCompatibilityCache").d("Cached compatibility for: $gameName")
+        return cached
     }
 
     /**
      * Caches multiple compatibility responses at once.
      */
-    fun cacheAll(responses: Map<String, GameCompatibilityService.GameCompatibilityResponse>) {
-        val generation = captureGeneration()
-        cacheAllIfCurrent(generation, responses)
-    }
+    suspend fun cacheAll(
+        responses: Map<String, GameCompatibilityService.GameCompatibilityResponse>,
+    ): Boolean = cacheAllIfCurrent(captureGeneration(), responses)
 
     /** Commits responses only while the authority captured before network I/O is still current. */
-    fun cacheAllIfCurrent(
+    suspend fun cacheAllIfCurrent(
         capturedGeneration: Long,
         responses: Map<String, GameCompatibilityService.GameCompatibilityResponse>,
-    ): Boolean = synchronized(cacheLock) {
-        if (capturedGeneration != cacheGeneration) return@synchronized false
-        loadCacheLocked()
-        val now = System.currentTimeMillis()
-        inMemoryCache.putAll(responses)
-        responses.keys.forEach { gameName ->
-            timestamps[gameName] = now
+    ): Boolean = mutationMutex.withLock {
+        val commit = synchronized(cacheLock) {
+            if (
+                capturedGeneration != cacheGeneration ||
+                pendingClearGeneration == capturedGeneration
+            ) {
+                null
+            } else {
+                loadCacheLocked()
+                val now = System.currentTimeMillis()
+                val updatedResponses = inMemoryCache.toMutableMap().apply { putAll(responses) }
+                val updatedTimestamps = timestamps.toMutableMap().apply {
+                    responses.keys.forEach { gameName -> this[gameName] = now }
+                }
+                CacheCommit(
+                    responses = updatedResponses,
+                    timestamps = updatedTimestamps,
+                    encoded = encodeCache(updatedResponses, updatedTimestamps),
+                )
+            }
+        } ?: return@withLock false
+
+        PrefManager.writeGameCompatibilityCache(commit.encoded)
+        synchronized(cacheLock) {
+            inMemoryCache.clear()
+            inMemoryCache.putAll(commit.responses)
+            timestamps.clear()
+            timestamps.putAll(commit.timestamps)
+            cacheLoaded = true
         }
-        saveCacheLocked()
         Timber.tag("GameCompatibilityCache").d("Cached ${responses.size} compatibility entries")
         true
     }
@@ -180,14 +208,34 @@ object GameCompatibilityCache {
     /**
      * Clears the entire cache (both memory and persistent storage).
      */
-    fun clear() {
-        synchronized(cacheLock) {
+    suspend fun clear() {
+        val clearGeneration = synchronized(cacheLock) {
             cacheGeneration += 1L
-            inMemoryCache.clear()
-            timestamps.clear()
-            cacheLoaded = true
-            PrefManager.gameCompatibilityCache = "{}"
-            Timber.tag("GameCompatibilityCache").d("Cache cleared")
+            pendingClearGeneration = cacheGeneration
+            cacheGeneration
+        }
+        try {
+            mutationMutex.withLock {
+                try {
+                    PrefManager.writeGameCompatibilityCache("{}")
+                    synchronized(cacheLock) {
+                        inMemoryCache.clear()
+                        timestamps.clear()
+                        cacheLoaded = true
+                    }
+                    Timber.tag("GameCompatibilityCache").d("Cache cleared")
+                } finally {
+                    clearPendingGeneration(clearGeneration)
+                }
+            }
+        } finally {
+            clearPendingGeneration(clearGeneration)
+        }
+    }
+
+    private fun clearPendingGeneration(clearGeneration: Long) {
+        synchronized(cacheLock) {
+            if (pendingClearGeneration == clearGeneration) pendingClearGeneration = null
         }
     }
 
