@@ -13,6 +13,9 @@ import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.NoOpCanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.GogOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
@@ -20,6 +23,7 @@ import app.gamenative.library.canonical.source.sourceQualifiedKeys
 import app.gamenative.service.gog.GOGService
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.reflect.KClass
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -89,6 +93,8 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: GogOwnedCopyRuntimeState,
     private val diagnostics: CanonicalDiagnosticSink? = null,
+    private val libraryDiagnostics: CanonicalLibraryDiagnosticSink =
+        NoOpCanonicalLibraryDiagnosticSink,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.GOG
 
@@ -146,6 +152,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailed(error::class)
             return if (ownershipProved && provedScope != null && provedGeneration != null) {
                 unavailableIfFresh(
                     key,
@@ -228,6 +235,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailed(error::class)
             val scope = accountScope ?: return keys.hiddenResults()
             val currentGeneration = generation ?: return keys.hiddenResults()
             val finalLedger = completedFinalLedger
@@ -245,6 +253,12 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                     OwnedCopyRuntimeResult.Hidden
                 }
             }
+        }
+    }
+
+    private fun reportRuntimeReadFailed(errorClass: KClass<out Throwable>) {
+        libraryDiagnostics.recordSafely {
+            runtimeReadFailed(source, errorClass)
         }
     }
 

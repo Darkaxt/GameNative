@@ -28,13 +28,34 @@ import kotlinx.coroutines.flow.onStart
 class CanonicalLibraryRepository @Inject constructor(
     private val dao: CanonicalLibraryDao,
     private val runtimeRegistry: OwnedCopyRuntimeRegistry,
+    private val diagnostics: CanonicalLibraryDiagnosticSink,
 ) {
     fun observeCards(): Flow<List<CanonicalLibraryCard>> = combine(
         dao.observePresentGames().map(::freezeAggregates),
         runtimeRegistry.invalidations().onStart { emit(Unit) },
     ) { aggregates, _ -> aggregates }
-        .mapLatest(::assemble)
+        .mapLatest(::assembleDiagnosed)
         .distinctUntilChanged()
+
+    private suspend fun assembleDiagnosed(
+        aggregates: List<CanonicalLibraryAggregate>,
+    ): List<CanonicalLibraryCard> {
+        val startedAtNanos = System.nanoTime()
+        val cards = assemble(aggregates)
+        diagnostics.recordSafely {
+            cardsProjected(
+                resultCount = cards.size,
+                canonicalCount = cards.mapTo(hashSetOf(), CanonicalLibraryCard::canonicalId).size,
+                copyCount = cards.asSequence()
+                    .sumOf { card -> card.copies.size.toLong() }
+                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                    .toInt(),
+                elapsedMs = ((System.nanoTime() - startedAtNanos) / NANOS_PER_MILLISECOND)
+                    .coerceAtLeast(0L),
+            )
+        }
+        return cards
+    }
 
     private suspend fun assemble(
         aggregates: List<CanonicalLibraryAggregate>,
@@ -296,6 +317,8 @@ class CanonicalLibraryRepository @Inject constructor(
     )
 
     private companion object {
+        const val NANOS_PER_MILLISECOND = 1_000_000L
+
         val SOURCE_ORDER = listOf(
             GameSource.STEAM,
             GameSource.GOG,

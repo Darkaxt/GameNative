@@ -62,6 +62,7 @@ enum class DiagnosticAttribute(val wireName: String) {
     BUILD_FLAVOR("build_flavor"),
     SOURCE("source"),
     OPERATION("operation"),
+    SELECTION_POLICY("selection_policy"),
     REASON("reason"),
     ERROR_TYPE("error_type"),
     RESULT_COUNT("result_count"),

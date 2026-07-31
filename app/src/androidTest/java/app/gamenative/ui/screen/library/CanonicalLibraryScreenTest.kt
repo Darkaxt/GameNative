@@ -51,6 +51,7 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CopyUnavailableReason
@@ -1025,6 +1026,10 @@ class CanonicalLibraryScreenTest {
             CanonicalDiagnosticSink::class.java.classLoader,
             arrayOf(CanonicalDiagnosticSink::class.java),
         ) { _, _, _ -> null } as CanonicalDiagnosticSink
+        val libraryDiagnostics = Proxy.newProxyInstance(
+            CanonicalLibraryDiagnosticSink::class.java.classLoader,
+            arrayOf(CanonicalLibraryDiagnosticSink::class.java),
+        ) { _, _, _ -> null } as CanonicalLibraryDiagnosticSink
         val registry = OwnedCopyRuntimeRegistry(adapters, playHistoryDao, diagnostics)
         val appId = "${key.source.name}_${key.stableSourceId}"
         return OwnedCopyActionGuard(
@@ -1037,6 +1042,7 @@ class CanonicalLibraryScreenTest {
             ),
             runtimeRegistry = registry,
             publicGate = CanonicalPublicLibraryGate { true },
+            diagnostics = libraryDiagnostics,
         )
     }
 

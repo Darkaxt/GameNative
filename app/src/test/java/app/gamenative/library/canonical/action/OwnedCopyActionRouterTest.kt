@@ -16,6 +16,7 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
@@ -33,6 +34,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import java.util.AbstractList
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -817,6 +819,113 @@ class OwnedCopyActionRouterTest {
     }
 
     @Test
+    fun actionDiagnosticsRecordSelectionChooserCaptureAndPreferenceFailureOnlyAtGestures() = runTest {
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        val steam = key(GameSource.STEAM, "1")
+        val gog = key(GameSource.GOG, "2")
+
+        val selected = fixture(diagnostics = diagnostics)
+        selected.available(steam, setOf(OwnedCopyOperation.INSTALL))
+        assertTrue(
+            selected.router.route(
+                card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL)))),
+                OwnedCopyOperation.INSTALL,
+                explicitKey = steam,
+            ) is OwnedCopyRouteResult.Ready,
+        )
+        verify(exactly = 1) {
+            diagnostics.routeSelected(
+                GameSource.STEAM,
+                OwnedCopyOperation.INSTALL,
+                ActionSelectionPolicy.EXPLICIT,
+                1,
+            )
+        }
+
+        val chooser = fixture(diagnostics = diagnostics)
+        val chooserResult = chooser.router.route(
+            card(
+                listOf(
+                    summary(steam, setOf(OwnedCopyOperation.PLAY), installed = true),
+                    summary(gog, setOf(OwnedCopyOperation.PLAY), installed = true),
+                ),
+            ),
+            OwnedCopyOperation.PLAY,
+        )
+        assertTrue(chooserResult is OwnedCopyRouteResult.NeedsChooser)
+        verify(exactly = 1) {
+            diagnostics.chooserRequired(OwnedCopyOperation.PLAY, 2)
+        }
+
+        val unavailable = fixture(diagnostics = diagnostics)
+        unavailable.adapters.getValue(GameSource.STEAM).handler = { OwnedCopyRuntimeResult.Hidden }
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            unavailable.router.route(
+                card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL)))),
+                OwnedCopyOperation.INSTALL,
+                explicitKey = steam,
+            ),
+        )
+        verify(exactly = 1) {
+            diagnostics.routeFailed(
+                GameSource.STEAM,
+                OwnedCopyOperation.INSTALL,
+                ActionFailureReason.COPY_UNAVAILABLE,
+                null,
+            )
+        }
+
+        val preference = fixture(diagnostics = diagnostics)
+        preference.available(steam, setOf(OwnedCopyOperation.INSTALL))
+        coEvery {
+            preference.preferences.setPreferredCopy(canonicalId, steam, 1000L)
+        } throws SensitiveFailure()
+        val preferenceResult = preference.router.route(
+            card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL)))),
+            OwnedCopyOperation.INSTALL,
+            explicitKey = steam,
+            rememberChoice = true,
+        ) as OwnedCopyRouteResult.Ready
+        assertEquals(ActionFailureReason.PREFERENCE_WRITE_FAILED, preferenceResult.warning)
+        verify(exactly = 1) {
+            diagnostics.routeFailed(
+                GameSource.STEAM,
+                OwnedCopyOperation.INSTALL,
+                ActionFailureReason.PREFERENCE_WRITE_FAILED,
+                SensitiveFailure::class,
+            )
+        }
+        verify(exactly = 2) {
+            diagnostics.routeSelected(
+                GameSource.STEAM,
+                OwnedCopyOperation.INSTALL,
+                ActionSelectionPolicy.EXPLICIT,
+                1,
+            )
+        }
+    }
+
+    @Test
+    fun actionDiagnosticSinkFailureDoesNotChangeReadyResult() = runTest {
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        every {
+            diagnostics.routeSelected(any(), any(), any(), any())
+        } throws IllegalStateException("private diagnostic failure")
+        val fixture = fixture(diagnostics = diagnostics)
+        val steam = key(GameSource.STEAM, "1")
+        fixture.available(steam, setOf(OwnedCopyOperation.INSTALL))
+
+        val result = fixture.router.route(
+            card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL)))),
+            OwnedCopyOperation.INSTALL,
+            explicitKey = steam,
+        )
+
+        assertTrue(result is OwnedCopyRouteResult.Ready)
+    }
+
+    @Test
     fun runtimeAndPreferenceCancellationPropagateWithoutFallbackOrWarning() = runTest {
         val steam = key(GameSource.STEAM, "1")
         val card = card(listOf(summary(steam, setOf(OwnedCopyOperation.INSTALL))))
@@ -826,6 +935,12 @@ class OwnedCopyActionRouterTest {
         }
         assertSuspendThrows(CancellationException::class.java) {
             runtimeCancelled.router.route(card, OwnedCopyOperation.INSTALL)
+        }
+        verify(exactly = 0) {
+            runtimeCancelled.diagnostics.routeFailed(any(), any(), any(), any())
+        }
+        verify(exactly = 0) {
+            runtimeCancelled.diagnostics.routeSelected(any(), any(), any(), any())
         }
 
         val preferenceCancelled = fixture()
@@ -840,6 +955,12 @@ class OwnedCopyActionRouterTest {
                 explicitKey = steam,
                 rememberChoice = true,
             )
+        }
+        verify(exactly = 0) {
+            preferenceCancelled.diagnostics.routeFailed(any(), any(), any(), any())
+        }
+        verify(exactly = 0) {
+            preferenceCancelled.diagnostics.routeSelected(any(), any(), any(), any())
         }
     }
 
@@ -887,6 +1008,7 @@ class OwnedCopyActionRouterTest {
     private fun fixture(
         gate: MutableGate = MutableGate(),
         nowEpochMs: Long = 1000L,
+        diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
     ): Fixture {
         val adapters = GameSource.entries.associateWith(::RecordingAdapter)
         val history = mockk<LibraryPlayHistoryDao>()
@@ -902,8 +1024,9 @@ class OwnedCopyActionRouterTest {
             preferredCopyRepository = preferences,
             publicGate = gate,
             clock = CanonicalProjectionClock { nowEpochMs },
+            diagnostics = diagnostics,
         )
-        return Fixture(router, adapters, preferences)
+        return Fixture(router, adapters, preferences, diagnostics)
     }
 
     private fun key(source: GameSource, stableSourceId: String): OwnedCopyKey =
@@ -1117,6 +1240,7 @@ class OwnedCopyActionRouterTest {
         val router: OwnedCopyActionRouter,
         val adapters: Map<GameSource, RecordingAdapter>,
         val preferences: PreferredCopyRepository,
+        val diagnostics: CanonicalLibraryDiagnosticSink,
     ) {
         fun available(key: OwnedCopyKey, capabilities: Set<OwnedCopyOperation>) {
             adapters.getValue(key.source).handler = {

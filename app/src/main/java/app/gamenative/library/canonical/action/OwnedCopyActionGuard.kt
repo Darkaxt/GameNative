@@ -2,8 +2,10 @@ package app.gamenative.library.canonical.action
 
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.OwnedCopyOperation
+import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.runtime.requireExactRuntimeIdentity
@@ -22,6 +24,7 @@ class OwnedCopyActionGuard internal constructor(
     val initialLibraryItem: LibraryItem,
     private val runtimeRegistry: OwnedCopyRuntimeRegistry,
     private val publicGate: CanonicalPublicLibraryGate,
+    private val diagnostics: CanonicalLibraryDiagnosticSink,
 ) {
     init {
         requireExactRuntimeIdentity(
@@ -33,15 +36,11 @@ class OwnedCopyActionGuard internal constructor(
 
     suspend fun revalidate(operation: OwnedCopyOperation): ActionRevalidationResult {
         if (!publicGate.isEnabled()) {
-            return ActionRevalidationResult.Unavailable(
-                ActionFailureReason.PUBLIC_FEATURE_DISABLED,
-            )
+            return unavailable(operation, ActionFailureReason.PUBLIC_FEATURE_DISABLED)
         }
         val current = runtimeRegistry.resolve(key)
         if (!publicGate.isEnabled()) {
-            return ActionRevalidationResult.Unavailable(
-                ActionFailureReason.PUBLIC_FEATURE_DISABLED,
-            )
+            return unavailable(operation, ActionFailureReason.PUBLIC_FEATURE_DISABLED)
         }
         return when (current) {
             is OwnedCopyRuntimeResult.Available -> {
@@ -49,19 +48,34 @@ class OwnedCopyActionGuard internal constructor(
                 copy.requireIdentity(key)
                 when {
                     copy.reference != capturedReference ->
-                        ActionRevalidationResult.Unavailable(ActionFailureReason.TARGET_CHANGED)
+                        unavailable(operation, ActionFailureReason.TARGET_CHANGED)
                     copy.libraryItem == null ->
-                        ActionRevalidationResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+                        unavailable(operation, ActionFailureReason.COPY_UNAVAILABLE)
                     operation !in copy.capabilities ->
-                        ActionRevalidationResult.Unavailable(ActionFailureReason.CAPABILITY_CHANGED)
+                        unavailable(operation, ActionFailureReason.CAPABILITY_CHANGED)
                     !publicGate.isEnabled() ->
-                        ActionRevalidationResult.Unavailable(ActionFailureReason.PUBLIC_FEATURE_DISABLED)
-                    else -> ActionRevalidationResult.Ready(copy.libraryItem)
+                        unavailable(operation, ActionFailureReason.PUBLIC_FEATURE_DISABLED)
+                    else -> {
+                        diagnostics.recordSafely {
+                            routeSucceeded(key.source, operation)
+                        }
+                        ActionRevalidationResult.Ready(copy.libraryItem)
+                    }
                 }
             }
             OwnedCopyRuntimeResult.Hidden,
             is OwnedCopyRuntimeResult.Unavailable,
-            -> ActionRevalidationResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            -> unavailable(operation, ActionFailureReason.COPY_UNAVAILABLE)
         }
+    }
+
+    private fun unavailable(
+        operation: OwnedCopyOperation,
+        reason: ActionFailureReason,
+    ): ActionRevalidationResult.Unavailable {
+        diagnostics.recordSafely {
+            revalidationFailed(key.source, operation, reason)
+        }
+        return ActionRevalidationResult.Unavailable(reason)
     }
 }

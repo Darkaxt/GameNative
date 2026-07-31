@@ -17,6 +17,9 @@ import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.NoOpCanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.AmazonOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
@@ -28,6 +31,7 @@ import app.gamenative.service.amazon.AmazonUpdateVersionResult
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.reflect.KClass
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -299,6 +303,8 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: AmazonOwnedCopyRuntimeState,
     private val diagnostics: CanonicalDiagnosticSink? = null,
+    private val libraryDiagnostics: CanonicalLibraryDiagnosticSink =
+        NoOpCanonicalLibraryDiagnosticSink,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.AMAZON
 
@@ -371,6 +377,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailed(error::class)
             val scope = provedScope
             val generation = provedGeneration
             return if (ownershipProved && scope != null && generation != null) {
@@ -395,6 +402,13 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
         var generation: Long? = null
         var initialLedger: CompletedOwnedCopySnapshot? = null
         var completedFinalLedger: CompletedOwnedCopySnapshot? = null
+        var runtimeReadFailureReported = false
+        fun reportRuntimeReadFailedOnce(errorClass: KClass<out Throwable>) {
+            if (!runtimeReadFailureReported) {
+                reportRuntimeReadFailed(errorClass)
+                runtimeReadFailureReported = true
+            }
+        }
         return try {
             generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
@@ -432,6 +446,8 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 .distinctBy(AmazonGame::appId)
                 .toList()
             val stateBatch = runtimeState.readBatch(requestedRows, accountScope, generation)
+            stateBatch.failures.entries.minByOrNull { it.key }?.value
+                ?.let(::reportRuntimeReadFailedOnce)
             val history = playHistoryDao.batchLastPlayed(source, diagnostics)
             val finalLedger = finalLedger(accountScope, generation) ?: return keys.hiddenResults()
             completedFinalLedger = finalLedger
@@ -470,6 +486,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailedOnce(error::class)
             val scope = provedScope ?: return keys.hiddenResults()
             val currentGeneration = generation ?: return keys.hiddenResults()
             val ledger = initialLedger ?: return keys.hiddenResults()
@@ -487,6 +504,12 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                     OwnedCopyRuntimeResult.Hidden
                 }
             }
+        }
+    }
+
+    private fun reportRuntimeReadFailed(errorClass: KClass<out Throwable>) {
+        libraryDiagnostics.recordSafely {
+            runtimeReadFailed(source, errorClass)
         }
     }
 

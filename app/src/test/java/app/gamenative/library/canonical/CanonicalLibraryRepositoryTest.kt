@@ -24,6 +24,7 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -774,7 +775,8 @@ class CanonicalLibraryRepositoryTest {
             }
         }
         val dao = RecordingDao(flowOf(listOf(aggregate(game, relationships))))
-        val repository = repository(dao, adapters.values)
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        val repository = repository(dao, adapters.values, diagnostics)
         val result = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
             repository.observeCards().first()
         }
@@ -794,6 +796,32 @@ class CanonicalLibraryRepositoryTest {
             assertEquals(1, batches.size)
             assertEquals(300, batches.single().size)
         }
+        verify(exactly = 1) {
+            diagnostics.cardsProjected(
+                resultCount = 1,
+                canonicalCount = 1,
+                copyCount = 1_500,
+                elapsedMs = any(),
+            )
+        }
+    }
+
+    @Test
+    fun diagnosticSinkFailureDoesNotBreakCardAssembly() = runTest {
+        val game = game(ID_A)
+        val match = match(game, GameSource.STEAM, "10", MatchConfidence.VERIFIED)
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>()
+        every { diagnostics.cardsProjected(any(), any(), any(), any()) } throws
+            IllegalStateException("private diagnostic failure")
+
+        val cards = repository(
+            aggregateFlow = flowOf(listOf(aggregate(game, listOf(match)))),
+            adapters = completeAdapters(mapOf(match.key() to available(match.key()))).values,
+            diagnostics = diagnostics,
+        ).observeCards().first()
+
+        assertEquals(1, cards.size)
+        assertEquals(1, cards.single().copies.size)
     }
 
     private fun harness(
@@ -810,11 +838,13 @@ class CanonicalLibraryRepositoryTest {
     private fun repository(
         aggregateFlow: Flow<List<CanonicalLibraryAggregate>>,
         adapters: Collection<OwnedCopyRuntimeAdapter>,
-    ): CanonicalLibraryRepository = repository(RecordingDao(aggregateFlow), adapters)
+        diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
+    ): CanonicalLibraryRepository = repository(RecordingDao(aggregateFlow), adapters, diagnostics)
 
     private fun repository(
         dao: CanonicalLibraryDao,
         adapters: Collection<OwnedCopyRuntimeAdapter>,
+        diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
     ): CanonicalLibraryRepository {
         val history = mockk<LibraryPlayHistoryDao>()
         every { history.getAll() } returns emptyFlow()
@@ -823,7 +853,7 @@ class CanonicalLibraryRepositoryTest {
             history,
             mockk(relaxed = true),
         )
-        return CanonicalLibraryRepository(dao, registry)
+        return CanonicalLibraryRepository(dao, registry, diagnostics)
     }
 
     private fun completeAdapters(

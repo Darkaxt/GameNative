@@ -9,6 +9,7 @@ import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
@@ -19,6 +20,7 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import java.io.Serializable
 import java.lang.reflect.Modifier
 import kotlinx.coroutines.CancellationException
@@ -380,6 +382,67 @@ class OwnedCopyActionGuardTest {
     }
 
     @Test
+    fun revalidationDiagnosticsRecordFixedFailureAndSuccessfulSourceHandoff() = runTest {
+        val key = key(GameSource.STEAM, "42")
+        val reference = SourceOwnedCopyReference.Steam(key, 42)
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+
+        val failed = fixture(key, diagnostics = diagnostics)
+        failed.selected.handler = { OwnedCopyRuntimeResult.Hidden }
+        assertEquals(
+            ActionRevalidationResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            guard(key, reference, failed.registry, failed.gate, diagnostics = diagnostics)
+                .revalidate(OwnedCopyOperation.PLAY),
+        )
+        verify(exactly = 1) {
+            diagnostics.revalidationFailed(
+                GameSource.STEAM,
+                OwnedCopyOperation.PLAY,
+                ActionFailureReason.COPY_UNAVAILABLE,
+            )
+        }
+
+        val ready = fixture(key, diagnostics = diagnostics)
+        ready.selected.handler = {
+            OwnedCopyRuntimeResult.Available(
+                runtime(key, reference, capabilities = setOf(OwnedCopyOperation.PLAY)),
+            )
+        }
+        assertTrue(
+            guard(key, reference, ready.registry, ready.gate, diagnostics = diagnostics)
+                .revalidate(OwnedCopyOperation.PLAY) is ActionRevalidationResult.Ready,
+        )
+        verify(exactly = 1) {
+            diagnostics.routeSucceeded(GameSource.STEAM, OwnedCopyOperation.PLAY)
+        }
+    }
+
+    @Test
+    fun revalidationDiagnosticSinkFailureDoesNotChangeResult() = runTest {
+        val key = key(GameSource.STEAM, "42")
+        val reference = SourceOwnedCopyReference.Steam(key, 42)
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        every {
+            diagnostics.revalidationFailed(any(), any(), any())
+        } throws IllegalStateException("private diagnostic failure")
+        val fixture = fixture(key, diagnostics = diagnostics)
+        fixture.selected.handler = { OwnedCopyRuntimeResult.Hidden }
+
+        val result = guard(
+            key,
+            reference,
+            fixture.registry,
+            fixture.gate,
+            diagnostics = diagnostics,
+        ).revalidate(OwnedCopyOperation.PLAY)
+
+        assertEquals(
+            ActionRevalidationResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            result,
+        )
+    }
+
+    @Test
     fun runtimeAndGateCancellationPropagateWithoutFallback() = runTest {
         val key = key(GameSource.CUSTOM_GAME, "5")
         val reference = SourceOwnedCopyReference.Custom(key, 5)
@@ -390,18 +453,37 @@ class OwnedCopyActionGuardTest {
             reference,
             runtimeCancelled.registry,
             runtimeCancelled.gate,
+            diagnostics = runtimeCancelled.diagnostics,
         )
         assertSuspendThrows(CancellationException::class.java) {
             runtimeGuard.revalidate(OwnedCopyOperation.PLAY)
         }
         assertEquals(0, runtimeCancelled.siblingCalls())
+        verify(exactly = 0) {
+            runtimeCancelled.diagnostics.revalidationFailed(any(), any(), any())
+        }
+        verify(exactly = 0) {
+            runtimeCancelled.diagnostics.routeSucceeded(any(), any())
+        }
 
         val gateCancelled = fixture(key, MutableGate(failure = CancellationException("gate cancelled")))
-        val gateGuard = guard(key, reference, gateCancelled.registry, gateCancelled.gate)
+        val gateGuard = guard(
+            key,
+            reference,
+            gateCancelled.registry,
+            gateCancelled.gate,
+            diagnostics = gateCancelled.diagnostics,
+        )
         assertSuspendThrows(CancellationException::class.java) {
             gateGuard.revalidate(OwnedCopyOperation.PLAY)
         }
         assertEquals(0, gateCancelled.totalResolveCalls())
+        verify(exactly = 0) {
+            gateCancelled.diagnostics.revalidationFailed(any(), any(), any())
+        }
+        verify(exactly = 0) {
+            gateCancelled.diagnostics.routeSucceeded(any(), any())
+        }
     }
 
     @Test
@@ -587,6 +669,7 @@ class OwnedCopyActionGuardTest {
     private fun fixture(
         selectedKey: OwnedCopyKey,
         gate: MutableGate = MutableGate(),
+        diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
     ): Fixture {
         val adapters = GameSource.entries.associateWith(::RecordingAdapter)
         val history = mockk<LibraryPlayHistoryDao>()
@@ -596,7 +679,7 @@ class OwnedCopyActionGuardTest {
             history,
             mockk<CanonicalDiagnosticSink>(relaxed = true),
         )
-        return Fixture(registry, adapters.getValue(selectedKey.source), adapters, gate)
+        return Fixture(registry, adapters.getValue(selectedKey.source), adapters, gate, diagnostics)
     }
 
     private fun guard(
@@ -608,12 +691,14 @@ class OwnedCopyActionGuardTest {
             key.source,
             executableAppId(capturedReference),
         ),
+        diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
     ): OwnedCopyActionGuard = OwnedCopyActionGuard(
         key = key,
         capturedReference = capturedReference,
         initialLibraryItem = initialLibraryItem,
         runtimeRegistry = registry,
         publicGate = gate,
+        diagnostics = diagnostics,
     )
 
     private fun key(source: GameSource, stableSourceId: String): OwnedCopyKey =
@@ -700,6 +785,7 @@ class OwnedCopyActionGuardTest {
         val selected: RecordingAdapter,
         val adapters: Map<GameSource, RecordingAdapter>,
         val gate: MutableGate,
+        val diagnostics: CanonicalLibraryDiagnosticSink,
     ) {
         fun totalResolveCalls(): Int = adapters.values.sumOf(RecordingAdapter::resolveCalls)
         fun siblingCalls(): Int = totalResolveCalls() - selected.resolveCalls

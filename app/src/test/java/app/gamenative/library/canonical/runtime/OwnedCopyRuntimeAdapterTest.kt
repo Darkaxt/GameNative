@@ -41,6 +41,7 @@ import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.InMemoryAccountLifecycleState
 import app.gamenative.library.canonical.MaterializedOwnedCopySnapshot
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.PlayHistoryOrigin
@@ -1373,41 +1374,161 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
-    fun batchFailureAfterSteamOwnershipProofIsTypedAndCancellationEscapes() = runTest {
-        val key = key(GameSource.STEAM, "42")
-        val app = SteamApp(id = 42, name = "Owned")
+    fun everySourceRecordsOneRuntimeFailurePerPointAndBatchGesture() = runTest {
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+
+        fun failingScopes(source: GameSource): AccountScopeProvider = mockk<AccountScopeProvider>().also {
+            coEvery { it.current(source) } throws SensitiveFailure()
+        }
+
+        val adapters = listOf(
+            SteamOwnedCopyRuntimeAdapter(
+                steamAppDao = mockk(relaxed = true),
+                accountScopeProvider = failingScopes(GameSource.STEAM),
+                accountLifecycleState = readyLifecycle(GameSource.STEAM),
+                sourceAdapter = mockk(relaxed = true),
+                playHistoryDao = mockk(relaxed = true),
+                runtimeState = mockk(relaxed = true),
+                libraryDiagnostics = diagnostics,
+            ),
+            GogOwnedCopyRuntimeAdapter(
+                gogGameDao = mockk(relaxed = true),
+                accountScopeProvider = failingScopes(GameSource.GOG),
+                ownedCopyLedgerDao = mockk(relaxed = true),
+                accountLifecycleState = readyLifecycle(GameSource.GOG),
+                sourceAdapter = mockk(relaxed = true),
+                playHistoryDao = mockk(relaxed = true),
+                runtimeState = mockk(relaxed = true),
+                libraryDiagnostics = diagnostics,
+            ),
+            EpicOwnedCopyRuntimeAdapter(
+                epicGameDao = mockk(relaxed = true),
+                accountScopeProvider = failingScopes(GameSource.EPIC),
+                ownedCopyLedgerDao = mockk(relaxed = true),
+                accountLifecycleState = readyLifecycle(GameSource.EPIC),
+                sourceAdapter = mockk(relaxed = true),
+                playHistoryDao = mockk(relaxed = true),
+                runtimeState = mockk(relaxed = true),
+                libraryDiagnostics = diagnostics,
+            ),
+            AmazonOwnedCopyRuntimeAdapter(
+                amazonGameDao = mockk(relaxed = true),
+                accountScopeProvider = failingScopes(GameSource.AMAZON),
+                ownedCopyLedgerDao = mockk(relaxed = true),
+                accountLifecycleState = readyLifecycle(GameSource.AMAZON),
+                sourceAdapter = mockk(relaxed = true),
+                playHistoryDao = mockk(relaxed = true),
+                runtimeState = mockk(relaxed = true),
+                libraryDiagnostics = diagnostics,
+            ),
+            CustomOwnedCopyRuntimeAdapter(
+                accountScopeProvider = failingScopes(GameSource.CUSTOM_GAME),
+                sourceAdapter = mockk(relaxed = true),
+                playHistoryDao = mockk(relaxed = true),
+                runtimeState = mockk(relaxed = true),
+                libraryDiagnostics = diagnostics,
+            ),
+        )
+
+        adapters.forEach { adapter ->
+            val key = key(adapter.source, "77")
+            assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolve(key))
+            assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolveAll(setOf(key)).getValue(key))
+        }
+
+        GameSource.entries.forEach { source ->
+            verify(exactly = 2) {
+                diagnostics.runtimeReadFailed(source, SensitiveFailure::class)
+            }
+        }
+    }
+
+    @Test
+    fun batchFailureAfterSteamOwnershipProofIsTypedOnceAtFifteenHundredCopyScaleAndCancellationEscapes() =
+        runTest {
+            val keys = (1..1_500).mapTo(linkedSetOf()) { appId ->
+                key(GameSource.STEAM, appId.toString())
+            }
+            val apps = (1..1_500).map { appId -> SteamApp(id = appId, name = "Owned $appId") }
+            val dao = mockk<SteamAppDao>()
+            coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns apps
+            val failedState = mockk<SteamOwnedCopyRuntimeState>()
+            coEvery { failedState.readBatch(apps, scope, 0L) } throws SensitiveFailure()
+            val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+            val failed = SteamOwnedCopyRuntimeAdapter(
+                dao,
+                scopes(GameSource.STEAM),
+                readyLifecycle(GameSource.STEAM),
+                mockk(relaxed = true),
+                batchHistory(),
+                failedState,
+                libraryDiagnostics = diagnostics,
+            )
+
+            val failedResults = failed.resolveAll(keys)
+
+            assertEquals(1_500, failedResults.size)
+            failedResults.forEach { (key, result) ->
+                assertUnavailable(
+                    result,
+                    key,
+                    CopyUnavailableReason.SOURCE_READ_FAILED,
+                    SensitiveFailure::class,
+                )
+            }
+            verify(exactly = 1) {
+                diagnostics.runtimeReadFailed(GameSource.STEAM, SensitiveFailure::class)
+            }
+
+            val cancelledState = mockk<SteamOwnedCopyRuntimeState>()
+            coEvery { cancelledState.readBatch(apps, scope, 0L) } throws CancellationException("stop")
+            val cancelledDiagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+            val cancelled = SteamOwnedCopyRuntimeAdapter(
+                dao,
+                scopes(GameSource.STEAM),
+                readyLifecycle(GameSource.STEAM),
+                mockk(relaxed = true),
+                batchHistory(),
+                cancelledState,
+                libraryDiagnostics = cancelledDiagnostics,
+            )
+            assertSuspendThrows(CancellationException::class.java) {
+                cancelled.resolveAll(keys)
+            }
+            verify(exactly = 0) { cancelledDiagnostics.runtimeReadFailed(any(), any()) }
+        }
+
+    @Test
+    fun sourceBatchRecordsOnlyItsFirstRuntimeFailureWhenLaterProjectionAlsoFails() = runTest {
+        val keys = setOf(key(GameSource.STEAM, "1"), key(GameSource.STEAM, "2"))
+        val healthy = SteamApp(id = 1, name = "Healthy")
+        val broken = mockk<SteamApp>(relaxed = true) {
+            every { id } returns 2
+            every { name } throws SensitiveFailure()
+        }
+        val rows = listOf(healthy, broken)
         val dao = mockk<SteamAppDao>()
-        coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns listOf(app)
-        val failedState = mockk<SteamOwnedCopyRuntimeState>()
-        coEvery { failedState.readBatch(listOf(app), scope, 0L) } throws SensitiveFailure()
-        val failed = SteamOwnedCopyRuntimeAdapter(
+        coEvery { dao._getAllOwnedAppsPaged(any(), any()) } returns rows
+        val runtimeState = mockk<SteamOwnedCopyRuntimeState>()
+        coEvery { runtimeState.readBatch(rows, scope, 0L) } returns SteamRuntimeBatchResult(
+            states = mapOf(2 to state()),
+            failures = mapOf(1 to SensitiveFailure::class),
+        )
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        val adapter = SteamOwnedCopyRuntimeAdapter(
             dao,
             scopes(GameSource.STEAM),
             readyLifecycle(GameSource.STEAM),
             mockk(relaxed = true),
             batchHistory(),
-            failedState,
+            runtimeState,
+            libraryDiagnostics = diagnostics,
         )
 
-        assertUnavailable(
-            failed.resolveAll(setOf(key)).getValue(key),
-            key,
-            CopyUnavailableReason.SOURCE_READ_FAILED,
-            SensitiveFailure::class,
-        )
+        assertEquals(keys, adapter.resolveAll(keys).keys)
 
-        val cancelledState = mockk<SteamOwnedCopyRuntimeState>()
-        coEvery { cancelledState.readBatch(listOf(app), scope, 0L) } throws CancellationException("stop")
-        val cancelled = SteamOwnedCopyRuntimeAdapter(
-            dao,
-            scopes(GameSource.STEAM),
-            readyLifecycle(GameSource.STEAM),
-            mockk(relaxed = true),
-            batchHistory(),
-            cancelledState,
-        )
-        assertSuspendThrows(CancellationException::class.java) {
-            cancelled.resolveAll(setOf(key))
+        verify(exactly = 1) {
+            diagnostics.runtimeReadFailed(GameSource.STEAM, SensitiveFailure::class)
         }
     }
 
@@ -1741,6 +1862,7 @@ class OwnedCopyRuntimeAdapterTest {
         coEvery { steamDao.findOwnedApp(42, any(), any()) } returns steamApp
         val steamState = mockk<SteamOwnedCopyRuntimeState>()
         coEvery { steamState.readPoint(steamApp, scope, 0L) } throws SensitiveFailure()
+        val steamDiagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
         val switchedSteam = SteamOwnedCopyRuntimeAdapter(
             steamDao,
             SequencedScopeProvider(listOf(scope, otherScope)),
@@ -1748,8 +1870,12 @@ class OwnedCopyRuntimeAdapterTest {
             sourceAdapter(steamKey, SourceOwnedCopyReference.Steam(steamKey, 42)),
             mockk(relaxed = true),
             steamState,
+            libraryDiagnostics = steamDiagnostics,
         )
         assertSame(OwnedCopyRuntimeResult.Hidden, switchedSteam.resolve(steamKey))
+        verify(exactly = 1) {
+            steamDiagnostics.runtimeReadFailed(GameSource.STEAM, SensitiveFailure::class)
+        }
 
         val nestedKey = key(GameSource.GOG, "nested")
         val nestedSource = mockk<GogOwnedCopySourceAdapter>()
@@ -1785,6 +1911,31 @@ class OwnedCopyRuntimeAdapterTest {
         assertSame(OwnedCopyRuntimeResult.Hidden, lostGog.resolve(gogKey))
         coVerify(exactly = 2) {
             gogLedger.isPresentForLifecycle(scope.value, GameSource.GOG, "123", 0L)
+        }
+    }
+
+    @Test
+    fun runtimeDiagnosticSinkFailureDoesNotChangePointReadResult() = runTest {
+        val key = key(GameSource.GOG, "123")
+        val scopeProvider = mockk<AccountScopeProvider>()
+        coEvery { scopeProvider.current(GameSource.GOG) } throws SensitiveFailure()
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>()
+        every { diagnostics.runtimeReadFailed(GameSource.GOG, SensitiveFailure::class) } throws
+            IllegalStateException("private diagnostic failure")
+        val adapter = GogOwnedCopyRuntimeAdapter(
+            gogGameDao = mockk(relaxed = true),
+            accountScopeProvider = scopeProvider,
+            ownedCopyLedgerDao = mockk(relaxed = true),
+            accountLifecycleState = readyLifecycle(GameSource.GOG),
+            sourceAdapter = mockk(relaxed = true),
+            playHistoryDao = mockk(relaxed = true),
+            runtimeState = mockk(relaxed = true),
+            libraryDiagnostics = diagnostics,
+        )
+
+        assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolve(key))
+        verify(exactly = 1) {
+            diagnostics.runtimeReadFailed(GameSource.GOG, SensitiveFailure::class)
         }
     }
 

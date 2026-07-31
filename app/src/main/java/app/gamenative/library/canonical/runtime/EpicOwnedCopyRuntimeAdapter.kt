@@ -14,6 +14,9 @@ import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.NoOpCanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.EpicOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
@@ -22,6 +25,7 @@ import app.gamenative.library.canonical.source.sourceQualifiedKeys
 import app.gamenative.service.epic.EpicService
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.reflect.KClass
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -91,6 +95,8 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: EpicOwnedCopyRuntimeState,
     private val diagnostics: CanonicalDiagnosticSink? = null,
+    private val libraryDiagnostics: CanonicalLibraryDiagnosticSink =
+        NoOpCanonicalLibraryDiagnosticSink,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.EPIC
 
@@ -153,6 +159,7 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailed(error::class)
             val scope = provedScope
             val generation = provedGeneration
             return if (ownershipProved && scope != null && generation != null) {
@@ -245,6 +252,7 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailed(error::class)
             val scope = provedScope ?: return keys.hiddenResults()
             val currentGeneration = generation ?: return keys.hiddenResults()
             val finalLedger = completedFinalLedger
@@ -262,6 +270,12 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
                     OwnedCopyRuntimeResult.Hidden
                 }
             }
+        }
+    }
+
+    private fun reportRuntimeReadFailed(errorClass: KClass<out Throwable>) {
+        libraryDiagnostics.recordSafely {
+            runtimeReadFailed(source, errorClass)
         }
     }
 

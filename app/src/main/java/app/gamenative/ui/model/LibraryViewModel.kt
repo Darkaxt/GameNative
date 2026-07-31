@@ -43,6 +43,7 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalGuardedMutationResult
 import app.gamenative.library.canonical.CanonicalLibraryCard
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalLibraryRepository
 import app.gamenative.library.canonical.CanonicalMutationRepository
 import app.gamenative.library.canonical.CanonicalProjectionClock
@@ -52,6 +53,7 @@ import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.canonical.PreferredCopyRepository
+import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.OwnedCopyActionRouter
 import app.gamenative.library.canonical.action.OwnedCopyRouteResult
@@ -96,6 +98,7 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.reflect.KClass
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -504,6 +507,7 @@ class LibraryViewModel @Inject constructor(
     private val canonicalMutationRepository: CanonicalMutationRepository,
     private val canonicalProjectionClock: CanonicalProjectionClock,
     @CanonicalIoDispatcher private val canonicalDispatcher: CoroutineDispatcher,
+    private val diagnostics: CanonicalLibraryDiagnosticSink,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryState(isLoading = true))
@@ -556,6 +560,7 @@ class LibraryViewModel @Inject constructor(
     @Volatile private var latestCanonicalCards: List<CanonicalLibraryCard>? = null
     @Volatile private var canonicalCollectionHealthy: Boolean = false
     @Volatile private var canonicalCollectionFailure: CanonicalPublicFailure? = null
+    private var diagnosedFallbackReason: CanonicalPublicFailure? = null
     private var canonicalSnapshotEpoch: Long = 0L
     private var canonicalCollectorEpoch: Long = 0L
     private var canonicalCollectionJob: Job? = null
@@ -1488,6 +1493,7 @@ class LibraryViewModel @Inject constructor(
                 captureFilterRequestLocked(paginationCurrentPage)
             }
         } ?: return false
+        recordFallbackTransition(failure, error::class)
         recordRenderFailure(error)
         requestLegacyRender(failure, request)
         return true
@@ -1680,6 +1686,25 @@ class LibraryViewModel @Inject constructor(
         return requestCanonicalActivation(request)
     }
 
+    private fun recordFallbackTransition(
+        reason: CanonicalPublicFailure,
+        errorClass: KClass<out Throwable>? = null,
+    ) {
+        val changed = synchronized(renderLock) {
+            if (diagnosedFallbackReason == reason) {
+                false
+            } else {
+                diagnosedFallbackReason = reason
+                true
+            }
+        }
+        if (changed) {
+            diagnostics.recordSafely {
+                legacyFallback(reason, errorClass)
+            }
+        }
+    }
+
     private fun requestLegacyRender(
         failure: CanonicalPublicFailure?,
         paginationPage: Int,
@@ -1722,6 +1747,7 @@ class LibraryViewModel @Inject constructor(
                 launch = startLegacyWorkerLocked(request)
             }
         }
+        failure?.let { reason -> recordFallbackTransition(reason) }
         previousRender?.cancel()
         launch?.job?.start()
         return request.completion
@@ -2047,6 +2073,7 @@ class LibraryViewModel @Inject constructor(
                 outcome.token.paginationPage,
             )
         }
+        recordFallbackTransition(CanonicalPublicFailure.ASSEMBLY_FAILED, outcome.error::class)
         recordRenderFailure(outcome.error)
         requestLegacyRender(CanonicalPublicFailure.ASSEMBLY_FAILED, request)
         return true
@@ -2312,6 +2339,7 @@ class LibraryViewModel @Inject constructor(
                 canonicalCollectionHealthy = true
                 canonicalSnapshotEpoch = (token.mode as LibraryRenderMode.Canonical).collectorEpoch
                 canonicalCollectionFailure = null
+                diagnosedFallbackReason = null
                 latestCanonicalCards = snapshot
                 canonicalRetryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
                 canonicalRetryDeadlineElapsedMs = 0L

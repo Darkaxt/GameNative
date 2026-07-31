@@ -8,6 +8,7 @@ import app.gamenative.library.canonical.CanonicalDiagnosticSink
 import app.gamenative.library.canonical.CanonicalDiagnostics
 import app.gamenative.library.canonical.CanonicalEventRecorder
 import app.gamenative.library.canonical.CanonicalGameResolver
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalMutationRepository
 import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CanonicalProjectionEngine
@@ -17,6 +18,7 @@ import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CanonicalResolver
 import app.gamenative.library.canonical.DefaultAccountScopeProvider
 import app.gamenative.library.canonical.FeatureCanonicalEventRecorder
+import app.gamenative.library.canonical.FeatureCanonicalLibraryDiagnostics
 import app.gamenative.library.canonical.PrefManagerCanonicalProjectionGate
 import app.gamenative.library.canonical.PrefManagerCanonicalPublicLibraryGate
 import app.gamenative.library.canonical.RoomCanonicalMutationRepository
@@ -77,6 +79,12 @@ abstract class CanonicalLibraryModule {
     @Binds
     @Singleton
     abstract fun bindCanonicalDiagnostics(implementation: CanonicalDiagnostics): CanonicalDiagnosticSink
+
+    @Binds
+    @Singleton
+    abstract fun bindCanonicalLibraryDiagnostics(
+        implementation: FeatureCanonicalLibraryDiagnostics,
+    ): CanonicalLibraryDiagnosticSink
 
     @Binds
     @Singleton

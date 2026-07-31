@@ -14,6 +14,9 @@ import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.NoOpCanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
@@ -442,7 +445,9 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
     private val sourceAdapter: SteamOwnedCopySourceAdapter,
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: SteamOwnedCopyRuntimeState,
-    private val diagnostics: app.gamenative.library.canonical.CanonicalDiagnosticSink? = null,
+    private val diagnostics: CanonicalDiagnosticSink? = null,
+    private val libraryDiagnostics: CanonicalLibraryDiagnosticSink =
+        NoOpCanonicalLibraryDiagnosticSink,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.STEAM
 
@@ -492,6 +497,7 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailed(error::class)
             val scope = provedScope
             val generation = provedGeneration
             val appId = provedAppId
@@ -517,6 +523,13 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
         var generation: Long? = null
         var provedIds: Set<Int> = emptySet()
         var completedFinalOwnedIds: Set<Int>? = null
+        var runtimeReadFailureReported = false
+        fun reportRuntimeReadFailedOnce(errorClass: KClass<out Throwable>) {
+            if (!runtimeReadFailureReported) {
+                reportRuntimeReadFailed(errorClass)
+                runtimeReadFailureReported = true
+            }
+        }
         return try {
             generation = accountLifecycleState.generation(source)
             val accountScope = accountScopeProvider.current(source)
@@ -538,6 +551,8 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                     ?.let(rowsById::get)
             }.distinctBy(SteamApp::id)
             val stateBatch = runtimeState.readBatch(requestedRows, accountScope, generation)
+            stateBatch.failures.entries.minByOrNull { it.key }?.value
+                ?.let(::reportRuntimeReadFailedOnce)
             val history = playHistoryDao.batchLastPlayed(source, diagnostics)
             val finalOwnedIds = finalOwnedIds() ?: return keys.hiddenResults()
             completedFinalOwnedIds = finalOwnedIds
@@ -571,6 +586,7 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailedOnce(error::class)
             val scope = provedScope ?: return keys.hiddenResults()
             val currentGeneration = generation ?: return keys.hiddenResults()
             val finalOwnedIds = completedFinalOwnedIds
@@ -588,6 +604,12 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                     OwnedCopyRuntimeResult.Hidden
                 }
             }
+        }
+    }
+
+    private fun reportRuntimeReadFailed(errorClass: KClass<out Throwable>) {
+        libraryDiagnostics.recordSafely {
+            runtimeReadFailed(source, errorClass)
         }
     }
 

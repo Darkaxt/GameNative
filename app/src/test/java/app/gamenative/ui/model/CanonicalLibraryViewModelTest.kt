@@ -35,6 +35,7 @@ import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.events.AndroidEvent
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalGuardedMutationResult
 import app.gamenative.library.canonical.CanonicalLibraryRepository
 import app.gamenative.library.canonical.CanonicalMutationRepository
@@ -295,11 +296,27 @@ class CanonicalLibraryViewModelTest {
     fun `gate on waits for readiness then wakes from readiness alone`() = runTest(dispatcher) {
         val repository = repository(MutableStateFlow(listOf(card(name = "Ready Card"))))
         val readiness = CanonicalProjectionReadiness()
-        val vm = viewModel(repository, gateEnabled = true, readiness = readiness)
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        val vm = viewModel(
+            repository,
+            gateEnabled = true,
+            readiness = readiness,
+            diagnostics = diagnostics,
+        )
         runCurrent()
 
         assertEquals(CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE, vm.state.value.canonicalPublicFailure)
         verify(exactly = 0) { repository.observeCards() }
+        repeat(6) { index ->
+            vm.onTabChanged(if (index % 2 == 0) LibraryTab.STEAM else LibraryTab.ALL)
+            runCurrent()
+        }
+        verify(exactly = 1) {
+            diagnostics.legacyFallback(
+                CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE,
+                null,
+            )
+        }
 
         readiness.markSucceeded()
         runCurrent()
@@ -307,6 +324,12 @@ class CanonicalLibraryViewModelTest {
         assertEquals(listOf("Ready Card"), vm.state.value.cards.map { it.name })
         assertNull(vm.state.value.canonicalPublicFailure)
         verify(exactly = 1) { repository.observeCards() }
+        verify(exactly = 1) {
+            diagnostics.legacyFallback(
+                CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE,
+                null,
+            )
+        }
         viewModelStore.clear()
     }
 
@@ -341,6 +364,79 @@ class CanonicalLibraryViewModelTest {
         assertEquals(9, attempts)
         assertEquals(listOf("Recovered"), vm.state.value.cards.map { it.name })
         assertNull(vm.state.value.canonicalPublicFailure)
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `fallback diagnostics deduplicate retries and reset after canonical success`() = runTest(dispatcher) {
+        val valid = card(name = "Recovered")
+        val emissions = MutableStateFlow(
+            listOf(valid, valid.copy(displayName = "Invalid duplicate one")),
+        )
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        val vm = viewModel(
+            repository = repository(emissions),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            diagnostics = diagnostics,
+        )
+        runCurrent()
+
+        assertEquals(CanonicalPublicFailure.INVALID_CARD_STATE, vm.state.value.canonicalPublicFailure)
+        verify(exactly = 1) {
+            diagnostics.legacyFallback(
+                CanonicalPublicFailure.INVALID_CARD_STATE,
+                any(),
+            )
+        }
+
+        advanceTimeBy(1_000L)
+        runCurrent()
+        verify(exactly = 1) {
+            diagnostics.legacyFallback(
+                CanonicalPublicFailure.INVALID_CARD_STATE,
+                any(),
+            )
+        }
+
+        emissions.value = listOf(valid)
+        advanceTimeBy(2_000L)
+        runCurrent()
+        assertEquals(listOf("Recovered"), vm.state.value.cards.map { it.name })
+        assertNull(vm.state.value.canonicalPublicFailure)
+
+        emissions.value = listOf(valid, valid.copy(displayName = "Invalid duplicate two"))
+        runCurrent()
+        assertEquals(CanonicalPublicFailure.INVALID_CARD_STATE, vm.state.value.canonicalPublicFailure)
+        verify(exactly = 2) {
+            diagnostics.legacyFallback(
+                CanonicalPublicFailure.INVALID_CARD_STATE,
+                any(),
+            )
+        }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `diagnostic sink failure does not break prerequisite fallback`() = runTest(dispatcher) {
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>()
+        every {
+            diagnostics.legacyFallback(any(), any())
+        } throws IllegalStateException("private diagnostic failure")
+
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(emptyList())),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness(),
+            diagnostics = diagnostics,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE,
+            vm.state.value.canonicalPublicFailure,
+        )
+        assertFalse(vm.state.value.isLoading)
         viewModelStore.clear()
     }
 
@@ -3334,6 +3430,7 @@ class CanonicalLibraryViewModelTest {
         preferredCopyRepository: PreferredCopyRepository = mockk(relaxed = true),
         mutationRepository: CanonicalMutationRepository = mockk(relaxed = true),
         projectionClock: CanonicalProjectionClock = CanonicalProjectionClock { 1L },
+        diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
     ): LibraryViewModel {
         val history = mockk<LibraryPlayHistoryDao>(relaxed = true)
         every { history.getAll() } returns emptyFlow()
@@ -3361,6 +3458,7 @@ class CanonicalLibraryViewModelTest {
             canonicalMutationRepository = mutationRepository,
             canonicalProjectionClock = projectionClock,
             canonicalDispatcher = ioDispatcher,
+            diagnostics = diagnostics,
         ).also { viewModel ->
             latestVm = viewModel
             viewModelStore.put("latest", viewModel)

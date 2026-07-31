@@ -8,6 +8,9 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.AccountScopeProvider
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.NoOpCanonicalLibraryDiagnosticSink
+import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.source.CustomOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SnapshotCompleteness
@@ -256,6 +259,8 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
     private val playHistoryDao: LibraryPlayHistoryDao,
     private val runtimeState: CustomOwnedCopyRuntimeState,
     private val diagnostics: CanonicalDiagnosticSink? = null,
+    private val libraryDiagnostics: CanonicalLibraryDiagnosticSink =
+        NoOpCanonicalLibraryDiagnosticSink,
 ) : OwnedCopyRuntimeAdapter {
     override val source: GameSource = GameSource.CUSTOM_GAME
 
@@ -305,6 +310,7 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
             }
             val failure = first.failures[requestedAppId] ?: final.failures[requestedAppId]
             if (failure != null) {
+                reportRuntimeReadFailed(failure)
                 return unavailable(key, CopyUnavailableReason.SOURCE_READ_FAILED, failure)
             }
             val currentRow = row ?: return OwnedCopyRuntimeResult.Hidden
@@ -317,6 +323,7 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailed(error::class)
             val scope = accountScope ?: return OwnedCopyRuntimeResult.Hidden
             val requestedAppId = appId ?: return OwnedCopyRuntimeResult.Hidden
             val first = initial ?: return OwnedCopyRuntimeResult.Hidden
@@ -344,6 +351,13 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
         var requestedIds: Set<Int> = emptySet()
         var initial: CustomRuntimeScanResult? = null
         var completedFinal: CustomRuntimeScanResult? = null
+        var runtimeReadFailureReported = false
+        fun reportRuntimeReadFailedOnce(errorClass: KClass<out Throwable>) {
+            if (!runtimeReadFailureReported) {
+                reportRuntimeReadFailed(errorClass)
+                runtimeReadFailureReported = true
+            }
+        }
         return try {
             val currentScope = accountScopeProvider.current(source)
                 ?: return keys.hiddenResults()
@@ -372,6 +386,10 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
             if (!currentAccountProof { accountScopeProvider.current(source) == currentScope }) {
                 return keys.hiddenResults()
             }
+            (first.failures.entries + final.failures.entries)
+                .minByOrNull { it.key }
+                ?.value
+                ?.let(::reportRuntimeReadFailedOnce)
             keys.associateWith { key ->
                 val requestedAppId = key.customAppIdOrNull()
                 val firstKnown = requestedAppId != null &&
@@ -403,6 +421,7 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            reportRuntimeReadFailedOnce(error::class)
             val scope = accountScope ?: return keys.hiddenResults()
             val first = initial ?: return keys.hiddenResults()
             val final = completedFinal
@@ -438,14 +457,27 @@ class CustomOwnedCopyRuntimeAdapter @Inject constructor(
         null
     }
 
+    private fun reportRuntimeReadFailed(errorClass: KClass<out Throwable>) {
+        libraryDiagnostics.recordSafely {
+            runtimeReadFailed(source, errorClass)
+        }
+    }
+
     private fun reportBatchFailure(errorClass: KClass<out Throwable>) {
-        diagnostics?.sourceSnapshot(
-            source = source,
-            completeness = SnapshotCompleteness.PARTIAL,
-            copyCount = 0,
-            reason = SnapshotReason.SOURCE_READ_FAILED,
-            errorClass = errorClass,
-        )
+        reportRuntimeReadFailed(errorClass)
+        try {
+            diagnostics?.sourceSnapshot(
+                source = source,
+                completeness = SnapshotCompleteness.PARTIAL,
+                copyCount = 0,
+                reason = SnapshotReason.SOURCE_READ_FAILED,
+                errorClass = errorClass,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Existing projection diagnostics are also best effort at this runtime boundary.
+        }
     }
 
     private fun available(

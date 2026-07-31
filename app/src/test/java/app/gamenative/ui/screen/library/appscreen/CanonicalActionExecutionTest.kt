@@ -12,6 +12,7 @@ import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
+import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.action.ActionFailureReason
@@ -1115,6 +1116,7 @@ class CanonicalActionExecutionTest {
             initialLibraryItem = initial,
             runtimeRegistry = registry,
             publicGate = CanonicalPublicLibraryGate { true },
+            diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true),
         )
         return Fixture(initial, current, guard, selected, adapters)
     }
