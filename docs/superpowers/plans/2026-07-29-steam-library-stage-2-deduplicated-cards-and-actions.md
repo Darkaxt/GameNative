@@ -8,6 +8,8 @@
 
 **Tech Stack:** Kotlin 2.1.21, Android, Jetpack Compose, Material 3, Room 2.8.4, Hilt, DataStore Preferences, coroutines/Flow, JUnit 4, Robolectric, MockK, Compose UI tests, bounded JSONL `FeatureDiagnostics`
 
+> **Execution update — 2026-07-31:** Tasks 1–11 and the committed scale fixture are historical implementation evidence. Unfinished validation/live-matrix/cross-check work in Tasks 12–14 is superseded by `docs/superpowers/plans/2026-07-31-steam-first-visible-delivery.md`, which prioritizes default-visible vertical slices and signed complaint-driven nightlies. Do not resume Task 12 from this document.
+
 ---
 
 ## Starting point and hard boundaries
