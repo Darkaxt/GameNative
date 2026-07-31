@@ -89,6 +89,7 @@ import io.mockk.unmockkAll
 import io.mockk.unmockkObject
 import io.mockk.verify
 import java.util.EnumSet
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -438,6 +439,86 @@ class CanonicalLibraryViewModelTest {
         )
         assertFalse(vm.state.value.isLoading)
         viewModelStore.clear()
+    }
+
+    @Test
+    fun `fallback transition record is linearized before unsupported supersession and dedupes`() {
+        val io = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val assemblyRecordStarted = CountDownLatch(1)
+        val releaseAssemblyRecord = CountDownLatch(1)
+        val supersessionStarted = CountDownLatch(1)
+        val supersessionFinished = CountDownLatch(1)
+        val failCollection = CompletableDeferred<Unit>()
+        val recordedReasons = CopyOnWriteArrayList<CanonicalPublicFailure>()
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        every { diagnostics.legacyFallback(any(), any()) } answers {
+            val reason = firstArg<CanonicalPublicFailure>()
+            if (reason == CanonicalPublicFailure.ASSEMBLY_FAILED) {
+                assemblyRecordStarted.countDown()
+                releaseAssemblyRecord.await(10, TimeUnit.SECONDS)
+            }
+            recordedReasons += reason
+        }
+
+        try {
+            val vm = viewModel(
+                repository = repository(
+                    flow {
+                        emit(listOf(card(name = "Initial canonical")))
+                        failCollection.await()
+                        throw IllegalStateException("private assembly failure")
+                    },
+                ),
+                gateEnabled = true,
+                readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+                ioDispatcher = io,
+                diagnostics = diagnostics,
+            )
+            awaitState { state -> state.cards.map { it.name } == listOf("Initial canonical") }
+            failCollection.complete(Unit)
+            awaitLatch(assemblyRecordStarted, "assembly fallback diagnostic")
+
+            Thread {
+                try {
+                    supersessionStarted.countDown()
+                    vm.onTabChanged(LibraryTab.RECOMMENDED)
+                } finally {
+                    supersessionFinished.countDown()
+                }
+            }.start()
+            awaitLatch(supersessionStarted, "unsupported supersession attempt")
+            assertFalse(
+                "unsupported input superseded the accepted failure before its diagnostic record",
+                supersessionFinished.await(500L, TimeUnit.MILLISECONDS),
+            )
+
+            releaseAssemblyRecord.countDown()
+            awaitLatch(supersessionFinished, "unsupported supersession")
+            awaitState { state ->
+                state.canonicalPublicFailure == CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT
+            }
+            assertEquals(
+                listOf(
+                    CanonicalPublicFailure.ASSEMBLY_FAILED,
+                    CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT,
+                ),
+                recordedReasons,
+            )
+
+            vm.onTabChanged(LibraryTab.RECOMMENDED)
+            assertFalse(
+                "same-state unsupported callback emitted another transition",
+                awaitCondition(timeoutMs = 500L) {
+                    recordedReasons.count {
+                        it == CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT
+                    } > 1
+                },
+            )
+        } finally {
+            releaseAssemblyRecord.countDown()
+            viewModelStore.clear()
+            io.close()
+        }
     }
 
     @Test
@@ -1332,6 +1413,7 @@ class CanonicalLibraryViewModelTest {
         }
         val failNextProjection = AtomicBoolean(false)
         val emissions = MutableStateFlow(listOf(card(name = "Generation Zero")))
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
 
         try {
             val vm = viewModel(
@@ -1339,6 +1421,7 @@ class CanonicalLibraryViewModelTest {
                 gateEnabled = true,
                 readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
                 ioDispatcher = gatedDispatcher,
+                diagnostics = diagnostics,
             )
             awaitState { it.cards.map { card -> card.name } == listOf("Generation Zero") }
             every { GameCompatibilityCache.getCached(any()) } answers {
@@ -1368,6 +1451,9 @@ class CanonicalLibraryViewModelTest {
                     state.canonicalPublicFailure != null || state.cards.map { it.name } != listOf("Generation One")
                 },
             )
+            verify(exactly = 0) {
+                diagnostics.legacyFallback(CanonicalPublicFailure.ASSEMBLY_FAILED, any())
+            }
         } finally {
             releaseFailedObserver.countDown()
             viewModelStore.clear()
@@ -2976,19 +3062,55 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `canonical routing failure returns fixed unavailable result`() = runTest(dispatcher) {
-        val grouped = card(
-            name = "Route failure",
-            copyKeys = listOf(steamKey, gogKey),
-        )
-        val router = mockk<OwnedCopyActionRouter>()
-        coEvery { router.route(any(), any(), any(), any()) } throws
-            IllegalStateException("private router detail")
+    fun `missing canonical card diagnoses one fixed unavailable gesture`() = runTest(dispatcher) {
+        val grouped = card(name = "Current card")
+        val stale = card(canonicalId = canonicalId(99), name = "Stale card")
+        val router = mockk<OwnedCopyActionRouter>(relaxed = true)
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(grouped))),
             gateEnabled = true,
             readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
             actionRouter = router,
+            diagnostics = diagnostics,
+        )
+        runCurrent()
+
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            vm.routeCanonicalAction(
+                key = stale.key,
+                operation = OwnedCopyOperation.PLAY,
+            ),
+        )
+        coVerify(exactly = 0) { router.route(any(), any(), any(), any()) }
+        verify(exactly = 1) {
+            diagnostics.routeFailed(
+                source = null,
+                operation = OwnedCopyOperation.PLAY,
+                reason = ActionFailureReason.COPY_UNAVAILABLE,
+                errorClass = null,
+            )
+        }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `canonical routing exception diagnoses one fixed unavailable gesture`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Route failure",
+            copyKeys = listOf(steamKey, gogKey),
+        )
+        val failure = IllegalStateException("private router detail")
+        val router = mockk<OwnedCopyActionRouter>()
+        coEvery { router.route(any(), any(), any(), any()) } throws failure
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            actionRouter = router,
+            diagnostics = diagnostics,
         )
         runCurrent()
 
@@ -2999,6 +3121,56 @@ class CanonicalLibraryViewModelTest {
                 operation = OwnedCopyOperation.OPEN_SOURCE_DETAILS,
             ),
         )
+        verify(exactly = 1) {
+            diagnostics.routeFailed(
+                source = null,
+                operation = OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                reason = ActionFailureReason.COPY_UNAVAILABLE,
+                errorClass = IllegalStateException::class,
+            )
+        }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `diagnostic sink failure does not alter ViewModel gesture failures`() = runTest(dispatcher) {
+        val grouped = card(name = "Current route")
+        val stale = card(canonicalId = canonicalId(99), name = "Stale route")
+        val router = mockk<OwnedCopyActionRouter>()
+        coEvery { router.route(any(), any(), any(), any()) } throws
+            IllegalStateException("private router detail")
+        val diagnostics = mockk<CanonicalLibraryDiagnosticSink>()
+        every {
+            diagnostics.routeFailed(any(), any(), any(), any())
+        } throws IllegalStateException("private diagnostic detail")
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            actionRouter = router,
+            diagnostics = diagnostics,
+        )
+        runCurrent()
+
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            vm.routeCanonicalAction(stale.key, OwnedCopyOperation.PLAY),
+        )
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            vm.routeCanonicalAction(grouped.key, OwnedCopyOperation.OPEN_SOURCE_DETAILS),
+        )
+        verify(exactly = 1) {
+            diagnostics.routeFailed(null, OwnedCopyOperation.PLAY, ActionFailureReason.COPY_UNAVAILABLE, null)
+        }
+        verify(exactly = 1) {
+            diagnostics.routeFailed(
+                null,
+                OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                ActionFailureReason.COPY_UNAVAILABLE,
+                IllegalStateException::class,
+            )
+        }
         viewModelStore.clear()
     }
 

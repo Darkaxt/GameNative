@@ -830,7 +830,7 @@ class LibraryViewModel @Inject constructor(
         rememberChoice: Boolean = false,
     ): OwnedCopyRouteResult {
         val card = canonicalCard(key)
-            ?: return OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            ?: return unavailableCanonicalGesture(operation)
         val result = try {
             actionRouter.route(
                 card = card,
@@ -840,14 +840,29 @@ class LibraryViewModel @Inject constructor(
             )
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
-            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+        } catch (error: Exception) {
+            unavailableCanonicalGesture(operation, error::class)
         }
         if (result is OwnedCopyRouteResult.Unavailable) {
             val sources = explicitKey?.let { setOf(it.source) } ?: card.ownedSources
             sources.forEach(runtimeRegistry::notifyVolatileStateChanged)
         }
         return result
+    }
+
+    private fun unavailableCanonicalGesture(
+        operation: OwnedCopyOperation,
+        errorClass: KClass<out Throwable>? = null,
+    ): OwnedCopyRouteResult.Unavailable {
+        diagnostics.recordSafely {
+            routeFailed(
+                source = null,
+                operation = operation,
+                reason = ActionFailureReason.COPY_UNAVAILABLE,
+                errorClass = errorClass,
+            )
+        }
+        return OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
     }
 
     suspend fun useAutomaticCopySelection(
@@ -1493,9 +1508,8 @@ class LibraryViewModel @Inject constructor(
                 captureFilterRequestLocked(paginationCurrentPage)
             }
         } ?: return false
-        recordFallbackTransition(failure, error::class)
         recordRenderFailure(error)
-        requestLegacyRender(failure, request)
+        requestLegacyRender(failure, request, error::class)
         return true
     }
 
@@ -1686,22 +1700,14 @@ class LibraryViewModel @Inject constructor(
         return requestCanonicalActivation(request)
     }
 
-    private fun recordFallbackTransition(
+    private fun recordFallbackTransitionLocked(
         reason: CanonicalPublicFailure,
         errorClass: KClass<out Throwable>? = null,
     ) {
-        val changed = synchronized(renderLock) {
-            if (diagnosedFallbackReason == reason) {
-                false
-            } else {
-                diagnosedFallbackReason = reason
-                true
-            }
-        }
-        if (changed) {
-            diagnostics.recordSafely {
-                legacyFallback(reason, errorClass)
-            }
+        if (diagnosedFallbackReason == reason) return
+        diagnosedFallbackReason = reason
+        diagnostics.recordSafely {
+            legacyFallback(reason, errorClass)
         }
     }
 
@@ -1719,6 +1725,7 @@ class LibraryViewModel @Inject constructor(
     private fun requestLegacyRender(
         failure: CanonicalPublicFailure?,
         filter: FilterRenderRequest,
+        errorClass: KClass<out Throwable>? = null,
     ): Job {
         val request = LegacyRenderRequest(failure, filter)
         var launch: LegacyWorkerLaunch? = null
@@ -1746,8 +1753,8 @@ class LibraryViewModel @Inject constructor(
             } else {
                 launch = startLegacyWorkerLocked(request)
             }
+            failure?.let { reason -> recordFallbackTransitionLocked(reason, errorClass) }
         }
-        failure?.let { reason -> recordFallbackTransition(reason) }
         previousRender?.cancel()
         launch?.job?.start()
         return request.completion
@@ -2073,9 +2080,12 @@ class LibraryViewModel @Inject constructor(
                 outcome.token.paginationPage,
             )
         }
-        recordFallbackTransition(CanonicalPublicFailure.ASSEMBLY_FAILED, outcome.error::class)
         recordRenderFailure(outcome.error)
-        requestLegacyRender(CanonicalPublicFailure.ASSEMBLY_FAILED, request)
+        requestLegacyRender(
+            CanonicalPublicFailure.ASSEMBLY_FAILED,
+            request,
+            outcome.error::class,
+        )
         return true
     }
 
