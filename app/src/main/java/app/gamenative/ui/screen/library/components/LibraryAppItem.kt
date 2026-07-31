@@ -30,6 +30,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
@@ -54,6 +62,42 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+
+private data class CanonicalCopiesFocusModifiers(
+    val card: Modifier,
+    val action: Modifier,
+)
+
+@Composable
+private fun canonicalCopiesFocusModifiers(
+    isCanonical: Boolean,
+    paneType: PaneType,
+    onCopies: () -> Unit,
+): CanonicalCopiesFocusModifiers {
+    val requester = remember { FocusRequester() }
+    if (!isCanonical) {
+        return CanonicalCopiesFocusModifiers(Modifier, Modifier)
+    }
+
+    val cardModifier = Modifier.focusProperties {
+        if (paneType == PaneType.LIST) {
+            right = requester
+        } else {
+            down = requester
+        }
+    }
+    val actionModifier = Modifier
+        .focusRequester(requester)
+        .onPreviewKeyEvent { event ->
+            if (event.type == KeyEventType.KeyDown && event.key == Key.ButtonA) {
+                onCopies()
+                true
+            } else {
+                false
+            }
+        }
+    return CanonicalCopiesFocusModifiers(cardModifier, actionModifier)
+}
 
 /**
  * Library app item that displays a game in either list or grid view.
@@ -114,11 +158,17 @@ internal fun AppItem(
         rememberUpdatedState(1f)
     }
 
-    val itemModifier = if (card.identity is LibraryCardIdentity.Canonical) {
+    val isCanonical = card.identity is LibraryCardIdentity.Canonical
+    val itemModifier = if (isCanonical) {
         modifier.testTag("canonical-card")
     } else {
         modifier
     }
+    val copiesFocus = canonicalCopiesFocusModifiers(
+        isCanonical = isCanonical,
+        paneType = paneType,
+        onCopies = onCopies,
+    )
 
     when (paneType) {
         PaneType.LIST -> ListViewCard(
@@ -126,6 +176,8 @@ internal fun AppItem(
             card = card,
             onClick = onClick,
             onCopies = onCopies,
+            cardFocusModifier = copiesFocus.card,
+            copiesActionModifier = copiesFocus.action,
             onFocus = onFocus,
             isFocused = isFocused,
             onFocusChanged = { isFocused = it },
@@ -138,6 +190,8 @@ internal fun AppItem(
             card = card,
             onClick = onClick,
             onCopies = onCopies,
+            cardFocusModifier = copiesFocus.card,
+            copiesActionModifier = copiesFocus.action,
             onFocus = onFocus,
             isFocused = isFocused,
             onFocusChanged = { isFocused = it },

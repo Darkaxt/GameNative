@@ -197,6 +197,8 @@ class CanonicalLibraryRepository @Inject constructor(
                 matchMethod = match.matchMethod,
                 confidence = match.confidence,
                 decisionSource = match.decisionSource,
+                decisionCandidateSteamAppId = match.candidateSteamAppId,
+                decisionResolverVersion = match.resolverVersion,
                 decisionRevision = match.matchedAt,
             )
         } else {
@@ -221,6 +223,8 @@ class CanonicalLibraryRepository @Inject constructor(
                 matchMethod = match.matchMethod,
                 confidence = match.confidence,
                 decisionSource = match.decisionSource,
+                decisionCandidateSteamAppId = match.candidateSteamAppId,
+                decisionResolverVersion = match.resolverVersion,
                 decisionRevision = match.matchedAt,
             )
         }

@@ -981,6 +981,10 @@ class LibraryViewModel @Inject constructor(
                     key = summary.key,
                     expectedCanonicalId = card.canonicalId.value,
                     expectedMatchMethod = summary.matchMethod,
+                    expectedConfidence = summary.confidence,
+                    expectedDecisionSource = summary.decisionSource,
+                    expectedCandidateSteamAppId = summary.decisionCandidateSteamAppId,
+                    expectedResolverVersion = summary.decisionResolverVersion,
                     expectedDecisionRevision = summary.decisionRevision,
                     nowEpochMs = canonicalProjectionClock.nowEpochMs(),
                 )

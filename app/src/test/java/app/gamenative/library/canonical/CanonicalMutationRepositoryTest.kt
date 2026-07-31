@@ -740,6 +740,10 @@ class CanonicalMutationRepositoryTest {
             key = selectedKey,
             expectedCanonicalId = canonical.canonicalId,
             expectedMatchMethod = rejected.matchMethod,
+            expectedConfidence = rejected.confidence,
+            expectedDecisionSource = rejected.decisionSource,
+            expectedCandidateSteamAppId = rejected.candidateSteamAppId,
+            expectedResolverVersion = rejected.resolverVersion,
             expectedDecisionRevision = rejected.matchedAt,
             nowEpochMs = 300,
         )
@@ -823,7 +827,11 @@ class CanonicalMutationRepositoryTest {
         val result = repository.guardedResetDecision(
             key = selectedKey,
             expectedCanonicalId = canonical.canonicalId,
-            expectedMatchMethod = MatchMethod.MANUAL,
+            expectedMatchMethod = rejected.matchMethod,
+            expectedConfidence = rejected.confidence,
+            expectedDecisionSource = rejected.decisionSource,
+            expectedCandidateSteamAppId = rejected.candidateSteamAppId,
+            expectedResolverVersion = rejected.resolverVersion,
             expectedDecisionRevision = rejected.matchedAt,
             nowEpochMs = 300,
         )
@@ -852,13 +860,54 @@ class CanonicalMutationRepositoryTest {
         val result = repository.guardedResetDecision(
             key = selectedKey,
             expectedCanonicalId = canonical.canonicalId,
-            expectedMatchMethod = MatchMethod.MANUAL,
+            expectedMatchMethod = displayedDecision.matchMethod,
+            expectedConfidence = displayedDecision.confidence,
+            expectedDecisionSource = displayedDecision.decisionSource,
+            expectedCandidateSteamAppId = displayedDecision.candidateSteamAppId,
+            expectedResolverVersion = displayedDecision.resolverVersion,
             expectedDecisionRevision = displayedDecision.matchedAt,
             nowEpochMs = 300,
         )
 
         assertEquals(CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED, result)
         assertEquals(newerSameShapeDecision, db.storeMatchDao().get(selectedKey))
+    }
+
+    @Test
+    fun `guarded reset rejects different candidate at the same decision timestamp`() = runBlocking {
+        val canonical = canonical(index = 1, steamAppId = null, createdAt = 100)
+        val selectedKey = key(GameSource.GOG, "same-timestamp-candidate")
+        db.canonicalGameDao().insert(canonical)
+        val displayedDecision = match(
+            selectedKey,
+            canonical.canonicalId,
+            method = MatchMethod.MANUAL,
+            confidence = MatchConfidence.REJECTED,
+            candidateSteamAppId = 77,
+        ).copy(
+            decisionSource = MatchDecisionSource.USER,
+            resolverVersion = 4,
+            matchedAt = 250,
+        )
+        db.storeMatchDao().upsert(displayedDecision)
+
+        val newerDecision = displayedDecision.copy(candidateSteamAppId = 88)
+        db.storeMatchDao().upsert(newerDecision)
+
+        val result = repository.guardedResetDecision(
+            key = selectedKey,
+            expectedCanonicalId = canonical.canonicalId,
+            expectedMatchMethod = displayedDecision.matchMethod,
+            expectedConfidence = displayedDecision.confidence,
+            expectedDecisionSource = displayedDecision.decisionSource,
+            expectedCandidateSteamAppId = displayedDecision.candidateSteamAppId,
+            expectedResolverVersion = displayedDecision.resolverVersion,
+            expectedDecisionRevision = displayedDecision.matchedAt,
+            nowEpochMs = 300,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED, result)
+        assertEquals(newerDecision, db.storeMatchDao().get(selectedKey))
     }
 
     @Test

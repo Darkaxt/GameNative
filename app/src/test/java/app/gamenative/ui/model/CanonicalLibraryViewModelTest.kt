@@ -3128,7 +3128,7 @@ class CanonicalLibraryViewModelTest {
             CanonicalCopyChangeResult.COPY_STATE_CHANGED,
             vm.resetCanonicalDecision(independent.key, gogKey),
         )
-        coVerify(exactly = 0) { mutations.guardedResetDecision(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { mutations.guardedResetDecision(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
         viewModelStore.clear()
     }
 
@@ -3152,7 +3152,7 @@ class CanonicalLibraryViewModelTest {
         )
         val mutations = mockk<CanonicalMutationRepository>()
         coEvery {
-            mutations.guardedResetDecision(any(), any(), any(), any(), any())
+            mutations.guardedResetDecision(any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(independent))),
@@ -3191,7 +3191,7 @@ class CanonicalLibraryViewModelTest {
         )
         val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
         coEvery {
-            mutations.guardedResetDecision(any(), any(), any(), any(), any())
+            mutations.guardedResetDecision(any(), any(), any(), any(), any(), any(), any(), any(), any())
         } returns CanonicalGuardedMutationResult.APPLIED
         val vm = viewModel(
             repository = repository(MutableStateFlow(listOf(independent))),
@@ -3209,6 +3209,10 @@ class CanonicalLibraryViewModelTest {
                 gogKey,
                 independent.canonicalId.value,
                 rejectedCopy.matchMethod,
+                rejectedCopy.confidence,
+                rejectedCopy.decisionSource,
+                rejectedCopy.decisionCandidateSteamAppId,
+                rejectedCopy.decisionResolverVersion,
                 rejectedCopy.decisionRevision,
                 789L,
             )
@@ -3224,6 +3228,10 @@ class CanonicalLibraryViewModelTest {
                 gogKey,
                 independent.canonicalId.value,
                 rejectedCopy.matchMethod,
+                rejectedCopy.confidence,
+                rejectedCopy.decisionSource,
+                rejectedCopy.decisionCandidateSteamAppId,
+                rejectedCopy.decisionResolverVersion,
                 rejectedCopy.decisionRevision,
                 789L,
             )
@@ -3467,6 +3475,8 @@ class CanonicalLibraryViewModelTest {
         matchMethod = MatchMethod.DIRECT_STEAM,
         confidence = confidence,
         decisionSource = MatchDecisionSource.AUTOMATIC,
+        decisionCandidateSteamAppId = 456,
+        decisionResolverVersion = 7,
         decisionRevision = 123L,
     )
 

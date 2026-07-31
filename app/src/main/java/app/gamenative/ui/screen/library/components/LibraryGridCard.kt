@@ -84,6 +84,8 @@ internal fun GridViewCard(
     card: LibraryCard,
     onClick: () -> Unit,
     onCopies: () -> Unit,
+    cardFocusModifier: Modifier,
+    copiesActionModifier: Modifier,
     onFocus: () -> Unit,
     isFocused: Boolean,
     onFocusChanged: (Boolean) -> Unit,
@@ -144,6 +146,7 @@ internal fun GridViewCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
+                .then(cardFocusModifier)
                 .focusRing(interactionSource, cardShape)
                 .clickable(
                     onClick = onClick,
@@ -377,7 +380,7 @@ internal fun GridViewCard(
                         )
                         IconButton(
                             onClick = onCopies,
-                            modifier = Modifier
+                            modifier = copiesActionModifier
                                 .testTag("copies-action")
                                 .size(if (isCapsule) 36.dp else 32.dp),
                         ) {

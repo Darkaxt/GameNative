@@ -37,14 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +65,8 @@ internal fun ListViewCard(
     card: LibraryCard,
     onClick: () -> Unit,
     onCopies: () -> Unit,
+    cardFocusModifier: Modifier,
+    copiesActionModifier: Modifier,
     onFocus: () -> Unit,
     isFocused: Boolean,
     onFocusChanged: (Boolean) -> Unit,
@@ -80,7 +74,6 @@ internal fun ListViewCard(
     context: Context,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val copiesFocusRequester = remember { FocusRequester() }
     val isItemFocused by interactionSource.collectIsFocusedAsState()
 
     LaunchedEffect(isItemFocused) {
@@ -98,13 +91,7 @@ internal fun ListViewCard(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(
-                    if (card.identity is LibraryCardIdentity.Canonical) {
-                        Modifier.focusProperties { right = copiesFocusRequester }
-                    } else {
-                        Modifier
-                    },
-                )
+                .then(cardFocusModifier)
                 .clickable(
                     onClick = onClick,
                     interactionSource = interactionSource,
@@ -212,17 +199,7 @@ internal fun ListViewCard(
             if (card.identity is LibraryCardIdentity.Canonical) {
                 IconButton(
                     onClick = onCopies,
-                    modifier = Modifier
-                        .focusRequester(copiesFocusRequester)
-                        .onPreviewKeyEvent { event ->
-                            if (event.type == KeyEventType.KeyDown && event.key == Key.ButtonA) {
-                                onCopies()
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        .testTag("copies-action"),
+                    modifier = copiesActionModifier.testTag("copies-action"),
                 ) {
                     Icon(
                         imageVector = Icons.Filled.ContentCopy,

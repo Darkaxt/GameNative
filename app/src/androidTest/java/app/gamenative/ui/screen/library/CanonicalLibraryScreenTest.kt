@@ -6,11 +6,9 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -24,6 +22,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -38,6 +37,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.printToString
 import androidx.test.espresso.Espresso.pressBack
+import androidx.test.platform.app.InstrumentationRegistry
 import app.gamenative.PrefManager
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
@@ -75,6 +75,7 @@ import app.gamenative.ui.screen.library.components.OwnedSourceBadges
 import app.gamenative.ui.theme.PluviaTheme
 import app.gamenative.ui.util.SnackbarManager
 import java.lang.reflect.Proxy
+import kotlin.math.abs
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -143,7 +144,21 @@ class CanonicalLibraryScreenTest {
     @OptIn(ExperimentalMaterial3Api::class)
     @Test
     fun copiesSheetShowsCapabilitiesUnavailableRowsPreferenceAndSafeSeparateControls() {
-        val card = canonicalCard()
+        val candidateMarker = 987654321
+        val resolverMarker = 246813579
+        val initialCard = canonicalCard()
+        val card = initialCard.copy(
+            copies = initialCard.copies.mapIndexed { index, copy ->
+                if (index == 0) {
+                    copy.copy(
+                        decisionCandidateSteamAppId = candidateMarker,
+                        decisionResolverVersion = resolverMarker,
+                    )
+                } else {
+                    copy
+                }
+            },
+        )
         val operations = mutableListOf<Triple<GameSource, OwnedCopyOperation, Boolean>>()
         var automaticSelections = 0
         var separateSelections = 0
@@ -188,6 +203,8 @@ class CanonicalLibraryScreenTest {
         val sheetSemantics = composeRule.onNodeWithTag("copies-sheet").printToString()
         assertFalse(sheetSemantics.contains(accountScope.value))
         assertFalse(sheetSemantics.contains(steamKey.stableSourceId))
+        assertFalse(sheetSemantics.contains(candidateMarker.toString()))
+        assertFalse(sheetSemantics.contains(resolverMarker.toString()))
         assertEquals(0, separateSelections)
     }
 
@@ -619,6 +636,118 @@ class CanonicalLibraryScreenTest {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Test
+    fun gridHeroGamepadEntersCopiesAndReturnsToOrigin() {
+        assertAlternateLayoutGamepadCopiesRoute(PaneType.GRID_HERO)
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun gridCapsuleGamepadEntersCopiesAndReturnsToOrigin() {
+        assertAlternateLayoutGamepadCopiesRoute(PaneType.GRID_CAPSULE)
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun carouselGamepadEntersCopiesWithoutReplacingHorizontalNavigation() {
+        assertAlternateLayoutGamepadCopiesRoute(PaneType.CAROUSEL)
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    private fun assertAlternateLayoutGamepadCopiesRoute(paneType: PaneType) {
+        val origin = canonicalCard(
+            id = CanonicalGameId.parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+            title = "Alternate layout origin",
+            keys = listOf(steamKey, epicKey),
+        ).withPlayableSteamCopy()
+        val neighbor = canonicalCard(
+            id = CanonicalGameId.parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+            title = "Alternate layout neighbor",
+            keys = listOf(gogKey, steamKey),
+        )
+        val cards = mapOf(origin.key to origin, neighbor.key to neighbor)
+        setLibraryScreen(
+            state = {
+                LibraryState(
+                    cards = listOf(presentation(origin, 0), presentation(neighbor, 1)),
+                    canonicalSnapshotRevision = 1L,
+                )
+            },
+            canonicalCards = { cards },
+            onRoute = { _, _, _, _ ->
+                OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            },
+            paneType = paneType,
+        )
+
+        val originCard = composeRule.onNode(
+            hasTestTag("canonical-card") and hasAnyDescendant(hasText("Alternate layout origin")),
+        ).onChild()
+        originCard.performSemanticsAction(SemanticsActions.RequestFocus)
+        originCard.assertIsFocused()
+        if (paneType == PaneType.CAROUSEL) {
+            val neighborCard = composeRule.onNode(
+                hasTestTag("canonical-card") and hasAnyDescendant(hasText("Alternate layout neighbor")),
+            ).onChild()
+            val rootCenterX = nodeCenterX(composeRule.onRoot())
+            val originStartX = nodeCenterX(originCard)
+            val neighborDistanceBefore = abs(nodeCenterX(neighborCard) - rootCenterX)
+
+            originCard.performKeyInput { pressKey(Key.DirectionRight) }
+            composeRule.waitUntil(timeoutMillis = 5_000L) {
+                abs(nodeCenterX(neighborCard) - rootCenterX) < neighborDistanceBefore
+            }
+            neighborCard.performSemanticsAction(SemanticsActions.RequestFocus)
+            neighborCard.assertIsFocused().performKeyInput { pressKey(Key.DirectionLeft) }
+            composeRule.waitUntil(timeoutMillis = 5_000L) {
+                abs(nodeCenterX(originCard) - originStartX) < 2f
+            }
+            originCard.performSemanticsAction(SemanticsActions.RequestFocus)
+        }
+
+        originCard.assertIsFocused().performKeyInput { pressKey(Key.DirectionDown) }
+        val originCopies = composeRule.onNode(hasTestTag("copies-action") and isFocused())
+        originCopies.assertIsFocused().performKeyInput { pressKey(Key.ButtonA) }
+
+        val copiesSheet = composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
+        val firstOperation = composeRule.onNodeWithTag("copy-operation:STEAM:PLAY")
+        repeat(6) {
+            if (!nodeIsFocused(firstOperation)) {
+                copiesSheet.performKeyInput { pressKey(Key.DirectionDown) }
+            }
+        }
+        firstOperation.assertIsFocused().performKeyInput { pressKey(Key.DirectionDown) }
+        composeRule.onNodeWithTag("copy-operation:STEAM:OPEN_SOURCE_DETAILS").assertIsFocused()
+
+        pressBack()
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            runCatching {
+                composeRule.onNode(hasTestTag("copies-action") and isFocused())
+                    .fetchSemanticsNode()
+            }.isSuccess
+        }
+        val restoredCopies = composeRule.onNode(hasTestTag("copies-action") and isFocused())
+        restoredCopies.assertIsFocused().performKeyInput { pressKey(Key.ButtonA) }
+        composeRule.onNode(
+            hasTestTag("copies-sheet") and hasAnyDescendant(hasText("Alternate layout origin")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+    }
+
+    private fun nodeCenterX(node: androidx.compose.ui.test.SemanticsNodeInteraction): Float {
+        val bounds = node.fetchSemanticsNode().boundsInRoot
+        return (bounds.left + bounds.right) / 2f
+    }
+
+    private fun nodeIsFocused(node: androidx.compose.ui.test.SemanticsNodeInteraction): Boolean =
+        runCatching {
+            node.fetchSemanticsNode().config[
+                androidx.compose.ui.semantics.SemanticsProperties.Focused
+            ]
+        }.getOrDefault(false)
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
     fun resetTransactionFailureKeepsProductionSheetOpenWithFixedFeedback() {
         val rejectedCopy = copy(gogKey).copy(
             matchMethod = MatchMethod.MANUAL,
@@ -820,14 +949,16 @@ class CanonicalLibraryScreenTest {
             OwnedCopyKey,
         ) -> CanonicalCopyChangeResult = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
         onLibraryFeedback: (String) -> Unit = {},
+        paneType: PaneType = PaneType.LIST,
     ) {
+        val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
+        PrefManager.init(targetContext)
+        PrefManager.libraryLayout = paneType
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            PrefManager.libraryLayout == paneType
+        }
         composeRule.setContent {
-            val context = LocalContext.current
             val inputModeManager = LocalInputModeManager.current
-            remember(context) {
-                PrefManager.init(context)
-                PrefManager.libraryLayout = PaneType.LIST
-            }
             LaunchedEffect(Unit) {
                 inputModeManager.requestInputMode(InputMode.Keyboard)
                 SnackbarManager.messages.collect { message -> onLibraryFeedback(message) }
@@ -1006,6 +1137,8 @@ class CanonicalLibraryScreenTest {
         matchMethod = MatchMethod.DIRECT_STEAM,
         confidence = MatchConfidence.VERIFIED,
         decisionSource = MatchDecisionSource.AUTOMATIC,
+        decisionCandidateSteamAppId = null,
+        decisionResolverVersion = 1,
         decisionRevision = 100L,
     )
 

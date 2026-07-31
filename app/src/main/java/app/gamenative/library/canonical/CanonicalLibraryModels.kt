@@ -75,6 +75,8 @@ data class OwnedCopySummary(
     val matchMethod: MatchMethod,
     val confidence: MatchConfidence,
     val decisionSource: MatchDecisionSource,
+    val decisionCandidateSteamAppId: Int?,
+    val decisionResolverVersion: Int,
     val decisionRevision: Long,
 )
 

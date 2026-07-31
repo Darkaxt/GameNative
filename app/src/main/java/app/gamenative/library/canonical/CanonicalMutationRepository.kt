@@ -47,6 +47,10 @@ interface CanonicalMutationRepository {
         key: OwnedCopyKey,
         expectedCanonicalId: String,
         expectedMatchMethod: MatchMethod,
+        expectedConfidence: MatchConfidence,
+        expectedDecisionSource: MatchDecisionSource,
+        expectedCandidateSteamAppId: Int?,
+        expectedResolverVersion: Int,
         expectedDecisionRevision: Long,
         nowEpochMs: Long,
     ): CanonicalGuardedMutationResult
@@ -212,6 +216,10 @@ class RoomCanonicalMutationRepository @Inject constructor(
         key: OwnedCopyKey,
         expectedCanonicalId: String,
         expectedMatchMethod: MatchMethod,
+        expectedConfidence: MatchConfidence,
+        expectedDecisionSource: MatchDecisionSource,
+        expectedCandidateSteamAppId: Int?,
+        expectedResolverVersion: Int,
         expectedDecisionRevision: Long,
         nowEpochMs: Long,
     ): CanonicalGuardedMutationResult = db.withTransaction {
@@ -225,8 +233,12 @@ class RoomCanonicalMutationRepository @Inject constructor(
             match.canonicalId == expectedCanonicalId &&
             match.isPresent &&
             match.confidence == MatchConfidence.REJECTED &&
+            match.confidence == expectedConfidence &&
             match.decisionSource == MatchDecisionSource.USER &&
+            match.decisionSource == expectedDecisionSource &&
             match.matchMethod == expectedMatchMethod &&
+            match.candidateSteamAppId == expectedCandidateSteamAppId &&
+            match.resolverVersion == expectedResolverVersion &&
             match.matchedAt == expectedDecisionRevision &&
             storeMatchDao.countPresentReferences(expectedCanonicalId) == 1
         if (!remainsExpectedIndependentRejection) {

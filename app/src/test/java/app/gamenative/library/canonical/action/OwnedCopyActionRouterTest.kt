@@ -1015,6 +1015,8 @@ class OwnedCopyActionRouterTest {
         matchMethod = MatchMethod.EXACT_METADATA,
         confidence = MatchConfidence.HIGH,
         decisionSource = MatchDecisionSource.AUTOMATIC,
+        decisionCandidateSteamAppId = null,
+        decisionResolverVersion = 1,
         decisionRevision = 100L,
     )
 
