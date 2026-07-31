@@ -38,16 +38,26 @@ import app.gamenative.diagnostics.DiagnosticOutcome
 import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.MatchConfidence
+import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CanonicalLibraryRepository
+import app.gamenative.library.canonical.CanonicalMutationRepository
+import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CanonicalProjectionReadiness
 import app.gamenative.library.canonical.CanonicalPublicFailure
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
+import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
+import app.gamenative.library.canonical.PreferredCopyRepository
+import app.gamenative.library.canonical.action.ActionFailureReason
+import app.gamenative.library.canonical.action.OwnedCopyActionRouter
+import app.gamenative.library.canonical.action.OwnedCopyRouteResult
 import app.gamenative.library.canonical.runtime.CanonicalIoDispatcher
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
+import app.gamenative.library.canonical.source.OwnedCopyProjection
 import app.gamenative.library.canonical.stableComposeKey
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
@@ -106,6 +116,14 @@ import timber.log.Timber
 
 private const val PLAYABLE_FPS_THRESHOLD = 30
 private const val PROVEN_RUNS_THRESHOLD = 5
+
+enum class CanonicalCopyChangeResult {
+    SUCCESS,
+    INVALID_REQUEST,
+    PUBLIC_FEATURE_DISABLED,
+    COPY_STATE_CHANGED,
+    TRANSACTION_FAILED,
+}
 
 internal data class CanonicalLibraryPage(
     val cards: List<LibraryCard>,
@@ -480,6 +498,10 @@ class LibraryViewModel @Inject constructor(
     private val canonicalPublicLibraryGate: CanonicalPublicLibraryGate,
     private val canonicalProjectionReadiness: CanonicalProjectionReadiness,
     private val runtimeRegistry: OwnedCopyRuntimeRegistry,
+    private val actionRouter: OwnedCopyActionRouter,
+    private val preferredCopyRepository: PreferredCopyRepository,
+    private val canonicalMutationRepository: CanonicalMutationRepository,
+    private val canonicalProjectionClock: CanonicalProjectionClock,
     @CanonicalIoDispatcher private val canonicalDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
 
@@ -788,6 +810,174 @@ class LibraryViewModel @Inject constructor(
 
     fun onModalBottomSheet(value: Boolean) {
         _state.update { it.copy(modalBottomSheet = value) }
+    }
+
+    fun canonicalCard(key: CanonicalCardKey): CanonicalLibraryCard? = synchronized(renderLock) {
+        latestCanonicalCards?.singleOrNull { card -> card.key == key }
+    }
+
+    suspend fun routeCanonicalAction(
+        key: CanonicalCardKey,
+        operation: OwnedCopyOperation,
+        explicitKey: OwnedCopyKey? = null,
+        rememberChoice: Boolean = false,
+    ): OwnedCopyRouteResult {
+        val card = canonicalCard(key)
+            ?: return OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+        val result = try {
+            actionRouter.route(
+                card = card,
+                operation = operation,
+                explicitKey = explicitKey,
+                rememberChoice = rememberChoice,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+        }
+        if (result is OwnedCopyRouteResult.Unavailable) {
+            val sources = explicitKey?.let { setOf(it.source) } ?: card.ownedSources
+            sources.forEach(runtimeRegistry::notifyVolatileStateChanged)
+        }
+        return result
+    }
+
+    suspend fun useAutomaticCopySelection(
+        key: CanonicalCardKey,
+    ): CanonicalCopyChangeResult {
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
+        }
+        val grouped = key as? CanonicalCardKey.Grouped
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+        val card = canonicalCard(key)
+            ?.takeIf { it.canonicalId == grouped.canonicalId && it.preferredCopy != null }
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+        return try {
+            preferredCopyRepository.clearPreferredCopy(
+                canonicalId = card.canonicalId,
+                nowEpochMs = canonicalProjectionClock.nowEpochMs(),
+            )
+            CanonicalCopyChangeResult.SUCCESS
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            CanonicalCopyChangeResult.TRANSACTION_FAILED
+        }
+    }
+
+    suspend fun separateCanonicalCopy(
+        cardKey: CanonicalCardKey,
+        copyKey: OwnedCopyKey,
+    ): CanonicalCopyChangeResult {
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
+        }
+        val grouped = cardKey as? CanonicalCardKey.Grouped
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+        val card = canonicalCard(cardKey)
+            ?.takeIf { it.canonicalId == grouped.canonicalId && it.copies.size >= 2 }
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+        val summary = card.copies.singleOrNull { copy -> copy.key == copyKey }
+            ?.takeIf { copy -> copy.source != GameSource.STEAM && copy.canSeparateMatch }
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+        if (summary.unavailableReason != null) return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+
+        val resolved = try {
+            runtimeRegistry.resolve(copyKey)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+        }
+        val runtime = when (resolved) {
+            is OwnedCopyRuntimeResult.Available -> resolved.copy
+                .takeIf { copy -> copy.key == copyKey }
+                ?: return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+            OwnedCopyRuntimeResult.Hidden,
+            is OwnedCopyRuntimeResult.Unavailable,
+            -> return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+        }
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
+        }
+        val projection = OwnedCopyProjection(
+            key = runtime.key,
+            displayName = runtime.nativeTitle,
+            developer = runtime.developerKey,
+            releaseYear = runtime.releaseYear,
+            appType = runtime.appType,
+            genreKeys = runtime.genreKeys,
+            tagIds = runtime.tagIds,
+            featureKeys = runtime.featureKeys,
+        )
+        return try {
+            canonicalMutationRepository.unmergeCopy(
+                key = runtime.key,
+                current = projection,
+                nowEpochMs = canonicalProjectionClock.nowEpochMs(),
+            )
+            CanonicalCopyChangeResult.SUCCESS
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            CanonicalCopyChangeResult.TRANSACTION_FAILED
+        }
+    }
+
+    suspend fun resetCanonicalDecision(
+        cardKey: CanonicalCardKey,
+        copyKey: OwnedCopyKey,
+    ): CanonicalCopyChangeResult {
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
+        }
+        val independent = cardKey as? CanonicalCardKey.Independent
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+        if (independent.copyKey != copyKey || copyKey.source == GameSource.STEAM) {
+            return CanonicalCopyChangeResult.INVALID_REQUEST
+        }
+        val summary = canonicalCard(cardKey)
+            ?.copies
+            ?.singleOrNull()
+            ?.takeIf { copy ->
+                copy.key == copyKey &&
+                    copy.confidence == MatchConfidence.REJECTED &&
+                    copy.decisionSource == MatchDecisionSource.USER
+            }
+            ?: return CanonicalCopyChangeResult.INVALID_REQUEST
+
+        val resolved = try {
+            runtimeRegistry.resolve(summary.key)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+        }
+        when (resolved) {
+            is OwnedCopyRuntimeResult.Available -> if (resolved.copy.key != summary.key) {
+                return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+            }
+            is OwnedCopyRuntimeResult.Unavailable -> if (resolved.key != summary.key) {
+                return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+            }
+            OwnedCopyRuntimeResult.Hidden -> return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+        }
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
+        }
+        return try {
+            canonicalMutationRepository.resetDecision(
+                key = summary.key,
+                nowEpochMs = canonicalProjectionClock.nowEpochMs(),
+            )
+            CanonicalCopyChangeResult.SUCCESS
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            CanonicalCopyChangeResult.TRANSACTION_FAILED
+        }
     }
 
     fun onIsSearching(value: Boolean) {

@@ -120,6 +120,7 @@ internal fun LibraryListPane(
     focusTargetListIndex: Int? = null,
     onPageChange: (Int) -> Unit,
     onNavigate: (LibraryCard) -> Unit,
+    onCopies: (LibraryCard, Int) -> Unit = { _, _ -> },
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -292,6 +293,7 @@ internal fun LibraryListPane(
                                         modifier = appItemModifier,
                                         card = item,
                                         onClick = { onNavigate(item) },
+                                        onCopies = { onCopies(item, listIndex) },
                                         paneType = currentLayout,
                                         onFocus = { targetOfScroll = item.index },
                                         imageRefreshCounter = state.imageRefreshCounter,

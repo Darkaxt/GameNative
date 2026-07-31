@@ -225,6 +225,7 @@ internal fun LibraryCarouselPane(
     listState: LazyListState,
     onPageChange: (Int) -> Unit,
     onNavigate: (LibraryCard) -> Unit,
+    onCopies: (LibraryCard, Int) -> Unit = { _, _ -> },
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
     firstCarouselItemFocusRequester: FocusRequester? = null,
@@ -521,6 +522,10 @@ internal fun LibraryCarouselPane(
                                             onClick = {
                                                 onFocusedIndexChanged(listIndex)
                                                 onNavigate(item)
+                                            },
+                                            onCopies = {
+                                                onFocusedIndexChanged(listIndex)
+                                                onCopies(item, listIndex)
                                             },
                                             onFocus = {
                                                 onFocusedIndexChanged(listIndex)

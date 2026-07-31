@@ -26,6 +26,7 @@ internal fun LibraryList(
     listState: LazyListState,
     list: List<LibraryCard>,
     onItemClick: (LibraryCard) -> Unit,
+    onCopies: (LibraryCard) -> Unit = {},
     imageRefreshCounter: Long = 0L,
 ) {
     if (list.isEmpty()) {
@@ -58,6 +59,7 @@ internal fun LibraryList(
                     modifier = Modifier.animateItem(),
                     card = item,
                     onClick = { onItemClick(item) },
+                    onCopies = { onCopies(item) },
                     imageRefreshCounter = imageRefreshCounter,
                 )
 

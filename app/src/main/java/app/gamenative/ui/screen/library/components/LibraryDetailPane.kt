@@ -1,16 +1,29 @@
 package app.gamenative.ui.screen.library.components
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import app.gamenative.PrefManager
+import app.gamenative.R
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.RecommendationRepository
@@ -53,6 +66,8 @@ internal fun LibraryDetailPane(
 @Composable
 internal fun LibraryDetailPane(
     card: LibraryCard?,
+    sourceItem: LibraryItem? = card?.sourceItemOrNull(),
+    onCopies: (() -> Unit)? = null,
     onClickPlay: (Boolean) -> Unit,
     onTestGraphics: () -> Unit,
     onPlayWithDiagnostics: () -> Unit,
@@ -108,12 +123,35 @@ internal fun LibraryDetailPane(
                 }
             }
             else -> {
-                val libraryItem = card.sourceItemOrNull()
-                if (libraryItem == null) {
+                if (sourceItem == null) {
                     EmptyLibraryDetailPane()
+                } else if (card.identity is LibraryCardIdentity.Canonical && onCopies != null) {
+                    Box {
+                        AppScreen(
+                            libraryItem = sourceItem,
+                            onClickPlay = onClickPlay,
+                            onTestGraphics = onTestGraphics,
+                            onPlayWithDiagnostics = onPlayWithDiagnostics,
+                            onBack = onBack,
+                        )
+                        TextButton(
+                            onClick = onCopies,
+                            modifier = Modifier
+                                .align(androidx.compose.ui.Alignment.TopEnd)
+                                .statusBarsPadding()
+                                .padding(end = 16.dp, top = 8.dp)
+                                .testTag("copies-action-detail"),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ContentCopy,
+                                contentDescription = null,
+                            )
+                            Text(stringResource(R.string.canonical_copies_action))
+                        }
+                    }
                 } else {
                     AppScreen(
-                        libraryItem = libraryItem,
+                        libraryItem = sourceItem,
                         onClickPlay = onClickPlay,
                         onTestGraphics = onTestGraphics,
                         onPlayWithDiagnostics = onPlayWithDiagnostics,

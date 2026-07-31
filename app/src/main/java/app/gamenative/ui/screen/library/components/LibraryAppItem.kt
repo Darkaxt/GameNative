@@ -31,6 +31,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.painterResource
@@ -39,6 +40,7 @@ import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.ui.data.LibraryCard
+import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.icons.Amazon
 import app.gamenative.ui.icons.Steam
@@ -65,6 +67,7 @@ internal fun AppItem(
     modifier: Modifier = Modifier,
     card: LibraryCard,
     onClick: () -> Unit,
+    onCopies: () -> Unit = {},
     paneType: PaneType = PaneType.LIST,
     onFocus: () -> Unit = {},
     isRefreshing: Boolean = false,
@@ -111,11 +114,18 @@ internal fun AppItem(
         rememberUpdatedState(1f)
     }
 
+    val itemModifier = if (card.identity is LibraryCardIdentity.Canonical) {
+        modifier.testTag("canonical-card")
+    } else {
+        modifier
+    }
+
     when (paneType) {
         PaneType.LIST -> ListViewCard(
-            modifier = modifier,
+            modifier = itemModifier,
             card = card,
             onClick = onClick,
+            onCopies = onCopies,
             onFocus = onFocus,
             isFocused = isFocused,
             onFocusChanged = { isFocused = it },
@@ -124,9 +134,10 @@ internal fun AppItem(
         )
 
         else -> GridViewCard(
-            modifier = modifier,
+            modifier = itemModifier,
             card = card,
             onClick = onClick,
+            onCopies = onCopies,
             onFocus = onFocus,
             isFocused = isFocused,
             onFocusChanged = { isFocused = it },
@@ -152,17 +163,25 @@ fun GameSourceIcon(
     modifier: Modifier = Modifier,
     iconSize: Int = 12,
     alignmentBoxSize: Int = 20,
+    contentDescription: String? = null,
 ) {
+    val resolvedDescription = contentDescription ?: when (gameSource) {
+        GameSource.STEAM -> "Steam"
+        GameSource.CUSTOM_GAME -> "Custom Game"
+        GameSource.GOG -> "Gog"
+        GameSource.EPIC -> "Epic"
+        GameSource.AMAZON -> "Amazon"
+    }
     Box(
         modifier = modifier.size(alignmentBoxSize.dp),
         contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
         when (gameSource) {
-            GameSource.STEAM -> Icon(imageVector = Icons.Filled.Steam, contentDescription = "Steam", modifier = Modifier.size(iconSize.dp).alpha(0.7f))
-            GameSource.CUSTOM_GAME -> Icon(imageVector = Icons.Filled.Folder, contentDescription = "Custom Game", modifier = Modifier.size(iconSize.dp).alpha(0.7f))
-            GameSource.GOG -> Icon(painter = painterResource(R.drawable.ic_gog), contentDescription = "Gog", modifier = Modifier.size(iconSize.dp).alpha(0.7f))
-            GameSource.EPIC -> Icon(painter = painterResource(R.drawable.ic_epic), contentDescription = "Epic", modifier = Modifier.size(iconSize.dp).alpha(0.7f))
-            GameSource.AMAZON -> Icon(imageVector = Icons.Filled.Amazon, contentDescription = "Amazon", modifier = Modifier.size(iconSize.dp).alpha(0.7f))
+            GameSource.STEAM -> Icon(imageVector = Icons.Filled.Steam, contentDescription = resolvedDescription, modifier = Modifier.size(iconSize.dp).alpha(0.7f))
+            GameSource.CUSTOM_GAME -> Icon(imageVector = Icons.Filled.Folder, contentDescription = resolvedDescription, modifier = Modifier.size(iconSize.dp).alpha(0.7f))
+            GameSource.GOG -> Icon(painter = painterResource(R.drawable.ic_gog), contentDescription = resolvedDescription, modifier = Modifier.size(iconSize.dp).alpha(0.7f))
+            GameSource.EPIC -> Icon(painter = painterResource(R.drawable.ic_epic), contentDescription = resolvedDescription, modifier = Modifier.size(iconSize.dp).alpha(0.7f))
+            GameSource.AMAZON -> Icon(imageVector = Icons.Filled.Amazon, contentDescription = resolvedDescription, modifier = Modifier.size(iconSize.dp).alpha(0.7f))
         }
     }
 }

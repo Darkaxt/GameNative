@@ -76,7 +76,14 @@ import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
+import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.events.AndroidEvent
+import app.gamenative.library.canonical.CanonicalCardKey
+import app.gamenative.library.canonical.CanonicalLibraryCard
+import app.gamenative.library.canonical.OwnedCopyOperation
+import app.gamenative.library.canonical.action.ActionFailureReason
+import app.gamenative.library.canonical.action.OwnedCopyActionGuard
+import app.gamenative.library.canonical.action.OwnedCopyRouteResult
 import app.gamenative.ui.component.GamepadAction
 import app.gamenative.ui.component.GamepadActionBar
 import app.gamenative.ui.component.GamepadButton
@@ -84,14 +91,18 @@ import app.gamenative.ui.component.LibraryActions
 import app.gamenative.ui.components.rememberCustomGameFolderPicker
 import app.gamenative.ui.components.requestPermissionsForPath
 import app.gamenative.ui.data.LibraryCard
+import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.LibraryTab
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.enums.SortOption
 import app.gamenative.ui.internal.fakeAppInfo
+import app.gamenative.ui.model.CanonicalCopyChangeResult
 import app.gamenative.ui.model.LibraryViewModel
 import app.gamenative.service.SteamService
+import app.gamenative.ui.screen.library.components.CanonicalCopiesFeedback
+import app.gamenative.ui.screen.library.components.CanonicalCopiesSheet
 import app.gamenative.ui.screen.library.components.LibraryCarouselPane
 import app.gamenative.ui.screen.library.components.LibraryDetailPane
 import app.gamenative.ui.screen.library.components.LibraryListPane
@@ -159,6 +170,11 @@ fun HomeLibraryScreen(
         onTabChanged = viewModel::onTabChanged,
         onPreviousTab = viewModel::onPreviousTab,
         onNextTab = viewModel::onNextTab,
+        canonicalCard = viewModel::canonicalCard,
+        onRouteCanonicalAction = viewModel::routeCanonicalAction,
+        onUseAutomaticCopySelection = viewModel::useAutomaticCopySelection,
+        onSeparateCanonicalCopy = viewModel::separateCanonicalCopy,
+        onResetCanonicalDecision = viewModel::resetCanonicalDecision,
         isOffline = isOffline,
         isSteamConnected = isSteamConnected,
     )
@@ -200,6 +216,16 @@ private fun LibraryScreenContent(
     onTabChanged: (LibraryTab) -> Unit,
     onPreviousTab: () -> Unit,
     onNextTab: () -> Unit,
+    canonicalCard: (CanonicalCardKey) -> CanonicalLibraryCard?,
+    onRouteCanonicalAction: suspend (
+        CanonicalCardKey,
+        OwnedCopyOperation,
+        OwnedCopyKey?,
+        Boolean,
+    ) -> OwnedCopyRouteResult,
+    onUseAutomaticCopySelection: suspend (CanonicalCardKey) -> CanonicalCopyChangeResult,
+    onSeparateCanonicalCopy: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult,
+    onResetCanonicalDecision: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult,
     isOffline: Boolean = false,
     isSteamConnected: Boolean = false,
 ) {
@@ -311,7 +337,18 @@ private fun LibraryScreenContent(
         }
     }
 
-    var selectedAppId by remember { mutableStateOf<String?>(null) }
+    var selectedCardIdentity by remember { mutableStateOf<LibraryCardIdentity?>(null) }
+    var selectedSourceItem by remember { mutableStateOf<LibraryItem?>(null) }
+    var selectedPresentationCard by remember { mutableStateOf<LibraryCard?>(null) }
+    var activeActionGuard by remember { mutableStateOf<OwnedCopyActionGuard?>(null) }
+    var pendingInitialOperation by remember { mutableStateOf<OwnedCopyOperation?>(null) }
+    var selectedOriginListIndex by remember { mutableIntStateOf(0) }
+    var selectedFocusRestoreListIndex by remember { mutableStateOf<Int?>(null) }
+    var copiesSheetCardKey by remember { mutableStateOf<CanonicalCardKey?>(null) }
+    var copiesSheetFeedback by remember { mutableStateOf<CanonicalCopiesFeedback?>(null) }
+    var copiesActionInProgress by remember { mutableStateOf(false) }
+    var copiesOriginListIndex by remember { mutableIntStateOf(0) }
+    var pendingCopiesFocusRestore by remember { mutableStateOf(false) }
     val carouselListState = rememberLazyListState()
     val isViewWide = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var currentPaneType by remember { mutableStateOf(PrefManager.libraryLayout) }
@@ -339,8 +376,6 @@ private fun LibraryScreenContent(
     // Track previous overlay states to detect when they close
     var wasSystemMenuOpen by remember { mutableStateOf(false) }
     var wasOptionsPanelOpen by remember { mutableStateOf(false) }
-    // Keep a stable reference to the selected item so detail view doesn't disappear during list refresh/pagination.
-    var selectedLibraryCard by remember { mutableStateOf<LibraryCard?>(null) }
     val filterFabExpanded by remember(currentPaneType, listState, carouselListState) {
         derivedStateOf {
             if (currentPaneType == PaneType.CAROUSEL) {
@@ -446,6 +481,133 @@ private fun LibraryScreenContent(
         } catch (_: IllegalStateException) {}
     }
 
+    fun clearSelectedSource() {
+        selectedCardIdentity = null
+        selectedSourceItem = null
+        selectedPresentationCard = null
+        activeActionGuard = null
+        pendingInitialOperation = null
+    }
+
+    fun dismissCopiesSheet(restoreCardFocus: Boolean = true) {
+        copiesSheetCardKey = null
+        copiesSheetFeedback = null
+        copiesActionInProgress = false
+        if (restoreCardFocus && selectedCardIdentity == null) {
+            pendingCopiesFocusRestore = true
+        }
+    }
+
+    fun openCopiesSheet(key: CanonicalCardKey, originatingListIndex: Int) {
+        if (canonicalCard(key) == null) {
+            SnackbarManager.show(context.getString(R.string.canonical_copy_state_changed))
+            onRefresh()
+            return
+        }
+        copiesOriginListIndex = originatingListIndex
+        copiesSheetFeedback = null
+        copiesActionInProgress = false
+        pendingGridFocusRequest = false
+        pendingCarouselFocusRequest = false
+        copiesSheetCardKey = key
+    }
+
+    fun openCard(card: LibraryCard, originatingListIndex: Int = card.index) {
+        selectedOriginListIndex = originatingListIndex
+        when (val identity = card.identity) {
+            is LibraryCardIdentity.SourceCopy -> {
+                activeActionGuard = null
+                pendingInitialOperation = null
+                selectedFocusRestoreListIndex = null
+                selectedPresentationCard = card
+                selectedSourceItem = identity.item
+                selectedCardIdentity = identity
+            }
+            is LibraryCardIdentity.Promotion -> {
+                activeActionGuard = null
+                pendingInitialOperation = null
+                selectedFocusRestoreListIndex = null
+                selectedPresentationCard = card
+                selectedSourceItem = null
+                selectedCardIdentity = identity
+            }
+            is LibraryCardIdentity.Canonical -> lifecycleScope.launch {
+                when (
+                    val result = onRouteCanonicalAction(
+                        identity.key,
+                        OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                        null,
+                        false,
+                    )
+                ) {
+                    is OwnedCopyRouteResult.Ready -> {
+                        activeActionGuard = result.guard
+                        pendingInitialOperation = null
+                        selectedFocusRestoreListIndex = originatingListIndex
+                        selectedPresentationCard = card
+                        selectedSourceItem = result.guard.initialLibraryItem
+                        selectedCardIdentity = identity
+                    }
+                    is OwnedCopyRouteResult.NeedsChooser -> {
+                        openCopiesSheet(identity.key, originatingListIndex)
+                    }
+                    is OwnedCopyRouteResult.Unavailable -> {
+                        SnackbarManager.show(context.getString(R.string.canonical_copy_state_changed))
+                        onRefresh()
+                    }
+                }
+            }
+        }
+    }
+
+    fun routeExplicitCopy(
+        cardKey: CanonicalCardKey,
+        copyKey: OwnedCopyKey,
+        operation: OwnedCopyOperation,
+        rememberChoice: Boolean,
+    ) {
+        copiesActionInProgress = true
+        copiesSheetFeedback = null
+        lifecycleScope.launch {
+            when (
+                val result = onRouteCanonicalAction(
+                    cardKey,
+                    operation,
+                    copyKey,
+                    rememberChoice,
+                )
+            ) {
+                is OwnedCopyRouteResult.Ready -> {
+                    if (result.warning == ActionFailureReason.PREFERENCE_WRITE_FAILED) {
+                        SnackbarManager.show(
+                            context.getString(R.string.canonical_preference_not_remembered),
+                        )
+                    }
+                    activeActionGuard = result.guard
+                    pendingInitialOperation = operation.takeUnless {
+                        it == OwnedCopyOperation.OPEN_SOURCE_DETAILS
+                    }
+                    selectedFocusRestoreListIndex = copiesOriginListIndex
+                    selectedPresentationCard = state.cards.firstOrNull { candidate ->
+                        (candidate.identity as? LibraryCardIdentity.Canonical)?.key == cardKey
+                    } ?: selectedPresentationCard?.takeIf { candidate ->
+                        (candidate.identity as? LibraryCardIdentity.Canonical)?.key == cardKey
+                    }
+                    selectedSourceItem = result.guard.initialLibraryItem
+                    selectedCardIdentity = LibraryCardIdentity.Canonical(cardKey)
+                    dismissCopiesSheet(restoreCardFocus = false)
+                }
+                is OwnedCopyRouteResult.NeedsChooser,
+                is OwnedCopyRouteResult.Unavailable,
+                -> {
+                    copiesActionInProgress = false
+                    copiesSheetFeedback = CanonicalCopiesFeedback.COPY_STATE_CHANGED
+                    onRefresh()
+                }
+            }
+        }
+    }
+
     val storagePermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
     ) { }
@@ -491,27 +653,46 @@ private fun LibraryScreenContent(
         onOptionsPanelToggle(false)
     }
 
-    BackHandler(enabled = state.isSearching && selectedAppId == null) {
+    BackHandler(enabled = state.isSearching && selectedCardIdentity == null) {
         onIsSearching(false)
         onSearchQuery("")
     }
 
-    BackHandler(selectedLibraryCard != null) {
-        selectedAppId = null
-        selectedLibraryCard = null
+    BackHandler(enabled = selectedCardIdentity != null) {
+        clearSelectedSource()
+    }
+
+    BackHandler(enabled = copiesSheetCardKey != null) {
+        dismissCopiesSheet()
     }
 
     // Restore focus when returning from game detail (without reloading list)
-    LaunchedEffect(selectedAppId) {
-        if (selectedAppId != null) {
+    LaunchedEffect(selectedCardIdentity) {
+        if (selectedCardIdentity != null) {
             controllerBootstrapNeeded = true
         }
-        if (selectedAppId == null) {
+        if (selectedCardIdentity == null) {
             // Brief delay to let the UI settle after transition
             kotlinx.coroutines.delay(100)
-            // Restore focus to content area
+            // Canonical routes restore their exact origin; source-native routes preserve legacy focus behavior.
             if (isListFocusable()) {
-                requestContentFocusOrDefer()
+                requestContentFocusOrDefer(
+                    selectedFocusRestoreListIndex ?: preferredContentFocusIndex(),
+                )
+                selectedFocusRestoreListIndex = null
+            } else {
+                selectedFocusRestoreListIndex = null
+                requestRootFocusSafe()
+            }
+        }
+    }
+
+    LaunchedEffect(pendingCopiesFocusRestore, copiesSheetCardKey) {
+        if (pendingCopiesFocusRestore && copiesSheetCardKey == null) {
+            pendingCopiesFocusRestore = false
+            kotlinx.coroutines.delay(100)
+            if (isListFocusable()) {
+                requestContentFocusOrDefer(copiesOriginListIndex)
             } else {
                 requestRootFocusSafe()
             }
@@ -532,7 +713,7 @@ private fun LibraryScreenContent(
     // The detail (game) page deliberately does NOT use this — the hero image is meant
     // to bleed through the cutout, so AppScreenContent insets only the elements that
     // need to stay tappable (e.g. the back button) instead.
-    val safePaddingModifier = if (selectedLibraryCard == null) {
+    val safePaddingModifier = if (selectedCardIdentity == null) {
         Modifier.windowInsetsPadding(
             WindowInsets.statusBars
                 .union(WindowInsets.displayCutout)
@@ -548,7 +729,7 @@ private fun LibraryScreenContent(
         kotlinx.coroutines.delay(150)
 
         // The user may have moved focus up into the tab bar during the delay; don't yank it back.
-        if (tabBarHasFocus) return@LaunchedEffect
+        if (copiesSheetCardKey != null || tabBarHasFocus) return@LaunchedEffect
 
         if (isListFocusable()) {
             // Empty tab - focus root so bumpers still work
@@ -563,13 +744,14 @@ private fun LibraryScreenContent(
         pendingGridFocusRequest,
         gridFocusTargetListIndex,
         state.cards.size,
-        selectedAppId,
+        selectedCardIdentity,
+        copiesSheetCardKey,
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
         state.isSearching,
     ) {
         if (pendingGridFocusRequest && isListFocusable()) {
-            if (selectedAppId == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching) {
+            if (copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching) {
                 var retries = 0
                 while (pendingGridFocusRequest && retries < 8) {
                     try {
@@ -589,13 +771,14 @@ private fun LibraryScreenContent(
         pendingCarouselFocusRequest,
         carouselFocusTargetListIndex,
         state.cards.size,
-        selectedAppId,
+        selectedCardIdentity,
+        copiesSheetCardKey,
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
         state.isSearching,
     ) {
         if (pendingCarouselFocusRequest && isListFocusable()) {
-            if (selectedAppId == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching) {
+            if (copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching) {
                 val targetIndex = currentCarouselFocusTargetIndex()
                 if (carouselListState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }) {
                     carouselListState.scrollToItem(targetIndex)
@@ -617,7 +800,8 @@ private fun LibraryScreenContent(
     // If the app list starts empty and populates later, bootstrap controller focus once content is ready.
     LaunchedEffect(
         state.cards.size,
-        selectedAppId,
+        selectedCardIdentity,
+        copiesSheetCardKey,
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
         state.isSearching,
@@ -626,10 +810,10 @@ private fun LibraryScreenContent(
         val listBecameNonEmpty = previousAppCount == 0 && currentCount > 0
         val listBecameEmpty = previousAppCount > 0 && currentCount == 0
 
-        if (listBecameNonEmpty && selectedAppId == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !tabBarHasFocus) {
+        if (listBecameNonEmpty && copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !tabBarHasFocus) {
             requestContentFocusOrDefer()
         }
-        if (listBecameEmpty && selectedAppId == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !tabBarHasFocus) {
+        if (listBecameEmpty && copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !tabBarHasFocus) {
             // Empty tabs can drop focused children; re-anchor focus at the root so bumper nav keeps working.
             requestRootFocusSafe()
         }
@@ -638,11 +822,11 @@ private fun LibraryScreenContent(
     }
 
     // Restore focus when System Menu or Options Panel closes
-    LaunchedEffect(isSystemMenuOpen, state.isOptionsPanelOpen) {
+    LaunchedEffect(isSystemMenuOpen, state.isOptionsPanelOpen, copiesSheetCardKey) {
         val systemMenuJustClosed = wasSystemMenuOpen && !isSystemMenuOpen
         val optionsPanelJustClosed = wasOptionsPanelOpen && !state.isOptionsPanelOpen
 
-        if ((systemMenuJustClosed || optionsPanelJustClosed) && !state.isSearching) {
+        if ((systemMenuJustClosed || optionsPanelJustClosed) && copiesSheetCardKey == null && !state.isSearching) {
             // Give a brief moment for the overlay to animate out
             kotlinx.coroutines.delay(50)
             // Restore focus to the active content layout
@@ -664,7 +848,8 @@ private fun LibraryScreenContent(
     // Helper functions defined in composable scope to capture latest state on each recomposition.
     val canBootstrapContentFocus: () -> Boolean = {
         val now = SystemClock.uptimeMillis()
-        selectedAppId == null &&
+        selectedCardIdentity == null &&
+            copiesSheetCardKey == null &&
             !isSystemMenuOpen &&
             !state.isOptionsPanelOpen &&
             !state.isSearching &&
@@ -675,7 +860,8 @@ private fun LibraryScreenContent(
             (now - lastBootstrapAtMs) > 250L
     }
     val canNavigateTabsWithoutFocus: () -> Boolean = {
-        selectedAppId == null &&
+        selectedCardIdentity == null &&
+            copiesSheetCardKey == null &&
             !isSystemMenuOpen &&
             !state.isOptionsPanelOpen &&
             !state.isSearching &&
@@ -786,7 +972,8 @@ private fun LibraryScreenContent(
                 // Handle gamepad buttons
                 if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
                     val keyCode = keyEvent.nativeKeyEvent.keyCode
-                    val canBootstrapContentFocus = selectedAppId == null &&
+                    val canBootstrapContentFocus = selectedCardIdentity == null &&
+                        copiesSheetCardKey == null &&
                         !state.isOptionsPanelOpen &&
                         !isSystemMenuOpen &&
                         !state.isSearching &&
@@ -817,7 +1004,7 @@ private fun LibraryScreenContent(
 
                         // L1 button - previous tab
                         KeyEvent.KEYCODE_BUTTON_L1 -> {
-                            if (selectedAppId == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
+                            if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
                                 if (canBootstrapContentFocus) {
                                     requestContentFocusOrDefer()
                                 }
@@ -830,7 +1017,7 @@ private fun LibraryScreenContent(
 
                         // R1 button - next tab
                         KeyEvent.KEYCODE_BUTTON_R1 -> {
-                            if (selectedAppId == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
+                            if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
                                 if (canBootstrapContentFocus) {
                                     requestContentFocusOrDefer()
                                 }
@@ -843,7 +1030,7 @@ private fun LibraryScreenContent(
 
                         // SELECT button - toggle options panel (library filters/sort)
                         KeyEvent.KEYCODE_BUTTON_SELECT -> {
-                            if (selectedAppId == null && !isSystemMenuOpen) {
+                            if (copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen) {
                                 onOptionsPanelToggle(!state.isOptionsPanelOpen)
                                 true
                             } else {
@@ -855,7 +1042,7 @@ private fun LibraryScreenContent(
                         KeyEvent.KEYCODE_BUTTON_START,
                         KeyEvent.KEYCODE_MENU,
                         -> {
-                            if (selectedAppId == null && !state.isOptionsPanelOpen) {
+                            if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isOptionsPanelOpen) {
                                 isSystemMenuOpen = !isSystemMenuOpen
                                 true
                             } else {
@@ -865,7 +1052,7 @@ private fun LibraryScreenContent(
 
                         // Y button - toggle search
                         KeyEvent.KEYCODE_BUTTON_Y -> {
-                            if (selectedAppId == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
+                            if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
                                 onIsSearching(!state.isSearching)
                                 true
                             } else {
@@ -875,7 +1062,7 @@ private fun LibraryScreenContent(
 
                         // X button - add custom game
                         KeyEvent.KEYCODE_BUTTON_X -> {
-                            if (!BuildConfig.MODERN_ANDROID && selectedAppId == null && !state.isSearching && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
+                            if (!BuildConfig.MODERN_ANDROID && copiesSheetCardKey == null && selectedCardIdentity == null && !state.isSearching && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
                                 onAddCustomGameClick()
                                 true
                             } else {
@@ -885,7 +1072,10 @@ private fun LibraryScreenContent(
 
                         // B button - contextual back / open system menu
                         KeyEvent.KEYCODE_BUTTON_B -> {
-                            if (selectedAppId != null) {
+                            if (copiesSheetCardKey != null) {
+                                dismissCopiesSheet()
+                                true
+                            } else if (selectedCardIdentity != null) {
                                 // Let LibraryAppScreen handle its own B-button
                                 false
                             } else if (isSystemMenuOpen) {
@@ -912,7 +1102,7 @@ private fun LibraryScreenContent(
                 }
             }
     ) {
-        if (selectedAppId == null) {
+        if (selectedCardIdentity == null) {
             // Use Box to allow content to scroll behind the tab bar
             Box(modifier = Modifier.fillMaxSize()) {
                 // When on Steam/GOG/Epic/Amazon tab and not logged in, or LOCAL tab with no custom games, show splash
@@ -921,8 +1111,7 @@ private fun LibraryScreenContent(
                         RecommendedTabPane(
                             currentPaneType = currentPaneType,
                             onNavigate = { item ->
-                                selectedAppId = item.appId
-                                selectedLibraryCard = LibraryCard.fromPromotion(item)
+                                openCard(LibraryCard.fromPromotion(item), item.index)
                             },
                             modifier = Modifier.fillMaxSize(),
                             firstCarouselItemFocusRequester = carouselFocusRequester,
@@ -994,8 +1183,13 @@ private fun LibraryScreenContent(
                             listState = carouselListState,
                             onPageChange = onPageChange,
                             onNavigate = { card ->
-                                selectedAppId = card.composeKey
-                                selectedLibraryCard = card
+                                openCard(card, card.index)
+                            },
+                            onCopies = { card, listIndex ->
+                                val canonical = card.identity as? LibraryCardIdentity.Canonical
+                                if (canonical != null) {
+                                    openCopiesSheet(canonical.key, listIndex)
+                                }
                             },
                             onRefresh = onRefresh,
                             modifier = Modifier.fillMaxSize(),
@@ -1012,8 +1206,13 @@ private fun LibraryScreenContent(
                             focusTargetListIndex = gridFocusTargetListIndex,
                             onPageChange = onPageChange,
                             onNavigate = { card ->
-                                selectedAppId = card.composeKey
-                                selectedLibraryCard = card
+                                openCard(card, card.index)
+                            },
+                            onCopies = { card, listIndex ->
+                                val canonical = card.identity as? LibraryCardIdentity.Canonical
+                                if (canonical != null) {
+                                    openCopiesSheet(canonical.key, listIndex)
+                                }
                             },
                             onRefresh = onRefresh,
                             modifier = Modifier.fillMaxSize(),
@@ -1085,23 +1284,26 @@ private fun LibraryScreenContent(
             }
         } else {
             LibraryDetailPane(
-                card = selectedLibraryCard,
-                onBack = {
-                    selectedAppId = null
-                    selectedLibraryCard = null
+                card = selectedPresentationCard,
+                sourceItem = selectedSourceItem,
+                onCopies = (selectedCardIdentity as? LibraryCardIdentity.Canonical)?.let { canonical ->
+                    {
+                        openCopiesSheet(canonical.key, selectedOriginListIndex)
+                    }
                 },
-                onClickPlay = {
-                    selectedLibraryCard?.sourceItemOrNull()?.let { libraryItem ->
-                        onClickPlay(libraryItem.appId, it)
+                onBack = ::clearSelectedSource,
+                onClickPlay = { confirm ->
+                    selectedSourceItem?.let { libraryItem ->
+                        onClickPlay(libraryItem.appId, confirm)
                     }
                 },
                 onTestGraphics = {
-                    selectedLibraryCard?.sourceItemOrNull()?.let { libraryItem ->
+                    selectedSourceItem?.let { libraryItem ->
                         onTestGraphics(libraryItem.appId)
                     }
                 },
                 onPlayWithDiagnostics = {
-                    selectedLibraryCard?.sourceItemOrNull()?.let { libraryItem ->
+                    selectedSourceItem?.let { libraryItem ->
                         onPlayWithDiagnostics(libraryItem.appId)
                     }
                 },
@@ -1109,7 +1311,7 @@ private fun LibraryScreenContent(
         }
 
         // Bottom action bar
-        if (selectedAppId == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
+        if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
             val libraryActions = if (state.isSearching) {
                 listOf(
                     LibraryActions.select,
@@ -1166,7 +1368,7 @@ private fun LibraryScreenContent(
         }
 
         // Options panel (SELECT) - renders on top of everything
-        if (selectedAppId == null) {
+        if (selectedCardIdentity == null) {
             LibraryOptionsPanel(
                 isOpen = state.isOptionsPanelOpen,
                 onDismiss = { onOptionsPanelToggle(false) },
@@ -1237,6 +1439,96 @@ private fun LibraryScreenContent(
                     )
                 },
             )
+        }
+
+        val currentCopiesCard = copiesSheetCardKey?.let(canonicalCard)
+        if (currentCopiesCard != null) {
+            CanonicalCopiesSheet(
+                card = currentCopiesCard,
+                sheetState = sheetState,
+                onDismissRequest = { dismissCopiesSheet() },
+                onOperation = { copy, operation, rememberChoice ->
+                    routeExplicitCopy(
+                        cardKey = currentCopiesCard.key,
+                        copyKey = copy.key,
+                        operation = operation,
+                        rememberChoice = rememberChoice,
+                    )
+                },
+                onUseAutomaticSelection = {
+                    copiesActionInProgress = true
+                    copiesSheetFeedback = null
+                    lifecycleScope.launch {
+                        when (onUseAutomaticCopySelection(currentCopiesCard.key)) {
+                            CanonicalCopyChangeResult.SUCCESS -> {
+                                copiesActionInProgress = false
+                            }
+                            CanonicalCopyChangeResult.TRANSACTION_FAILED -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.PREFERENCE_CLEAR_FAILED
+                            }
+                            CanonicalCopyChangeResult.INVALID_REQUEST,
+                            CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED,
+                            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+                            -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.COPY_STATE_CHANGED
+                                onRefresh()
+                            }
+                        }
+                    }
+                },
+                onSeparateCopy = { copy ->
+                    copiesActionInProgress = true
+                    copiesSheetFeedback = null
+                    lifecycleScope.launch {
+                        when (onSeparateCanonicalCopy(currentCopiesCard.key, copy.key)) {
+                            CanonicalCopyChangeResult.SUCCESS -> dismissCopiesSheet()
+                            CanonicalCopyChangeResult.TRANSACTION_FAILED -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.MUTATION_FAILED
+                            }
+                            CanonicalCopyChangeResult.INVALID_REQUEST,
+                            CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED,
+                            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+                            -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.COPY_STATE_CHANGED
+                                onRefresh()
+                            }
+                        }
+                    }
+                },
+                onResetDecision = { copy ->
+                    copiesActionInProgress = true
+                    copiesSheetFeedback = null
+                    lifecycleScope.launch {
+                        when (onResetCanonicalDecision(currentCopiesCard.key, copy.key)) {
+                            CanonicalCopyChangeResult.SUCCESS -> dismissCopiesSheet()
+                            CanonicalCopyChangeResult.TRANSACTION_FAILED -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.MUTATION_FAILED
+                            }
+                            CanonicalCopyChangeResult.INVALID_REQUEST,
+                            CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED,
+                            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+                            -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.COPY_STATE_CHANGED
+                                onRefresh()
+                            }
+                        }
+                    }
+                },
+                feedback = copiesSheetFeedback,
+                actionInProgress = copiesActionInProgress,
+            )
+        }
+
+        LaunchedEffect(copiesSheetCardKey, currentCopiesCard) {
+            if (copiesSheetCardKey != null && currentCopiesCard == null) {
+                dismissCopiesSheet(restoreCardFocus = selectedCardIdentity == null)
+            }
         }
 
         // Add custom game dialog
@@ -1376,6 +1668,13 @@ private fun Preview_LibraryScreenContent() {
             },
             onPreviousTab = {},
             onNextTab = {},
+            canonicalCard = { null },
+            onRouteCanonicalAction = { _, _, _, _ ->
+                OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
+            },
+            onUseAutomaticCopySelection = { CanonicalCopyChangeResult.INVALID_REQUEST },
+            onSeparateCanonicalCopy = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+            onResetCanonicalDecision = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
         )
     }
 }

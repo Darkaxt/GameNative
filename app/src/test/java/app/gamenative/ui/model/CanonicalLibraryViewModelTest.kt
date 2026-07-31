@@ -36,14 +36,26 @@ import app.gamenative.events.AndroidEvent
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CanonicalLibraryRepository
+import app.gamenative.library.canonical.CanonicalMutationRepository
+import app.gamenative.library.canonical.CanonicalProjectionClock
 import app.gamenative.library.canonical.CanonicalProjectionReadiness
 import app.gamenative.library.canonical.CanonicalPublicFailure
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
+import app.gamenative.library.canonical.PreferredCopyRepository
 import app.gamenative.library.canonical.PrefManagerCanonicalPublicLibraryGate
+import app.gamenative.library.canonical.action.ActionFailureReason
+import app.gamenative.library.canonical.action.ActionSelectionPolicy
+import app.gamenative.library.canonical.action.OwnedCopyActionGuard
+import app.gamenative.library.canonical.action.OwnedCopyActionRouter
+import app.gamenative.library.canonical.action.OwnedCopyRouteResult
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntime
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
+import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
+import app.gamenative.library.canonical.source.OwnedCopyProjection
+import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonService
@@ -65,6 +77,7 @@ import app.gamenative.utils.GpuGameStatsCache
 import io.mockk.clearAllMocks
 import io.mockk.clearMocks
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -2761,6 +2774,295 @@ class CanonicalLibraryViewModelTest {
         }
     }
 
+    @Test
+    fun `canonical selection routes the exact current card and explicit copy through owned router`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Exact routed card",
+            copyKeys = listOf(steamKey, gogKey),
+        )
+        val router = mockk<OwnedCopyActionRouter>()
+        val ready = OwnedCopyRouteResult.Ready(
+            guard = mockk<OwnedCopyActionGuard>(),
+            policy = ActionSelectionPolicy.EXPLICIT,
+        )
+        coEvery {
+            router.route(
+                card = grouped,
+                operation = OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                explicitKey = gogKey,
+                rememberChoice = false,
+            )
+        } returns ready
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            actionRouter = router,
+        )
+        runCurrent()
+
+        assertEquals(
+            ready,
+            vm.routeCanonicalAction(
+                key = grouped.key,
+                operation = OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                explicitKey = gogKey,
+                rememberChoice = false,
+            ),
+        )
+        coVerify(exactly = 1) {
+            router.route(grouped, OwnedCopyOperation.OPEN_SOURCE_DETAILS, gogKey, false)
+        }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `canonical routing failure returns fixed unavailable result`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Route failure",
+            copyKeys = listOf(steamKey, gogKey),
+        )
+        val router = mockk<OwnedCopyActionRouter>()
+        coEvery { router.route(any(), any(), any(), any()) } throws
+            IllegalStateException("private router detail")
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            actionRouter = router,
+        )
+        runCurrent()
+
+        assertEquals(
+            OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE),
+            vm.routeCanonicalAction(
+                key = grouped.key,
+                operation = OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+            ),
+        )
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `separate copy re-resolves exact key and forwards only current runtime metadata`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Grouped",
+            copyKeys = listOf(steamKey, epicKey),
+        )
+        val currentRuntime = runtime(epicKey).copy(
+            nativeTitle = "Current runtime title",
+            developerKey = "current-developer",
+            releaseYear = 2025,
+            appType = CanonicalAppType.APPLICATION,
+            genreKeys = linkedSetOf("epic:current-genre"),
+            tagIds = linkedSetOf(7, 9),
+            featureKeys = linkedSetOf("epic:current-feature"),
+        )
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(currentRuntime)
+        val mutations = mockk<CanonicalMutationRepository>()
+        coEvery { mutations.unmergeCopy(any(), any(), any()) } returns canonicalId(90).value
+        val clock = CanonicalProjectionClock { 456L }
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+            projectionClock = clock,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.SUCCESS,
+            vm.separateCanonicalCopy(grouped.key, epicKey),
+        )
+        coVerify(exactly = 1) { registry.resolve(epicKey) }
+        coVerify(exactly = 1) {
+            mutations.unmergeCopy(
+                key = epicKey,
+                current = OwnedCopyProjection(
+                    key = epicKey,
+                    displayName = "Current runtime title",
+                    developer = "current-developer",
+                    releaseYear = 2025,
+                    appType = CanonicalAppType.APPLICATION,
+                    genreKeys = linkedSetOf("epic:current-genre"),
+                    tagIds = linkedSetOf(7, 9),
+                    featureKeys = linkedSetOf("epic:current-feature"),
+                ),
+                nowEpochMs = 456L,
+            )
+        }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `separate failure leaves grouped snapshot unchanged and account or gate change blocks mutation`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Still grouped",
+            copyKeys = listOf(steamKey, epicKey),
+        )
+        val gateEnabled = AtomicBoolean(true)
+        val gate = CanonicalPublicLibraryGate { gateEnabled.get() }
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(runtime(epicKey))
+        val mutations = mockk<CanonicalMutationRepository>()
+        coEvery { mutations.unmergeCopy(any(), any(), any()) } throws IllegalStateException("private transaction detail")
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            gate = gate,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.TRANSACTION_FAILED,
+            vm.separateCanonicalCopy(grouped.key, epicKey),
+        )
+        assertEquals(grouped, vm.canonicalCard(grouped.key))
+
+        gateEnabled.set(false)
+        assertEquals(
+            CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED,
+            vm.separateCanonicalCopy(grouped.key, epicKey),
+        )
+        coVerify(exactly = 1) { registry.resolve(epicKey) }
+        coVerify(exactly = 1) { mutations.unmergeCopy(any(), any(), any()) }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `runtime resolution failure returns fixed copy-state result without mutating`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Runtime failure",
+            copyKeys = listOf(steamKey, epicKey),
+        )
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } throws IllegalStateException("private runtime detail")
+        val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+            vm.separateCanonicalCopy(grouped.key, epicKey),
+        )
+        coVerify(exactly = 0) { mutations.unmergeCopy(any(), any(), any()) }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `reset runtime resolution failure returns fixed copy-state result without mutating`() = runTest(dispatcher) {
+        val rejectedCopy = copy(
+            key = gogKey,
+            nativeTitle = "Rejected copy",
+            confidence = MatchConfidence.REJECTED,
+        ).copy(decisionSource = MatchDecisionSource.USER)
+        val independent = card(name = "Rejected", copyKeys = listOf(gogKey)).copy(
+            key = CanonicalCardKey.Independent(gogKey),
+            copies = listOf(rejectedCopy),
+            ownedSources = setOf(GameSource.GOG),
+            preferredCopy = null,
+        )
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(gogKey) } throws IllegalStateException("private runtime detail")
+        val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(independent))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+            vm.resetCanonicalDecision(independent.key, gogKey),
+        )
+        coVerify(exactly = 0) { mutations.resetDecision(any(), any()) }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `reset accepts exact current-account unavailable key but blocks hidden entitlement`() = runTest(dispatcher) {
+        val rejectedCopy = copy(
+            key = gogKey,
+            nativeTitle = "Rejected copy",
+            confidence = MatchConfidence.REJECTED,
+        ).copy(decisionSource = MatchDecisionSource.USER)
+        val independent = card(name = "Rejected", copyKeys = listOf(gogKey)).copy(
+            key = CanonicalCardKey.Independent(gogKey),
+            copies = listOf(rejectedCopy),
+            ownedSources = setOf(GameSource.GOG),
+            preferredCopy = null,
+        )
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(gogKey) } returns OwnedCopyRuntimeResult.Unavailable(
+            key = gogKey,
+            reason = CopyUnavailableReason.SOURCE_READ_FAILED,
+        )
+        val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(independent))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry,
+            mutationRepository = mutations,
+            projectionClock = CanonicalProjectionClock { 789L },
+        )
+        runCurrent()
+
+        assertEquals(CanonicalCopyChangeResult.SUCCESS, vm.resetCanonicalDecision(independent.key, gogKey))
+        coVerify(exactly = 1) { mutations.resetDecision(gogKey, 789L) }
+
+        coEvery { registry.resolve(gogKey) } returns OwnedCopyRuntimeResult.Hidden
+        assertEquals(
+            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+            vm.resetCanonicalDecision(independent.key, gogKey),
+        )
+        coVerify(exactly = 1) { mutations.resetDecision(gogKey, 789L) }
+        viewModelStore.clear()
+    }
+
+    @Test
+    fun `automatic selection clear is gate checked and failed write keeps preferred marker`() = runTest(dispatcher) {
+        val grouped = card(
+            name = "Preferred grouped",
+            copyKeys = listOf(steamKey, gogKey),
+            preferred = gogKey,
+        )
+        val preferences = mockk<PreferredCopyRepository>()
+        coEvery { preferences.clearPreferredCopy(grouped.canonicalId, any()) } throws
+            IllegalStateException("private preference detail")
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(grouped))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            preferredCopyRepository = preferences,
+            projectionClock = CanonicalProjectionClock { 321L },
+        )
+        runCurrent()
+
+        assertEquals(
+            CanonicalCopyChangeResult.TRANSACTION_FAILED,
+            vm.useAutomaticCopySelection(grouped.key),
+        )
+        assertEquals(gogKey, vm.canonicalCard(grouped.key)?.preferredCopy)
+        coVerify(exactly = 1) { preferences.clearPreferredCopy(grouped.canonicalId, 321L) }
+        viewModelStore.clear()
+    }
+
     private fun stubSuccessfulRefreshPipeline(
         deviceStats: Map<GameSource, Map<String, DeviceGameStats>>,
         gpuStats: Map<GameSource, Map<String, DeviceGameStats>>,
@@ -2824,6 +3126,10 @@ class CanonicalLibraryViewModelTest {
         gogRows: Flow<List<GOGGame>> = emptyFlow(),
         gate: CanonicalPublicLibraryGate = CanonicalPublicLibraryGate { gateEnabled },
         ioDispatcher: CoroutineDispatcher = dispatcher,
+        actionRouter: OwnedCopyActionRouter = mockk(relaxed = true),
+        preferredCopyRepository: PreferredCopyRepository = mockk(relaxed = true),
+        mutationRepository: CanonicalMutationRepository = mockk(relaxed = true),
+        projectionClock: CanonicalProjectionClock = CanonicalProjectionClock { 1L },
     ): LibraryViewModel {
         val history = mockk<LibraryPlayHistoryDao>(relaxed = true)
         every { history.getAll() } returns emptyFlow()
@@ -2846,6 +3152,10 @@ class CanonicalLibraryViewModelTest {
             canonicalPublicLibraryGate = gate,
             canonicalProjectionReadiness = readiness,
             runtimeRegistry = runtimeRegistry,
+            actionRouter = actionRouter,
+            preferredCopyRepository = preferredCopyRepository,
+            canonicalMutationRepository = mutationRepository,
+            canonicalProjectionClock = projectionClock,
             canonicalDispatcher = ioDispatcher,
         ).also { viewModel ->
             latestVm = viewModel
@@ -2963,6 +3273,49 @@ class CanonicalLibraryViewModelTest {
         decisionSource = MatchDecisionSource.AUTOMATIC,
     )
 
+    private fun runtime(key: OwnedCopyKey): OwnedCopyRuntime {
+        val reference = when (key.source) {
+            GameSource.STEAM -> SourceOwnedCopyReference.Steam(key, key.stableSourceId.toIntOrNull() ?: 10)
+            GameSource.GOG -> SourceOwnedCopyReference.Gog(key, key.stableSourceId)
+            GameSource.EPIC -> SourceOwnedCopyReference.Epic(key, 31, "current-namespace", "current-catalog")
+            GameSource.AMAZON -> SourceOwnedCopyReference.Amazon(key, 41, "current-product", "current-entitlement")
+            GameSource.CUSTOM_GAME -> SourceOwnedCopyReference.Custom(key, key.stableSourceId.toIntOrNull() ?: 50)
+        }
+        return OwnedCopyRuntime(
+            key = key,
+            reference = reference,
+            libraryItem = LibraryItem(
+                appId = "${key.source.name}_runtime",
+                name = "Runtime item",
+                gameSource = key.source,
+            ),
+            nativeTitle = "Runtime title",
+            aliases = emptySet(),
+            developerKey = "runtime-developer",
+            releaseYear = 2024,
+            appType = CanonicalAppType.GAME,
+            genreKeys = setOf("runtime:genre"),
+            tagIds = setOf(1),
+            featureKeys = setOf("runtime:feature"),
+            iconUrl = "",
+            capsuleImageUrl = "",
+            headerImageUrl = "",
+            heroImageUrl = "",
+            gridHeroImageScale = 1f,
+            installPath = "private-runtime-path",
+            installedSizeBytes = 1L,
+            branchOrVersion = "runtime-branch",
+            isInstalled = true,
+            isDownloading = false,
+            hasPartialDownload = false,
+            updateAvailable = false,
+            isShared = false,
+            lastPlayedEpochMs = null,
+            playtimeMinutes = null,
+            capabilities = setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS),
+        )
+    }
+
     private fun filters(vararg filters: AppFilter): EnumSet<AppFilter> =
         if (filters.isEmpty()) EnumSet.noneOf(AppFilter::class.java)
         else EnumSet.copyOf(filters.toList())
@@ -3045,6 +3398,7 @@ class CanonicalLibraryViewModelTest {
         val accountScope = AccountScope("a".repeat(64))
         val steamKey = OwnedCopyKey(accountScope, GameSource.STEAM, "10")
         val gogKey = OwnedCopyKey(accountScope, GameSource.GOG, "11")
+        val epicKey = OwnedCopyKey(accountScope, GameSource.EPIC, "epic-current")
         val otherCanonicalId = CanonicalGameId.parse("99999999-9999-9999-9999-999999999999")
     }
 }
