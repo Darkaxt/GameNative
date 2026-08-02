@@ -10,6 +10,7 @@ import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
 import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.data.canonical.ClassificationState
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
+import app.gamenative.data.canonical.SteamTagDictionaryEntity
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.db.dao.GameDetailSnapshotDao
 import app.gamenative.library.metadata.CanonicalGameMetadata
@@ -17,8 +18,10 @@ import app.gamenative.library.metadata.GameMetadataProvenance
 import app.gamenative.library.metadata.MetadataFacet
 import app.gamenative.library.metadata.MetadataField
 import app.gamenative.library.metadata.MetadataProvider
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -46,6 +49,34 @@ class GameFacetRepositoryTest {
     @After
     fun tearDown() {
         database.close()
+    }
+
+    @Test
+    fun steamTagDictionaryBulkUpsertPublishesLocalizedFacetsReactively() = runTest {
+        val repository = RoomGameFacetRepository(
+            database = database,
+            facetDao = database.canonicalFacetDao(),
+            snapshotDao = database.gameDetailSnapshotDao(),
+        )
+        val emission = async {
+            repository.observeSteamTags().first { facets -> facets.size == 2 }
+        }
+
+        database.canonicalFacetDao().upsertSteamTags(
+            listOf(
+                SteamTagDictionaryEntity(492, "en-US", "Indie", 1L),
+                SteamTagDictionaryEntity(19, "en-US", "Action", 1L),
+            ),
+        )
+
+        assertEquals(
+            listOf(SteamTagFacet(19, "Action"), SteamTagFacet(492, "Indie")),
+            emission.await(),
+        )
+        assertEquals(
+            listOf(19, 492),
+            database.canonicalFacetDao().getSteamTags("en-US").map { it.tagId }.sorted(),
+        )
     }
 
     @Test

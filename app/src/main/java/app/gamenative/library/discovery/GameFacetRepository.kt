@@ -9,9 +9,14 @@ import app.gamenative.db.dao.CanonicalFacetDao
 import app.gamenative.db.dao.GameDetailSnapshotDao
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.MetadataFacet
+import app.gamenative.library.metadata.MetadataLocale
+import app.gamenative.library.metadata.MetadataLocaleProvider
 import app.gamenative.library.metadata.sanitizeSteamText
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -23,6 +28,11 @@ interface GameFacetRepository {
         snapshot: GameDetailSnapshotEntity,
     )
 
+    fun observeSteamTags(): Flow<List<SteamTagFacet>> = emptyFlow()
+
+    suspend fun refreshSteamTags(): SteamTagDictionaryRefreshResult =
+        SteamTagDictionaryRefreshResult.Failed
+
     fun resolveGenres(
         keys: Set<String>,
         snapshots: List<GameDetailSnapshotEntity>,
@@ -30,11 +40,42 @@ interface GameFacetRepository {
 }
 
 @Singleton
-class RoomGameFacetRepository @Inject constructor(
+class RoomGameFacetRepository private constructor(
     private val database: PluviaDatabase,
     private val facetDao: CanonicalFacetDao,
     private val snapshotDao: GameDetailSnapshotDao,
+    private val tagDictionary: TagDictionaryDependencies,
 ) : GameFacetRepository {
+    private val tagDictionaryProvider get() = tagDictionary.provider
+    private val localeProvider get() = tagDictionary.localeProvider
+
+    @Inject
+    constructor(
+        database: PluviaDatabase,
+        facetDao: CanonicalFacetDao,
+        snapshotDao: GameDetailSnapshotDao,
+        tagDictionaryProvider: SteamTagDictionaryProvider,
+        localeProvider: MetadataLocaleProvider,
+    ) : this(
+        database,
+        facetDao,
+        snapshotDao,
+        TagDictionaryDependencies(tagDictionaryProvider, localeProvider),
+    )
+
+    internal constructor(
+        database: PluviaDatabase,
+        facetDao: CanonicalFacetDao,
+        snapshotDao: GameDetailSnapshotDao,
+    ) : this(
+        database,
+        facetDao,
+        snapshotDao,
+        TagDictionaryDependencies(
+            provider = null,
+            localeProvider = MetadataLocaleProvider { MetadataLocale("en-US", "US") },
+        ),
+    )
     override suspend fun upsertSteamGenresAndSnapshot(
         canonicalId: CanonicalGameId,
         genres: List<MetadataFacet>,
@@ -53,6 +94,29 @@ class RoomGameFacetRepository @Inject constructor(
             snapshotDao.upsert(snapshot)
         }
     }
+
+    override fun observeSteamTags(): Flow<List<SteamTagFacet>> {
+        val locale = localeProvider.current().normalizedLocale
+        return facetDao.observeSteamTags(locale).map { entities ->
+            entities.mapNotNull { entity ->
+                val tagId = entity.tagId.takeIf { it > 0 } ?: return@mapNotNull null
+                val label = sanitizeSteamText(entity.label)
+                    ?.take(MAX_TAG_LABEL_LENGTH)
+                    ?.takeIf(String::isNotBlank)
+                    ?: return@mapNotNull null
+                SteamTagFacet(tagId, label)
+            }.distinctBy(SteamTagFacet::tagId)
+                .sortedWith(
+                    compareBy<SteamTagFacet> { it.label.lowercase() }
+                        .thenBy(SteamTagFacet::label)
+                        .thenBy(SteamTagFacet::tagId),
+                )
+        }
+    }
+
+    override suspend fun refreshSteamTags(): SteamTagDictionaryRefreshResult =
+        tagDictionaryProvider?.refresh(localeProvider.current())
+            ?: SteamTagDictionaryRefreshResult.Failed
 
     override fun resolveGenres(
         keys: Set<String>,
@@ -123,6 +187,11 @@ class RoomGameFacetRepository @Inject constructor(
     }
 }
 
+private data class TagDictionaryDependencies(
+    val provider: SteamTagDictionaryProvider?,
+    val localeProvider: MetadataLocaleProvider,
+)
+
 private fun sanitizeGenres(genres: List<MetadataFacet>): List<MetadataFacet> = genres.mapNotNull { facet ->
     val id = facet.id?.takeIf { it > 0 } ?: return@mapNotNull null
     val label = sanitizeSteamText(facet.label)?.take(MAX_GENRE_LABEL_LENGTH)?.takeIf(String::isNotBlank)
@@ -139,4 +208,5 @@ private fun parseSteamGenreId(key: String): Int? = STEAM_GENRE_KEY.matchEntire(k
     ?.takeIf { it > 0 }
 
 private const val MAX_GENRE_LABEL_LENGTH = 80
+private const val MAX_TAG_LABEL_LENGTH = 80
 private val STEAM_GENRE_KEY = Regex("steam:([1-9][0-9]*)")

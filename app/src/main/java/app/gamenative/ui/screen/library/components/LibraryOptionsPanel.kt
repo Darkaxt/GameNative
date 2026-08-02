@@ -56,6 +56,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -81,6 +84,8 @@ import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.SteamCollection
 import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.SteamTagFacet
+import app.gamenative.library.discovery.TagMatchMode
 import app.gamenative.ui.component.GameStatsKey
 import app.gamenative.ui.component.OptionListItem
 import app.gamenative.ui.component.OptionRadioItem
@@ -117,15 +122,36 @@ fun LibraryOptionsPanel(
     resultCount: Int = 0,
     onGenreToggle: (String) -> Unit = {},
     onClearGenres: () -> Unit = {},
+    tagFacets: List<SteamTagFacet> = emptyList(),
+    selectedTagIds: Set<Int> = emptySet(),
+    tagMatchMode: TagMatchMode = TagMatchMode.ANY,
+    tagClassifiedCount: Int = 0,
+    tagTotalCount: Int = 0,
+    onTagToggle: (Int) -> Unit = {},
+    onTagMatchModeChanged: (TagMatchMode) -> Unit = {},
+    onClearTags: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
     var genreSearchQuery by rememberSaveable { mutableStateOf("") }
+    var tagSearchQuery by rememberSaveable { mutableStateOf("") }
     val visibleGenreFacets = remember(genreFacets, genreSearchQuery) {
         val query = genreSearchQuery.trim()
         if (query.isEmpty()) genreFacets else genreFacets.filter { facet ->
             facet.label.contains(query, ignoreCase = true)
         }
+    }
+
+    val visibleTagFacets = remember(tagFacets, tagSearchQuery) {
+        val query = tagSearchQuery.trim()
+        if (query.isEmpty()) tagFacets else tagFacets.filter { facet ->
+            facet.label.contains(query, ignoreCase = true)
+        }
+    }
+
+    val labeledSelectedTagIds = remember(tagFacets, selectedTagIds) {
+        val known = tagFacets.mapTo(hashSetOf(), SteamTagFacet::tagId)
+        selectedTagIds.filterTo(linkedSetOf(), known::contains)
     }
 
     BackHandler(enabled = isOpen) {
@@ -376,6 +402,114 @@ fun LibraryOptionsPanel(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .testTag("genre-option:${facet.key}"),
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OptionSectionHeader(text = stringResource(R.string.steam_tags_title))
+                            if (labeledSelectedTagIds.isNotEmpty()) {
+                                TextButton(onClick = onClearTags) {
+                                    Text(stringResource(R.string.steam_tags_clear))
+                                }
+                            }
+                        }
+                        LibraryActiveFilterChips(
+                            tagFacets = tagFacets,
+                            selectedTagIds = labeledSelectedTagIds,
+                            onRemoveTag = onTagToggle,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .testTag("steam-tag-match-mode"),
+                        ) {
+                            TagMatchMode.entries.forEachIndexed { index, mode ->
+                                SegmentedButton(
+                                    selected = tagMatchMode == mode,
+                                    onClick = { onTagMatchModeChanged(mode) },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = index,
+                                        count = TagMatchMode.entries.size,
+                                    ),
+                                    label = {
+                                        Text(
+                                            stringResource(
+                                                if (mode == TagMatchMode.ANY) {
+                                                    R.string.steam_tags_match_any
+                                                } else {
+                                                    R.string.steam_tags_match_all
+                                                },
+                                            ),
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("steam-tag-mode:${mode.name}"),
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = tagSearchQuery,
+                            onValueChange = { tagSearchQuery = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .testTag("steam-tag-search"),
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.steam_tags_search)) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null)
+                            },
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = pluralStringResource(
+                                    R.plurals.steam_tag_result_count,
+                                    resultCount,
+                                    resultCount,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.steam_tag_coverage,
+                                    tagClassifiedCount,
+                                    tagTotalCount,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusGroup()
+                                .padding(horizontal = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            visibleTagFacets.forEach { facet ->
+                                OptionListItem(
+                                    text = facet.label,
+                                    selected = facet.tagId in labeledSelectedTagIds,
+                                    onClick = { onTagToggle(facet.tagId) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("steam-tag-option:${facet.tagId}"),
                                 )
                             }
                         }

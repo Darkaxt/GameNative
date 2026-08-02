@@ -9,7 +9,9 @@ import app.gamenative.library.canonical.CanonicalPublicFailure
 import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.discovery.DiscoveryFilterState
 import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.SteamTagFacet
 import app.gamenative.library.discovery.immutableGenreKeys
+import app.gamenative.library.discovery.immutableTagIds
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.utils.DeviceGameStatsService.DeviceGameStats
 import app.gamenative.ui.enums.LibraryTab
@@ -44,13 +46,18 @@ data class LibraryState(
     val skippedDynamicCollections: Boolean = false,
     val steamCollectionCounts: Map<String, Int> = emptyMap(),
 
-    // Canonical Steam-first genre discovery.
+    // Canonical Steam-first genre and tag discovery.
     val discoveryFilters: DiscoveryFilterState = DiscoveryFilterState(
         selectedGenreKeys = immutableGenreKeys(PrefManager.libraryGenreKeys),
+        selectedTagIds = immutableTagIds(PrefManager.libraryTagIds),
+        tagMatchMode = PrefManager.libraryTagMatchMode,
     ),
     val genreFacets: List<GameFacet> = emptyList(),
     val genreClassifiedCount: Int = 0,
     val genreTotalCount: Int = 0,
+    val tagFacets: List<SteamTagFacet> = emptyList(),
+    val tagClassifiedCount: Int = 0,
+    val tagTotalCount: Int = 0,
 
     // Loading state for skeleton loaders
     val isLoading: Boolean = false,

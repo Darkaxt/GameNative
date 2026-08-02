@@ -8,6 +8,7 @@ import app.gamenative.data.canonical.CanonicalGameFeatureCrossRef
 import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
 import app.gamenative.data.canonical.CanonicalGameTagCrossRef
 import app.gamenative.data.canonical.SteamTagDictionaryEntity
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CanonicalFacetDao {
@@ -37,6 +38,15 @@ interface CanonicalFacetDao {
 
     @Query("DELETE FROM canonical_game_feature WHERE canonical_id = :canonicalId")
     suspend fun deleteFeatures(canonicalId: String)
+
+    @Query("SELECT * FROM steam_tag_dictionary WHERE locale = :locale ORDER BY label COLLATE NOCASE, tag_id")
+    fun observeSteamTags(locale: String): Flow<List<SteamTagDictionaryEntity>>
+
+    @Query("SELECT * FROM steam_tag_dictionary WHERE locale = :locale ORDER BY tag_id")
+    suspend fun getSteamTags(locale: String): List<SteamTagDictionaryEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSteamTags(entities: List<SteamTagDictionaryEntity>)
 
     @Query("SELECT * FROM steam_tag_dictionary WHERE tag_id = :tagId AND locale = :locale")
     suspend fun getSteamTag(tagId: Int, locale: String): SteamTagDictionaryEntity?

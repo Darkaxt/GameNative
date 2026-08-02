@@ -82,6 +82,7 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.events.AndroidEvent
 import app.gamenative.library.canonical.CanonicalCardKey
 import app.gamenative.library.canonical.CanonicalLibraryCard
+import app.gamenative.library.discovery.TagMatchMode
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.OwnedCopyActionGuard
@@ -176,6 +177,9 @@ fun HomeLibraryScreen(
         onClearSteamCollections = viewModel::onClearSteamCollections,
         onGenreToggle = viewModel::onGenreToggle,
         onClearGenres = viewModel::onClearGenres,
+        onTagToggle = viewModel::onTagToggle,
+        onTagMatchModeChanged = viewModel::onTagMatchModeChanged,
+        onClearTags = viewModel::onClearTags,
         onOptionsPanelToggle = viewModel::onOptionsPanelToggle,
         onTabChanged = viewModel::onTabChanged,
         onPreviousTab = viewModel::onPreviousTab,
@@ -227,6 +231,9 @@ internal fun LibraryScreenContent(
     onClearSteamCollections: () -> Unit,
     onGenreToggle: (String) -> Unit = {},
     onClearGenres: () -> Unit = {},
+    onTagToggle: (Int) -> Unit = {},
+    onTagMatchModeChanged: (TagMatchMode) -> Unit = {},
+    onClearTags: () -> Unit = {},
     onOptionsPanelToggle: (Boolean) -> Unit,
     onTabChanged: (LibraryTab) -> Unit,
     onPreviousTab: () -> Unit,
@@ -1533,6 +1540,14 @@ internal fun LibraryScreenContent(
                 resultCount = state.totalAppsInFilter,
                 onGenreToggle = onGenreToggle,
                 onClearGenres = onClearGenres,
+                tagFacets = state.tagFacets,
+                selectedTagIds = state.discoveryFilters.selectedTagIds,
+                tagMatchMode = state.discoveryFilters.tagMatchMode,
+                tagClassifiedCount = state.tagClassifiedCount,
+                tagTotalCount = state.tagTotalCount,
+                onTagToggle = onTagToggle,
+                onTagMatchModeChanged = onTagMatchModeChanged,
+                onClearTags = onClearTags,
             )
 
             // System menu (START) - renders on top of everything

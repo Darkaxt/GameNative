@@ -1434,6 +1434,17 @@
         <item quantity="one">%d result</item>
         <item quantity="other">%d results</item>
     </plurals>
+    <string name="steam_tags_title">Steam Tags</string>
+    <string name="steam_tags_search">Search Steam tags</string>
+    <string name="steam_tags_clear">Clear</string>
+    <string name="steam_tags_match_any">Match Any</string>
+    <string name="steam_tags_match_all">Match All</string>
+    <string name="steam_tag_coverage">%1$d / %2$d classified</string>
+    <string name="steam_tags_remove">Remove %1$s</string>
+    <plurals name="steam_tag_result_count">
+        <item quantity="one">%d result</item>
+        <item quantity="other">%d results</item>
+    </plurals>
     <string name="library_layout">Layout</string>
     <string name="library_layout_list">List</string>
     <string name="library_layout_capsule">Capsule</string>

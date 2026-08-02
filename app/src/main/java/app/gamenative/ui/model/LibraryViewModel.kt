@@ -62,9 +62,14 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.OwnedCopyProjection
 import app.gamenative.library.canonical.stableComposeKey
-import app.gamenative.library.discovery.DiscoveryFilterState
 import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.GameFacetRepository
+import app.gamenative.library.discovery.SteamTagDictionaryRefreshResult
+import app.gamenative.library.discovery.SteamTagFacet
+import app.gamenative.library.discovery.TagMatchMode
 import app.gamenative.library.discovery.immutableGenreKeys
+import app.gamenative.library.discovery.immutableTagIds
+import app.gamenative.library.discovery.matchesTags
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonArtwork
@@ -144,6 +149,9 @@ internal data class CanonicalLibraryPage(
     val genreFacets: List<GameFacet>,
     val genreClassifiedCount: Int,
     val genreTotalCount: Int,
+    val tagFacets: List<SteamTagFacet>,
+    val tagClassifiedCount: Int,
+    val tagTotalCount: Int,
 )
 
 internal object CanonicalLibraryCardValidator {
@@ -245,6 +253,11 @@ internal object CanonicalLibraryFilter {
             .sortedWith(compareBy<GameFacet> { it.label.lowercase() }.thenBy(GameFacet::label).thenBy(GameFacet::key))
             .toList()
         val selectedGenres = state.discoveryFilters.selectedGenreKeys
+        val knownTagIds = state.tagFacets.mapTo(hashSetOf(), SteamTagFacet::tagId)
+        val selectedTags = immutableTagIds(
+            state.discoveryFilters.selectedTagIds.filter(knownTagIds::contains),
+        )
+        val tagMode = state.discoveryFilters.tagMatchMode
         val beforeCollections = cards.asSequence()
             .filter { card -> card.appType in appTypes }
             .filter { card ->
@@ -266,11 +279,11 @@ internal object CanonicalLibraryFilter {
             .filter { entry -> passesStats(state, entry.stats) }
             .toList()
 
-        val beforeCollectionsAfterGenres = beforeCollections.filter { entry ->
-            selectedGenres.isEmpty() || entry.card.genreKeys.any(selectedGenres::contains)
+        val beforeCollectionsAfterDiscovery = beforeCollections.filter { entry ->
+            matchesDiscovery(entry.card, selectedGenres, selectedTags, tagMode)
         }
         val steamCollectionCounts = state.steamCollections?.associate { collection ->
-            collection.id to beforeCollectionsAfterGenres.count { entry ->
+            collection.id to beforeCollectionsAfterDiscovery.count { entry ->
                 entry.card.steamCollectionAppIds.any(collection.appIds::contains)
             }
         }.orEmpty()
@@ -278,16 +291,16 @@ internal object CanonicalLibraryFilter {
             selectedIds = state.selectedSteamCollectionIds,
             collections = state.steamCollections,
         )
-        val afterCollectionsBeforeGenres = if (allowedSteamAppIds == null) {
+        val afterCollectionsBeforeDiscovery = if (allowedSteamAppIds == null) {
             beforeCollections
         } else {
             beforeCollections.filter { entry ->
                 entry.card.steamCollectionAppIds.any(allowedSteamAppIds::contains)
             }
         }
-        val coverageCards = afterCollectionsBeforeGenres.filter { entry -> admitted(entry.card, state) }
-        val afterCollections = afterCollectionsBeforeGenres.filter { entry ->
-            selectedGenres.isEmpty() || entry.card.genreKeys.any(selectedGenres::contains)
+        val coverageCards = afterCollectionsBeforeDiscovery.filter { entry -> admitted(entry.card, state) }
+        val afterCollections = afterCollectionsBeforeDiscovery.filter { entry ->
+            matchesDiscovery(entry.card, selectedGenres, selectedTags, tagMode)
         }
 
         val sourceCounts = LibraryCard.OWNED_SOURCE_ORDER.associateWith { source ->
@@ -350,7 +363,22 @@ internal object CanonicalLibraryFilter {
             genreFacets = immutableList(genreFacets),
             genreClassifiedCount = coverageCards.count { entry -> entry.card.genreKeys.isNotEmpty() },
             genreTotalCount = coverageCards.size,
+            tagFacets = immutableList(state.tagFacets),
+            tagClassifiedCount = coverageCards.count { entry ->
+                entry.card.tagIds.any(knownTagIds::contains)
+            },
+            tagTotalCount = coverageCards.size,
         )
+    }
+
+    private fun matchesDiscovery(
+        card: CanonicalLibraryCard,
+        selectedGenres: Set<String>,
+        selectedTags: Set<Int>,
+        tagMode: TagMatchMode,
+    ): Boolean {
+        val matchesGenres = selectedGenres.isEmpty() || card.genreKeys.any(selectedGenres::contains)
+        return matchesGenres && matchesTags(card.tagIds, selectedTags, tagMode)
     }
 
     private fun passesCompatibility(
@@ -534,6 +562,7 @@ class LibraryViewModel @Inject constructor(
     private val canonicalProjectionClock: CanonicalProjectionClock,
     @CanonicalIoDispatcher private val canonicalDispatcher: CoroutineDispatcher,
     private val diagnostics: CanonicalLibraryDiagnosticSink,
+    private val gameFacetRepository: GameFacetRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryState(isLoading = true))
@@ -633,6 +662,40 @@ class LibraryViewModel @Inject constructor(
     }
 
     init {
+        viewModelScope.launch(canonicalDispatcher) {
+            gameFacetRepository.observeSteamTags().collect { tags ->
+                val frozen = if (tags.isEmpty()) emptyList()
+                else Collections.unmodifiableList(ArrayList(tags))
+                val request = supersedeRenderForPendingInput(
+                    paginationPageLocked = { 0 },
+                    transformState = { current -> current.copy(tagFacets = frozen) },
+                )
+                onFilterApps(request)
+            }
+        }
+
+        viewModelScope.launch(canonicalDispatcher) {
+            when (val result = gameFacetRepository.refreshSteamTags()) {
+                SteamTagDictionaryRefreshResult.Failed -> Unit
+                is SteamTagDictionaryRefreshResult.Updated -> {
+                    val request = supersedeRenderForPendingInput(
+                        paginationPageLocked = { 0 },
+                        transformState = { current ->
+                            val selected = current.discoveryFilters.selectedTagIds
+                            val reconciled = immutableTagIds(selected.filter(result.tagIds::contains))
+                            if (reconciled != selected) PrefManager.libraryTagIds = reconciled
+                            current.copy(
+                                discoveryFilters = current.discoveryFilters.copy(
+                                    selectedTagIds = reconciled,
+                                ),
+                            )
+                        },
+                    )
+                    onFilterApps(request)
+                }
+            }
+        }
+
         viewModelScope.launch(canonicalDispatcher) {
             canonicalProjectionReadiness.isReady.collect {
                 if (canonicalPublicLibraryGate.isEnabled()) {
@@ -1204,7 +1267,7 @@ class LibraryViewModel @Inject constructor(
                 val immutable = immutableGenreKeys(updated)
                 PrefManager.libraryGenreKeys = immutable
                 current.copy(
-                    discoveryFilters = DiscoveryFilterState(selectedGenreKeys = immutable),
+                    discoveryFilters = current.discoveryFilters.copy(selectedGenreKeys = immutable),
                 )
             },
         )
@@ -1216,7 +1279,56 @@ class LibraryViewModel @Inject constructor(
             paginationPageLocked = { 0 },
             transformState = { current ->
                 PrefManager.libraryGenreKeys = emptySet()
-                current.copy(discoveryFilters = DiscoveryFilterState())
+                current.copy(
+                    discoveryFilters = current.discoveryFilters.copy(selectedGenreKeys = emptySet()),
+                )
+            },
+        )
+        onFilterApps(request)
+    }
+
+    fun onTagToggle(tagId: Int) {
+        if (tagId <= 0) return
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                val selected = current.discoveryFilters.selectedTagIds
+                if (tagId !in selected && current.tagFacets.none { facet -> facet.tagId == tagId }) {
+                    return@supersedeRenderForPendingInput current
+                }
+                val updated = selected.toMutableSet()
+                if (!updated.add(tagId)) updated.remove(tagId)
+                val immutable = immutableTagIds(updated)
+                PrefManager.libraryTagIds = immutable
+                current.copy(
+                    discoveryFilters = current.discoveryFilters.copy(selectedTagIds = immutable),
+                )
+            },
+        )
+        onFilterApps(request)
+    }
+
+    fun onTagMatchModeChanged(mode: TagMatchMode) {
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                PrefManager.libraryTagMatchMode = mode
+                current.copy(
+                    discoveryFilters = current.discoveryFilters.copy(tagMatchMode = mode),
+                )
+            },
+        )
+        onFilterApps(request)
+    }
+
+    fun onClearTags() {
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                PrefManager.libraryTagIds = emptySet()
+                current.copy(
+                    discoveryFilters = current.discoveryFilters.copy(selectedTagIds = emptySet()),
+                )
             },
         )
         onFilterApps(request)
@@ -1414,6 +1526,7 @@ class LibraryViewModel @Inject constructor(
         if (state.appInfoSortType.isNotEmpty()) add("app_filter")
         if (state.selectedSteamCollectionIds.isNotEmpty()) add("collection")
         if (state.discoveryFilters.selectedGenreKeys.isNotEmpty()) add("genre")
+        if (state.discoveryFilters.selectedTagIds.isNotEmpty()) add("tag")
         add("source_tab")
     }.joinToString(",")
 
@@ -2451,6 +2564,9 @@ class LibraryViewModel @Inject constructor(
                         genreFacets = page.genreFacets,
                         genreClassifiedCount = page.genreClassifiedCount,
                         genreTotalCount = page.genreTotalCount,
+                        tagFacets = page.tagFacets,
+                        tagClassifiedCount = page.tagClassifiedCount,
+                        tagTotalCount = page.tagTotalCount,
                     )
                 }
                 true

@@ -17,15 +17,21 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.gamenative.R
 import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.SteamTagFacet
 
 @Composable
 fun LibraryActiveFilterChips(
-    genreFacets: List<GameFacet>,
-    selectedGenreKeys: Set<String>,
-    onRemoveGenre: (String) -> Unit,
+    genreFacets: List<GameFacet> = emptyList(),
+    selectedGenreKeys: Set<String> = emptySet(),
+    onRemoveGenre: (String) -> Unit = {},
+    tagFacets: List<SteamTagFacet> = emptyList(),
+    selectedTagIds: Set<Int> = emptySet(),
+    onRemoveTag: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    if (selectedGenreKeys.isEmpty()) return
+    val tagFacetsById = tagFacets.associateBy(SteamTagFacet::tagId)
+    val selectedTagFacets = selectedTagIds.mapNotNull(tagFacetsById::get)
+    if (selectedGenreKeys.isEmpty() && selectedTagFacets.isEmpty()) return
     val facetsByKey = genreFacets.associateBy(GameFacet::key)
     Row(
         modifier = modifier
@@ -48,6 +54,26 @@ fun LibraryActiveFilterChips(
                         )
                     },
                     modifier = Modifier.testTag("genre-chip:$key"),
+                )
+            }
+        selectedTagFacets
+            .sortedWith(
+                compareBy<SteamTagFacet> { it.label.lowercase() }
+                    .thenBy(SteamTagFacet::label)
+                    .thenBy(SteamTagFacet::tagId),
+            )
+            .forEach { facet ->
+                InputChip(
+                    selected = true,
+                    onClick = { onRemoveTag(facet.tagId) },
+                    label = { Text(facet.label) },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.steam_tags_remove, facet.label),
+                        )
+                    },
+                    modifier = Modifier.testTag("steam-tag-chip:${facet.tagId}"),
                 )
             }
     }

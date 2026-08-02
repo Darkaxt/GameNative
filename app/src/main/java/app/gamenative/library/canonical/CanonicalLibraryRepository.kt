@@ -188,6 +188,14 @@ class CanonicalLibraryRepository @Inject constructor(
             isShared = copies.any(OwnedCopySummary::isShared),
             genreKeys = immutableSet(genreFacets.map { it.key }),
             genreLabels = immutableMap(genreFacets.associate { it.key to it.label }),
+            tagIds = immutableSet(
+                aggregate.tags.asSequence()
+                    .map { it.tagId }
+                    .filter { it > 0 }
+                    .distinct()
+                    .sorted()
+                    .toList(),
+            ),
         )
     }
 
@@ -321,6 +329,7 @@ class CanonicalLibraryRepository @Inject constructor(
                 matches = immutableList(aggregate.matches),
                 preferences = immutableList(aggregate.preferences),
                 genres = immutableList(aggregate.genres),
+                tags = immutableList(aggregate.tags),
                 detailSnapshots = immutableList(aggregate.detailSnapshots),
             )
         },

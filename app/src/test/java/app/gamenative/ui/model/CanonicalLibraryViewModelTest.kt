@@ -58,6 +58,10 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.OwnedCopyProjection
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
+import app.gamenative.library.discovery.GameFacetRepository
+import app.gamenative.library.discovery.SteamTagDictionaryRefreshResult
+import app.gamenative.library.discovery.SteamTagFacet
+import app.gamenative.library.discovery.TagMatchMode
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonService
@@ -157,6 +161,10 @@ class CanonicalLibraryViewModelTest {
         }
         if (PrefManager.librarySteamCollections.isNotEmpty()) PrefManager.librarySteamCollections = emptySet()
         if (PrefManager.libraryGenreKeys.isNotEmpty()) PrefManager.libraryGenreKeys = emptySet()
+        if (PrefManager.libraryTagIds.isNotEmpty()) PrefManager.libraryTagIds = emptySet()
+        if (PrefManager.libraryTagMatchMode != TagMatchMode.ANY) {
+            PrefManager.libraryTagMatchMode = TagMatchMode.ANY
+        }
         awaitPreference {
             !PrefManager.canonicalPublicLibraryEnabled &&
                 PrefManager.showSteamInLibrary &&
@@ -167,7 +175,9 @@ class CanonicalLibraryViewModelTest {
                 PrefManager.libraryFilter == defaultFilters &&
                 PrefManager.librarySortOption == SortOption.INSTALLED_FIRST &&
                 PrefManager.librarySteamCollections.isEmpty() &&
-                PrefManager.libraryGenreKeys.isEmpty()
+                PrefManager.libraryGenreKeys.isEmpty() &&
+                PrefManager.libraryTagIds.isEmpty() &&
+                PrefManager.libraryTagMatchMode == TagMatchMode.ANY
         }
         scheduler = TestCoroutineScheduler()
         dispatcher = StandardTestDispatcher(scheduler)
@@ -211,6 +221,13 @@ class CanonicalLibraryViewModelTest {
         if (PrefManager.libraryGenreKeys.isNotEmpty()) {
             PrefManager.libraryGenreKeys = emptySet()
             awaitPreference { PrefManager.libraryGenreKeys.isEmpty() }
+        }
+        if (PrefManager.libraryTagIds.isNotEmpty() || PrefManager.libraryTagMatchMode != TagMatchMode.ANY) {
+            PrefManager.libraryTagIds = emptySet()
+            PrefManager.libraryTagMatchMode = TagMatchMode.ANY
+            awaitPreference {
+                PrefManager.libraryTagIds.isEmpty() && PrefManager.libraryTagMatchMode == TagMatchMode.ANY
+            }
         }
         if (::viewModelStore.isInitialized) viewModelStore.clear()
         PluviaApp.events.clearAllListeners()
@@ -307,6 +324,76 @@ class CanonicalLibraryViewModelTest {
 
         assertTrue(vm.state.value.discoveryFilters.selectedGenreKeys.isEmpty())
         awaitPreference { PrefManager.libraryGenreKeys.isEmpty() }
+    }
+
+    @Test
+    fun `localized tag labels mode chips coverage and restart state stay visible`() = runTest(dispatcher) {
+        PrefManager.libraryTagIds = linkedSetOf(3859, 1685, 999_999)
+        PrefManager.libraryTagMatchMode = TagMatchMode.ALL
+        awaitPreference {
+            PrefManager.libraryTagIds.size == 3 && PrefManager.libraryTagMatchMode == TagMatchMode.ALL
+        }
+        val tagFlow = MutableStateFlow(
+            listOf(
+                SteamTagFacet(1685, "Co-op"),
+                SteamTagFacet(3859, "Multiplayer"),
+            ),
+        )
+        val facets = facetRepository(
+            tags = tagFlow,
+            refresh = SteamTagDictionaryRefreshResult.Updated(setOf(1685, 3859)),
+        )
+        val both = card(
+            canonicalId = canonicalId(820),
+            name = "Both tags",
+            copyKeys = listOf(key(GameSource.STEAM, "820")),
+            tagIds = setOf(1685, 3859),
+        )
+        val one = card(
+            canonicalId = canonicalId(821),
+            name = "One tag",
+            copyKeys = listOf(key(GameSource.STEAM, "821")),
+            tagIds = setOf(1685),
+        )
+        val unclassified = card(
+            canonicalId = canonicalId(822),
+            name = "Unclassified",
+            copyKeys = listOf(key(GameSource.STEAM, "822")),
+        )
+
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(both, one, unclassified))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            facetRepository = facets,
+        )
+        runCurrent()
+        awaitState { state ->
+            state.cards.map { it.name } == listOf("Both tags") &&
+                state.discoveryFilters.selectedTagIds == setOf(1685, 3859) &&
+                state.discoveryFilters.tagMatchMode == TagMatchMode.ALL &&
+                state.tagFacets.map { it.label } == listOf("Co-op", "Multiplayer") &&
+                state.tagClassifiedCount == 2 &&
+                state.tagTotalCount == 3
+        }
+        awaitPreference { PrefManager.libraryTagIds == setOf(1685, 3859) }
+
+        vm.onTagMatchModeChanged(TagMatchMode.ANY)
+        runCurrent()
+        awaitState { state -> state.cards.map { it.name } == listOf("Both tags", "One tag") }
+        awaitPreference { PrefManager.libraryTagMatchMode == TagMatchMode.ANY }
+
+        vm.onTagToggle(1685)
+        runCurrent()
+        awaitState { state -> state.discoveryFilters.selectedTagIds == setOf(3859) }
+
+        vm.onClearTags()
+        runCurrent()
+        awaitState { state ->
+            state.cards.map { it.name } == listOf("Both tags", "One tag", "Unclassified") &&
+                state.discoveryFilters.selectedTagIds.isEmpty()
+        }
+        awaitPreference { PrefManager.libraryTagIds.isEmpty() }
     }
 
     @Test
@@ -3700,6 +3787,7 @@ class CanonicalLibraryViewModelTest {
         mutationRepository: CanonicalMutationRepository = mockk(relaxed = true),
         projectionClock: CanonicalProjectionClock = CanonicalProjectionClock { 1L },
         diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
+        facetRepository: GameFacetRepository = facetRepository(),
     ): LibraryViewModel {
         val history = mockk<LibraryPlayHistoryDao>(relaxed = true)
         every { history.getAll() } returns emptyFlow()
@@ -3728,10 +3816,19 @@ class CanonicalLibraryViewModelTest {
             canonicalProjectionClock = projectionClock,
             canonicalDispatcher = ioDispatcher,
             diagnostics = diagnostics,
+            gameFacetRepository = facetRepository,
         ).also { viewModel ->
             latestVm = viewModel
             viewModelStore.put("latest", viewModel)
         }
+    }
+
+    private fun facetRepository(
+        tags: Flow<List<SteamTagFacet>> = emptyFlow(),
+        refresh: SteamTagDictionaryRefreshResult = SteamTagDictionaryRefreshResult.Failed,
+    ): GameFacetRepository = mockk<GameFacetRepository>(relaxed = true).also { repository ->
+        every { repository.observeSteamTags() } returns tags
+        coEvery { repository.refreshSteamTags() } returns refresh
     }
 
     private fun repository(cards: Flow<List<CanonicalLibraryCard>>): CanonicalLibraryRepository =
@@ -3781,6 +3878,7 @@ class CanonicalLibraryViewModelTest {
         preferred: OwnedCopyKey? = null,
         genreKeys: Set<String> = emptySet(),
         genreLabels: Map<String, String> = emptyMap(),
+        tagIds: Set<Int> = emptySet(),
         steamCollectionAppIds: Set<Int> = copyKeys
             .filter { it.source == GameSource.STEAM }
             .mapNotNull { it.stableSourceId.toIntOrNull() }
@@ -3815,6 +3913,7 @@ class CanonicalLibraryViewModelTest {
             isShared = copies.any { it.isShared },
             genreKeys = genreKeys,
             genreLabels = genreLabels,
+            tagIds = tagIds,
         )
     }
 

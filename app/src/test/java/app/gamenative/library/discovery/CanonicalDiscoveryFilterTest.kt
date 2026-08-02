@@ -50,6 +50,55 @@ class CanonicalDiscoveryFilterTest {
     }
 
     @Test
+    fun multipleSelectedTagsUseExplicitAnyOrAllMatching() {
+        val both = card(1, "Both", tagIds = setOf(COOP, MULTIPLAYER))
+        val coop = card(2, "Co-op", tagIds = setOf(COOP))
+        val unclassified = card(3, "Unclassified")
+        val selected = setOf(COOP, MULTIPLAYER)
+
+        val any = project(
+            listOf(both, coop, unclassified),
+            state(selectedTags = selected, tagMode = TagMatchMode.ANY),
+        )
+        val all = project(
+            listOf(both, coop, unclassified),
+            state(selectedTags = selected, tagMode = TagMatchMode.ALL),
+        )
+
+        assertEquals(listOf("Both", "Co-op"), any.cards.map { it.name })
+        assertEquals(listOf("Both"), all.cards.map { it.name })
+        assertEquals(2, any.tagClassifiedCount)
+        assertEquals(3, any.tagTotalCount)
+    }
+
+    @Test
+    fun genreOrAndTagModeCombineWithAnd() {
+        val cards = listOf(
+            card(1, "Action co-op", genreKeys = setOf(ACTION), tagIds = setOf(COOP)),
+            card(2, "Strategy co-op", genreKeys = setOf(STRATEGY), tagIds = setOf(COOP)),
+            card(3, "Action multiplayer", genreKeys = setOf(ACTION), tagIds = setOf(MULTIPLAYER)),
+            card(
+                4,
+                "Strategy both",
+                genreKeys = setOf(STRATEGY),
+                tagIds = setOf(COOP, MULTIPLAYER),
+            ),
+        )
+
+        val page = project(
+            cards,
+            state(
+                selectedGenres = setOf(ACTION, STRATEGY),
+                selectedTags = setOf(COOP, MULTIPLAYER),
+                tagMode = TagMatchMode.ALL,
+            ),
+        )
+
+        assertEquals(listOf("Strategy both"), page.cards.map { it.name })
+        assertEquals(1, page.totalCount)
+    }
+
+    @Test
     fun multipleSelectedGenresMatchAnyGenreAfterCanonicalGrouping() {
         val action = card(1, "Action", genreKeys = setOf(ACTION), copySources = listOf(GameSource.STEAM, GameSource.GOG))
         val strategy = card(2, "Strategy", genreKeys = setOf(STRATEGY))
@@ -131,17 +180,53 @@ class CanonicalDiscoveryFilterTest {
     }
 
     @Test
+    fun tagGroupUsesAndWithEveryExistingFilterGroup() {
+        val matchingTag = card(10, "Candidate", tagIds = setOf(COOP))
+        val selected = setOf(COOP)
+        val incompatible: (CanonicalLibraryCard) -> GameCompatibilityStatus? = {
+            GameCompatibilityStatus.NOT_COMPATIBLE
+        }
+        val states = listOf(
+            state(search = "missing", selectedTags = selected),
+            state(tab = LibraryTab.GOG, selectedTags = selected),
+            state(filters = filters(AppFilter.APPLICATION), selectedTags = selected),
+            state(filters = filters(AppFilter.GAME, AppFilter.INSTALLED), selectedTags = selected),
+            state(filters = filters(AppFilter.GAME, AppFilter.COMPATIBLE), selectedTags = selected),
+            state(
+                filters = filters(AppFilter.GAME, AppFilter.PLAYABLE),
+                selectedTags = selected,
+                deviceStats = mapOf(
+                    GameSource.STEAM to mapOf(
+                        "Candidate STEAM" to DeviceGameStats(1, 20, 0, 60),
+                    ),
+                ),
+            ),
+            state(
+                selectedTags = selected,
+                selectedCollections = setOf("other"),
+                collections = listOf(SteamCollection("other", "Other", setOf(999))),
+            ),
+        )
+
+        states.forEachIndexed { index, filterState ->
+            val compatibility = if (index == 4) incompatible else { _: CanonicalLibraryCard -> null }
+            assertEquals(0, project(listOf(matchingTag), filterState, compatibility = compatibility).totalCount)
+        }
+    }
+
+    @Test
     fun genreFilteringRunsBeforeCountsSortAndPaginationBoundaries() {
         val cards = listOf(
-            card(1, "Zulu", genreKeys = setOf(ACTION)),
-            card(2, "Alpha"),
-            card(3, "Bravo", genreKeys = setOf(ACTION)),
-            card(4, "Charlie", genreKeys = setOf(ACTION)),
+            card(1, "Zulu", genreKeys = setOf(ACTION), tagIds = setOf(COOP)),
+            card(2, "Alpha", tagIds = setOf(COOP)),
+            card(3, "Bravo", genreKeys = setOf(ACTION), tagIds = setOf(COOP)),
+            card(4, "Charlie", genreKeys = setOf(ACTION), tagIds = setOf(COOP)),
+            card(5, "Wrong tag", genreKeys = setOf(ACTION), tagIds = setOf(MULTIPLAYER)),
         )
 
         val page = project(
             cards = cards,
-            state = state(selectedGenres = setOf(ACTION)),
+            state = state(selectedGenres = setOf(ACTION), selectedTags = setOf(COOP)),
             paginationPage = 1,
             pageSize = 2,
         )
@@ -170,6 +255,40 @@ class CanonicalDiscoveryFilterTest {
     }
 
     @Test
+    fun unknownTagSelectionsAreIgnoredWithoutBreakingGenresAndClearRestoresUnclassifiedCards() {
+        val cards = listOf(
+            card(1, "Classified", genreKeys = setOf(ACTION), tagIds = setOf(COOP)),
+            card(2, "Genre only", genreKeys = setOf(ACTION)),
+            card(3, "Unclassified"),
+        )
+
+        val unknown = project(
+            cards,
+            state(selectedGenres = setOf(ACTION), selectedTags = setOf(999_999)),
+        )
+        val selected = project(cards, state(selectedTags = setOf(COOP)))
+        val cleared = project(cards, state(selectedTags = emptySet()))
+
+        assertEquals(listOf("Classified", "Genre only"), unknown.cards.map { it.name })
+        assertEquals(listOf("Classified"), selected.cards.map { it.name })
+        assertEquals(listOf("Classified", "Genre only", "Unclassified"), cleared.cards.map { it.name })
+    }
+
+    @Test
+    fun sortedTagSelectionsAndModeSurvivePreferenceRestart() {
+        PrefManager.libraryTagIds = linkedSetOf(MULTIPLAYER, COOP)
+        PrefManager.libraryTagMatchMode = TagMatchMode.ALL
+        awaitPreference {
+            PrefManager.libraryTagIds.size == 2 && PrefManager.libraryTagMatchMode == TagMatchMode.ALL
+        }
+
+        PrefManager.init(context)
+
+        assertEquals(listOf(COOP, MULTIPLAYER), PrefManager.libraryTagIds.toList())
+        assertEquals(TagMatchMode.ALL, PrefManager.libraryTagMatchMode)
+    }
+
+    @Test
     fun sortedGenreSelectionsSurvivePreferenceRestart() {
         PrefManager.libraryGenreKeys = linkedSetOf(STRATEGY, ACTION)
         awaitPreference { PrefManager.libraryGenreKeys.size == 2 }
@@ -186,19 +305,26 @@ class CanonicalDiscoveryFilterTest {
                 number = index + 1,
                 name = "Game ${index.toString().padStart(3, '0')}",
                 genreKeys = if (index % 3 == 0) setOf(ACTION) else emptySet(),
+                tagIds = if (index % 6 == 0) setOf(COOP, MULTIPLAYER) else emptySet(),
             )
         }
 
         val page = project(
             cards = cards,
-            state = state(selectedGenres = setOf(ACTION)),
+            state = state(
+                selectedGenres = setOf(ACTION),
+                selectedTags = setOf(COOP, MULTIPLAYER),
+                tagMode = TagMatchMode.ALL,
+            ),
             pageSize = 50,
         )
 
-        assertEquals(300, page.totalCount)
+        assertEquals(150, page.totalCount)
         assertEquals(50, page.cards.size)
         assertEquals(300, page.genreClassifiedCount)
+        assertEquals(150, page.tagClassifiedCount)
         assertEquals(900, page.genreTotalCount)
+        assertEquals(900, page.tagTotalCount)
     }
 
     private fun project(
@@ -222,6 +348,12 @@ class CanonicalDiscoveryFilterTest {
         search: String = "",
         tab: LibraryTab = LibraryTab.ALL,
         selectedGenres: Set<String> = emptySet(),
+        selectedTags: Set<Int> = emptySet(),
+        tagMode: TagMatchMode = TagMatchMode.ANY,
+        tagFacets: List<SteamTagFacet> = listOf(
+            SteamTagFacet(COOP, "Co-op"),
+            SteamTagFacet(MULTIPLAYER, "Multiplayer"),
+        ),
         selectedCollections: Set<String> = emptySet(),
         collections: List<SteamCollection>? = emptyList(),
         deviceStats: Map<GameSource, Map<String, DeviceGameStats>> = emptyMap(),
@@ -229,7 +361,12 @@ class CanonicalDiscoveryFilterTest {
         appInfoSortType = filters,
         searchQuery = search,
         currentTab = tab,
-        discoveryFilters = DiscoveryFilterState(selectedGenreKeys = selectedGenres),
+        discoveryFilters = DiscoveryFilterState(
+            selectedGenreKeys = selectedGenres,
+            selectedTagIds = selectedTags,
+            tagMatchMode = tagMode,
+        ),
+        tagFacets = tagFacets,
         selectedSteamCollectionIds = selectedCollections,
         steamCollections = collections,
         deviceGameStats = deviceStats,
@@ -244,6 +381,7 @@ class CanonicalDiscoveryFilterTest {
         number: Int,
         name: String,
         genreKeys: Set<String> = emptySet(),
+        tagIds: Set<Int> = emptySet(),
         copySources: List<GameSource> = listOf(GameSource.STEAM),
     ): CanonicalLibraryCard {
         val canonicalId = CanonicalGameId.parse(
@@ -276,6 +414,7 @@ class CanonicalDiscoveryFilterTest {
                     else -> "Genre"
                 }
             },
+            tagIds = tagIds,
         )
     }
 
@@ -316,6 +455,13 @@ class CanonicalDiscoveryFilterTest {
             PrefManager.libraryGenreKeys = emptySet()
             awaitPreference { PrefManager.libraryGenreKeys.isEmpty() }
         }
+        if (PrefManager.libraryTagIds.isNotEmpty() || PrefManager.libraryTagMatchMode != TagMatchMode.ANY) {
+            PrefManager.libraryTagIds = emptySet()
+            PrefManager.libraryTagMatchMode = TagMatchMode.ANY
+            awaitPreference {
+                PrefManager.libraryTagIds.isEmpty() && PrefManager.libraryTagMatchMode == TagMatchMode.ANY
+            }
+        }
     }
 
     private fun awaitPreference(condition: () -> Boolean) {
@@ -329,5 +475,7 @@ class CanonicalDiscoveryFilterTest {
     private companion object {
         const val ACTION = "steam:1"
         const val STRATEGY = "steam:2"
+        const val COOP = 1685
+        const val MULTIPLAYER = 3859
     }
 }

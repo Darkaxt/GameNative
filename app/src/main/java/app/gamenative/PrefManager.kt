@@ -15,6 +15,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import app.gamenative.data.GameSource
 import app.gamenative.enums.AppTheme
+import app.gamenative.library.discovery.TagMatchMode
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.HomeDestination
 import app.gamenative.ui.enums.Orientation
@@ -928,6 +929,37 @@ object PrefManager {
                 .sorted()
                 .joinToString(GENRE_KEY_SEPARATOR)
             setPref(LIBRARY_GENRE_KEYS, serialized)
+        }
+
+    private val LIBRARY_TAG_IDS = stringPreferencesKey("library_tag_ids")
+    private const val TAG_ID_SEPARATOR = ""
+    var libraryTagIds: Set<Int>
+        get() {
+            val raw = getPref(LIBRARY_TAG_IDS, "")
+            if (raw.isEmpty()) return emptySet()
+            return raw.split(TAG_ID_SEPARATOR)
+                .mapNotNull(String::toIntOrNull)
+                .filter { it > 0 }
+                .distinct()
+                .sorted()
+                .toCollection(linkedSetOf())
+        }
+        set(value) {
+            val serialized = value.asSequence()
+                .filter { it > 0 }
+                .distinct()
+                .sorted()
+                .joinToString(TAG_ID_SEPARATOR)
+            setPref(LIBRARY_TAG_IDS, serialized)
+        }
+
+    private val LIBRARY_TAG_MATCH_MODE = stringPreferencesKey("library_tag_match_mode")
+    var libraryTagMatchMode: TagMatchMode
+        get() = runCatching {
+            TagMatchMode.valueOf(getPref(LIBRARY_TAG_MATCH_MODE, TagMatchMode.ANY.name))
+        }.getOrDefault(TagMatchMode.ANY)
+        set(value) {
+            setPref(LIBRARY_TAG_MATCH_MODE, value.name)
         }
 
     private val LIBRARY_STEAM_COLLECTIONS_CACHE = stringPreferencesKey("library_steam_collections_cache")

@@ -8,6 +8,7 @@ import androidx.room.Transaction
 import app.gamenative.data.canonical.CanonicalGameEntity
 import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
 import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
+import app.gamenative.data.canonical.CanonicalGameTagCrossRef
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.data.canonical.StoreMatchEntity
 import kotlinx.coroutines.flow.Flow
@@ -29,6 +30,11 @@ data class CanonicalLibraryAggregate(
         entityColumn = "canonical_id",
     )
     val genres: List<CanonicalGameGenreCrossRef> = emptyList(),
+    @Relation(
+        parentColumn = "canonical_id",
+        entityColumn = "canonical_id",
+    )
+    val tags: List<CanonicalGameTagCrossRef> = emptyList(),
     @Relation(
         parentColumn = "canonical_id",
         entityColumn = "canonical_id",
