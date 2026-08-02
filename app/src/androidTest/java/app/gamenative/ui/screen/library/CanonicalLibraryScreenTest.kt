@@ -315,7 +315,7 @@ class CanonicalLibraryScreenTest {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Test
-    fun soleCopyReadyCaptureOpensDetailThroughLibraryScreenCallback() {
+    fun canonicalSelectionOpensNativeDetailBeforeSourceRouter() {
         val soleKey = OwnedCopyKey(accountScope, GameSource.STEAM, "42")
         val canonical = canonicalCard(
             id = CanonicalGameId.parse("77777777-7777-7777-7777-777777777777"),
@@ -337,6 +337,11 @@ class CanonicalLibraryScreenTest {
         )
 
         composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("canonical-detail-source-details").assertIsDisplayed()
+        composeRule.runOnIdle { assertTrue(captured.isEmpty()) }
+
+        composeRule.onNodeWithTag("canonical-detail-source-details").performClick()
         composeRule.onNodeWithTag("copies-action-detail").assertIsDisplayed()
         composeRule.runOnIdle {
             assertEquals(
@@ -455,7 +460,7 @@ class CanonicalLibraryScreenTest {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Test
-    fun fastSecondNormalSelectionSupersedesBlockedFirstRoute() {
+    fun secondCanonicalSourceRequestSupersedesBlockedFirstRoute() {
         val first = canonicalCard(
             id = CanonicalGameId.parse("33333333-3333-3333-3333-333333333333"),
             title = "Blocked card",
@@ -487,8 +492,11 @@ class CanonicalLibraryScreenTest {
         )
 
         composeRule.onAllNodesWithTag("canonical-card")[0].performClick()
+        composeRule.onNodeWithTag("canonical-detail-source-details").performClick()
         composeRule.waitUntil { routeStarted.isCompleted }
+        pressBack()
         composeRule.onAllNodesWithTag("canonical-card")[1].performClick()
+        composeRule.onNodeWithTag("canonical-detail-source-details").performClick()
         composeRule.onNode(
             hasTestTag("copies-sheet") and hasAnyDescendant(hasText("Winning card")),
             useUnmergedTree = true,
@@ -504,7 +512,7 @@ class CanonicalLibraryScreenTest {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Test
-    fun explicitCopiesSupersedesBlockedNormalRouteThroughLibraryScreenWiring() {
+    fun backCancelsBlockedSourceRouteBeforeOpeningOtherCopies() {
         val firstId = CanonicalGameId.parse("11111111-1111-1111-1111-111111111111")
         val secondId = CanonicalGameId.parse("22222222-2222-2222-2222-222222222222")
         val first = canonicalCard(
@@ -548,7 +556,9 @@ class CanonicalLibraryScreenTest {
         )
 
         composeRule.onAllNodesWithTag("canonical-card")[0].performClick()
+        composeRule.onNodeWithTag("canonical-detail-source-details").performClick()
         composeRule.waitUntil { routeStarted.isCompleted }
+        pressBack()
         composeRule.onAllNodesWithTag("copies-action")[1].performClick()
         composeRule.waitUntil { routeCancelled.isCompleted }
 
@@ -802,32 +812,23 @@ class CanonicalLibraryScreenTest {
         )
         var canonicalCards by mutableStateOf(mapOf(card.key to card))
         val feedbackMessages = mutableListOf<String>()
-        var routeCount = 0
         setLibraryScreen(
             state = { screenState },
             canonicalCards = { canonicalCards },
             onRoute = { _, _, _, _ ->
-                routeCount += 1
-                if (routeCount == 1) {
-                    OwnedCopyRouteResult.Ready(
-                        actionGuard(numericSteamKey),
-                        ActionSelectionPolicy.PREFERRED,
-                    )
-                } else {
-                    canonicalCards = emptyMap()
-                    screenState = screenState.copy(canonicalSnapshotRevision = 2L)
-                    OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
-                }
+                canonicalCards = emptyMap()
+                screenState = screenState.copy(canonicalSnapshotRevision = 2L)
+                OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
             },
             onLibraryFeedback = feedbackMessages::add,
         )
 
         composeRule.onNodeWithTag("canonical-card").performClick()
-        composeRule.onNodeWithTag("copies-action-detail").performClick()
+        composeRule.onNodeWithTag("canonical-detail-copies").performClick()
         composeRule.onNodeWithTag("copy-operation:STEAM:PLAY").performClick()
 
         composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
-        composeRule.onNodeWithTag("copies-action-detail").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertDoesNotExist()
         composeRule.onNodeWithTag("canonical-card").assertIsDisplayed()
         composeRule.waitUntil(timeoutMillis = 5_000L) {
             "This copy changed or is no longer available. Refresh and try again." in feedbackMessages
@@ -903,13 +904,13 @@ class CanonicalLibraryScreenTest {
         )
 
         composeRule.onNodeWithTag("canonical-card").performClick()
-        composeRule.onNodeWithTag("copies-action-detail").performClick()
+        composeRule.onNodeWithTag("canonical-detail-copies").performClick()
         composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
 
         pressBack()
 
         composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
-        composeRule.onNodeWithTag("copies-action-detail").assertIsDisplayed()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertIsDisplayed()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)

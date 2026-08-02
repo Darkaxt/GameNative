@@ -38,6 +38,14 @@ import app.gamenative.library.canonical.source.EpicOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.GogOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.OwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
+import app.gamenative.library.metadata.GameMetadataRepository
+import app.gamenative.library.metadata.MetadataClock
+import app.gamenative.library.metadata.MetadataLocaleProvider
+import app.gamenative.library.metadata.RoomGameMetadataRepository
+import app.gamenative.library.metadata.SteamCatalogDataSource
+import app.gamenative.library.metadata.SteamCatalogProvider
+import app.gamenative.library.metadata.SystemMetadataClock
+import app.gamenative.library.metadata.SystemMetadataLocaleProvider
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -103,6 +111,28 @@ abstract class CanonicalLibraryModule {
     abstract fun bindPublicLibraryGate(
         implementation: PrefManagerCanonicalPublicLibraryGate,
     ): CanonicalPublicLibraryGate
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamCatalogDataSource(
+        implementation: SteamCatalogProvider,
+    ): SteamCatalogDataSource
+
+    @Binds
+    @Singleton
+    abstract fun bindGameMetadataRepository(
+        implementation: RoomGameMetadataRepository,
+    ): GameMetadataRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindMetadataLocaleProvider(
+        implementation: SystemMetadataLocaleProvider,
+    ): MetadataLocaleProvider
+
+    @Binds
+    @Singleton
+    abstract fun bindMetadataClock(implementation: SystemMetadataClock): MetadataClock
 
     @Binds
     @Singleton

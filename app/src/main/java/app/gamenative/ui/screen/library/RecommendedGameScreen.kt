@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -49,18 +50,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import app.gamenative.R
 import app.gamenative.data.RecommendedGame
 import app.gamenative.ui.component.focusRing
-import app.gamenative.ui.screen.library.components.VideoHero
+import app.gamenative.ui.screen.library.components.GameMediaItem
+import app.gamenative.ui.screen.library.components.GameMediaPager
 import app.gamenative.PrefManager
 import com.posthog.PostHog
-import com.skydoves.landscapist.ImageOptions
-import com.skydoves.landscapist.coil.CoilImage
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -82,12 +78,15 @@ internal fun RecommendedGameScreen(
     }
 
     val media = remember(game) {
-        val list = mutableListOf<Pair<Boolean, String>>()
-        game.videos.ifEmpty { listOfNotNull(game.videoUrl) }.forEach { list += true to it }
-        game.screenshots.take(10).forEach { list += false to it }
-        list
+        buildList {
+            game.videos.ifEmpty { listOfNotNull(game.videoUrl) }.forEach { url ->
+                add(GameMediaItem(videoUrl = url, imageUrl = game.heroImageUrl))
+            }
+            game.screenshots.take(10).forEach { url ->
+                add(GameMediaItem(imageUrl = url))
+            }
+        }
     }
-    val pagerState = rememberPagerState(pageCount = { media.size.coerceAtLeast(1) })
 
     Column(
         modifier = Modifier
@@ -102,36 +101,12 @@ internal fun RecommendedGameScreen(
                 .height(280.dp)
                 .clipToBounds(),
         ) {
-            if (media.isEmpty()) {
-                VideoHero(
-                    videoUrl = null,
-                    fallbackImageUrl = game.heroImageUrl,
-                    contentDescription = game.name,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-                    val item = media[page]
-                    if (item.first) {
-                        VideoHero(
-                            videoUrl = item.second,
-                            fallbackImageUrl = game.heroImageUrl,
-                            contentDescription = game.name,
-                            active = page == pagerState.currentPage,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    } else {
-                        CoilImage(
-                            imageModel = { item.second },
-                            imageOptions = ImageOptions(
-                                contentDescription = game.name,
-                                contentScale = ContentScale.Crop,
-                            ),
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                }
-            }
+            GameMediaPager(
+                media = media,
+                fallbackImageUrl = game.heroImageUrl,
+                contentDescription = game.name,
+                modifier = Modifier.fillMaxSize(),
+            )
 
             // Gradient overlay
             Box(
@@ -212,23 +187,6 @@ internal fun RecommendedGameScreen(
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color.White.copy(alpha = 0.8f),
                 )
-            }
-
-            if (media.size > 1) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Black.copy(alpha = 0.5f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = "${pagerState.currentPage + 1}/${media.size}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                    )
-                }
             }
         }
 

@@ -1,0 +1,36 @@
+{
+  "424242": {
+    "success": true,
+    "data": {
+      "name": "Fixture Game",
+      "short_description": "<p>Hello &amp; welcome</p><script>privateMarker()</script>",
+      "about_the_game": "<h2>About</h2><p>Steam-first <strong>details</strong>.</p>",
+      "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/424242/header.jpg",
+      "screenshots": [
+        {"path_full": "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/424242/shot.jpg"}
+      ],
+      "movies": [
+        {
+          "name": "Trailer",
+          "thumbnail": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/424242/movie.jpg",
+          "webm": {"max": "https://video.akamai.steamstatic.com/store_trailers/424242/movie.webm"}
+        }
+      ],
+      "developers": ["Fixture <b>Studio</b>"],
+      "publishers": ["Fixture Publisher"],
+      "release_date": {"date": "31 Jul, 2026"},
+      "platforms": {"windows": true, "mac": false, "linux": true},
+      "supported_languages": "<strong>English</strong>, French<br>German",
+      "pc_requirements": {
+        "minimum": "<strong>Minimum:</strong> 8 GB RAM",
+        "recommended": "<strong>Recommended:</strong> 16 GB RAM"
+      },
+      "categories": [
+        {"id": 2, "description": "Single-player"},
+        {"id": 22, "description": "Steam Achievements"}
+      ],
+      "achievements": {"total": 12},
+      "dlc": [1001, 1002]
+    }
+  }
+}

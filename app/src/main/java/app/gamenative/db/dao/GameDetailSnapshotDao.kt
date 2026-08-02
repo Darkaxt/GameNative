@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface GameDetailSnapshotDao {
@@ -21,6 +22,20 @@ interface GameDetailSnapshotDao {
         locale: String,
         country: String,
     ): GameDetailSnapshotEntity?
+
+    @Query(
+        """
+        SELECT * FROM game_detail_snapshot
+        WHERE canonical_id = :canonicalId
+          AND locale = :locale
+          AND country = :country
+        """,
+    )
+    fun observe(
+        canonicalId: String,
+        locale: String,
+        country: String,
+    ): Flow<GameDetailSnapshotEntity?>
 
     @Query(
         """
