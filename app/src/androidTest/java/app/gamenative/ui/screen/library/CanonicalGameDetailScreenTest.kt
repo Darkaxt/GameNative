@@ -10,6 +10,7 @@ import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
+import app.gamenative.library.metadata.GameMovie
 import app.gamenative.library.metadata.GamePlatform
 import app.gamenative.library.metadata.GameRequirements
 import app.gamenative.library.metadata.MetadataFacet
@@ -83,6 +84,41 @@ class CanonicalGameDetailScreenTest {
         composeRule.onNodeWithText("Minimum: 8 GB RAM").assertIsDisplayed()
         composeRule.onNodeWithText("12").assertIsDisplayed()
         composeRule.onNodeWithText("2").assertIsDisplayed()
+    }
+
+    @Test
+    fun steamMetadataUsesScopedImageLoaderAndNeverSharedVideoPath() {
+        composeRule.setContent {
+            PluviaTheme {
+                CanonicalGameDetailScreen(
+                    state = GameDetailState.Content(
+                        metadata = metadata().copy(
+                            headerImageUrl = "https://shared.akamai.steamstatic.com/header.jpg",
+                            movies = listOf(
+                                GameMovie(
+                                    name = "Trailer",
+                                    previewImageUrl = "https://shared.akamai.steamstatic.com/poster.jpg",
+                                    streamUrl = "https://video.akamai.steamstatic.com/trailer.webm",
+                                ),
+                            ),
+                        ),
+                        stale = false,
+                    ),
+                    fallbackTitle = "Canonical fallback",
+                    fallbackImageUrl = "",
+                    ownedSources = setOf(GameSource.STEAM),
+                    compatibilityStatus = null,
+                    hltbStats = null,
+                    isOffline = false,
+                    onBack = {},
+                    onCopies = {},
+                    onSourceDetails = {},
+                    onRetry = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("steam-media-image").assertIsDisplayed()
     }
 
     private fun metadata() = CanonicalGameMetadata(

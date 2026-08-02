@@ -26,46 +26,74 @@ data class GameMediaItem(
     val videoUrl: String? = null,
 )
 
+internal enum class GameMediaLoadingPolicy {
+    DEFAULT,
+    STEAM_IMAGES_ONLY,
+}
+
 @Composable
 internal fun GameMediaPager(
     media: List<GameMediaItem>,
     fallbackImageUrl: String?,
     contentDescription: String,
     modifier: Modifier = Modifier,
+    loadingPolicy: GameMediaLoadingPolicy = GameMediaLoadingPolicy.DEFAULT,
 ) {
-    val safeMedia = remember(media) {
-        media.filter { !it.videoUrl.isNullOrBlank() || !it.imageUrl.isNullOrBlank() }
+    val safeMedia = remember(media, loadingPolicy) {
+        when (loadingPolicy) {
+            GameMediaLoadingPolicy.DEFAULT -> media.filter {
+                !it.videoUrl.isNullOrBlank() || !it.imageUrl.isNullOrBlank()
+            }
+            GameMediaLoadingPolicy.STEAM_IMAGES_ONLY -> media.filter {
+                !it.imageUrl.isNullOrBlank()
+            }
+        }
     }
     val pagerState = rememberPagerState(pageCount = { safeMedia.size.coerceAtLeast(1) })
 
     Box(modifier = modifier.testTag("game-media-pager")) {
         if (safeMedia.isEmpty()) {
-            VideoHero(
-                videoUrl = null,
-                fallbackImageUrl = fallbackImageUrl.orEmpty(),
-                contentDescription = contentDescription,
-                modifier = Modifier.fillMaxSize(),
-            )
+            when (loadingPolicy) {
+                GameMediaLoadingPolicy.DEFAULT -> VideoHero(
+                    videoUrl = null,
+                    fallbackImageUrl = fallbackImageUrl.orEmpty(),
+                    contentDescription = contentDescription,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                GameMediaLoadingPolicy.STEAM_IMAGES_ONLY -> SteamMediaImage(
+                    imageUrl = fallbackImageUrl,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         } else {
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                 val item = safeMedia[page]
-                if (!item.videoUrl.isNullOrBlank()) {
-                    VideoHero(
-                        videoUrl = item.videoUrl,
-                        fallbackImageUrl = (item.imageUrl ?: fallbackImageUrl).orEmpty(),
+                when {
+                    loadingPolicy == GameMediaLoadingPolicy.STEAM_IMAGES_ONLY -> SteamMediaImage(
+                        imageUrl = item.imageUrl,
                         contentDescription = contentDescription,
-                        active = page == pagerState.currentPage,
                         modifier = Modifier.fillMaxSize(),
                     )
-                } else {
-                    CoilImage(
-                        imageModel = { item.imageUrl },
-                        imageOptions = ImageOptions(
+                    !item.videoUrl.isNullOrBlank() -> {
+                        VideoHero(
+                            videoUrl = item.videoUrl,
+                            fallbackImageUrl = (item.imageUrl ?: fallbackImageUrl).orEmpty(),
                             contentDescription = contentDescription,
-                            contentScale = ContentScale.Crop,
-                        ),
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                            active = page == pagerState.currentPage,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                    else -> {
+                        CoilImage(
+                            imageModel = { item.imageUrl },
+                            imageOptions = ImageOptions(
+                                contentDescription = contentDescription,
+                                contentScale = ContentScale.Crop,
+                            ),
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
         }

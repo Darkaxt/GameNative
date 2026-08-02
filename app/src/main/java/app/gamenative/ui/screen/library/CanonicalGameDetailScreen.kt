@@ -49,6 +49,7 @@ import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GamePlatform
 import app.gamenative.ui.screen.library.components.GameMediaItem
+import app.gamenative.ui.screen.library.components.GameMediaLoadingPolicy
 import app.gamenative.ui.screen.library.components.GameMediaPager
 import app.gamenative.ui.screen.library.components.OwnedSourceBadges
 import app.gamenative.utils.HltbService
@@ -81,21 +82,13 @@ internal fun CanonicalGameDetailScreen(
         GameDetailState.Loading -> null
     }
     val title = metadata?.title?.takeIf(String::isNotBlank) ?: fallbackTitle
-    val media = remember(metadata) {
-        buildList {
-            metadata?.movies.orEmpty().forEach { movie ->
-                add(
-                    GameMediaItem(
-                        imageUrl = movie.previewImageUrl ?: metadata?.headerImageUrl,
-                        videoUrl = movie.streamUrl,
-                    ),
-                )
-            }
-            metadata?.screenshots.orEmpty().forEach { imageUrl ->
-                add(GameMediaItem(imageUrl = imageUrl))
-            }
-        }
+    val steamImageUrls = remember(metadata) {
+        metadata?.let(::canonicalSteamImageUrls).orEmpty()
     }
+    val media = remember(steamImageUrls) {
+        steamImageUrls.map { imageUrl -> GameMediaItem(imageUrl = imageUrl) }
+    }
+    val hasSteamMedia = media.isNotEmpty() || !metadata?.headerImageUrl.isNullOrBlank()
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = CanonicalDetailTab.entries
 
@@ -112,9 +105,18 @@ internal fun CanonicalGameDetailScreen(
         ) {
             GameMediaPager(
                 media = media,
-                fallbackImageUrl = metadata?.headerImageUrl ?: fallbackImageUrl,
+                fallbackImageUrl = if (hasSteamMedia) {
+                    metadata?.headerImageUrl
+                } else {
+                    fallbackImageUrl
+                },
                 contentDescription = title,
                 modifier = Modifier.fillMaxSize(),
+                loadingPolicy = if (hasSteamMedia) {
+                    GameMediaLoadingPolicy.STEAM_IMAGES_ONLY
+                } else {
+                    GameMediaLoadingPolicy.DEFAULT
+                },
             )
             Box(
                 modifier = Modifier
@@ -372,6 +374,13 @@ private fun DetailStatusBanner(text: String) {
         )
     }
 }
+
+internal fun canonicalSteamImageUrls(metadata: CanonicalGameMetadata): List<String> = buildList {
+    metadata.movies.forEach { movie ->
+        (movie.previewImageUrl ?: metadata.headerImageUrl)?.let(::add)
+    }
+    addAll(metadata.screenshots)
+}.filter(String::isNotBlank).distinct()
 
 private fun CanonicalDetailTab.labelResId(): Int = when (this) {
     CanonicalDetailTab.OVERVIEW -> R.string.canonical_detail_overview
