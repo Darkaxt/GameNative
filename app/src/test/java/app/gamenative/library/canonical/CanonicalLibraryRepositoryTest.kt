@@ -22,6 +22,7 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
+import app.gamenative.library.discovery.GameFacetRepository
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -853,7 +854,7 @@ class CanonicalLibraryRepositoryTest {
             history,
             mockk(relaxed = true),
         )
-        return CanonicalLibraryRepository(dao, registry, diagnostics)
+        return CanonicalLibraryRepository(dao, registry, diagnostics, mockk(relaxed = true))
     }
 
     private fun completeAdapters(

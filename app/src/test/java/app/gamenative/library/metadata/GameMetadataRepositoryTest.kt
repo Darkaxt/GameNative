@@ -6,6 +6,8 @@ import app.gamenative.data.canonical.CanonicalGameEntity
 import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.data.canonical.ClassificationState
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
+import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.GameFacetRepository
 import app.gamenative.db.dao.CanonicalGameDao
 import app.gamenative.db.dao.GameDetailSnapshotDao
 import java.io.IOException
@@ -32,8 +34,13 @@ class GameMetadataRepositoryTest {
         val canonicalId = canonicalId()
         val gameDao = FakeCanonicalGameDao(canonical(steamAppId = TRUSTED_APP_ID))
         val snapshotDao = FakeSnapshotDao()
-        val provider = FakeProvider(metadata("Network title", NOW))
-        val repository = repository(gameDao, snapshotDao, provider)
+        val facetRepository = FakeGameFacetRepository(snapshotDao)
+        val provider = FakeProvider(
+            metadata("Network title", NOW).copy(
+                genres = listOf(MetadataFacet(1, "<b>Action</b>"), MetadataFacet(null, "Ignored")),
+            ),
+        )
+        val repository = repository(gameDao, snapshotDao, provider, facetRepository)
 
         val result = repository.refresh(canonicalId)
 
@@ -46,6 +53,8 @@ class GameMetadataRepositoryTest {
         assertEquals("steam_appdetails_v1", stored.sourceRevision)
         assertTrue(stored.provenanceJson.contains("STEAM_APPDETAILS"))
         assertFalse(stored.payloadJson.contains(TRUSTED_APP_ID.toString()))
+        assertEquals(listOf(MetadataFacet(1, "Action")), facetRepository.lastGenres)
+        assertEquals(1, facetRepository.writeCount)
     }
 
     @Test
@@ -96,11 +105,15 @@ class GameMetadataRepositoryTest {
     fun failedStaleRefreshRetainsLastKnownGoodAndShowsFailure() = runTest {
         val stale = metadata("Last known good", NOW - GameMetadataRepository.CACHE_MAX_AGE_MS - 1L)
         val snapshotDao = FakeSnapshotDao(snapshot(stale))
+        val facetRepository = FakeGameFacetRepository(snapshotDao).apply {
+            lastGenres = listOf(MetadataFacet(1, "Action"))
+        }
         val provider = FakeProvider(failure = IOException("offline"))
         val repository = repository(
             FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)),
             snapshotDao,
             provider,
+            facetRepository,
         )
 
         val states = repository.observe(canonicalId())
@@ -113,6 +126,8 @@ class GameMetadataRepositoryTest {
         assertTrue(states[1].stale)
         assertTrue(states[1].refreshFailed)
         assertEquals("Last known good", decode(snapshotDao.current.value).title)
+        assertEquals(listOf(MetadataFacet(1, "Action")), facetRepository.lastGenres)
+        assertEquals(0, facetRepository.writeCount)
     }
 
     @Test
@@ -133,10 +148,13 @@ class GameMetadataRepositoryTest {
     @Test
     fun missingTrustedSteamIdDoesNotGuessOrCallProvider() = runTest {
         val provider = FakeProvider(metadata("must not be used", NOW))
+        val snapshotDao = FakeSnapshotDao()
+        val facetRepository = FakeGameFacetRepository(snapshotDao)
         val repository = repository(
             FakeCanonicalGameDao(canonical(steamAppId = null)),
-            FakeSnapshotDao(),
+            snapshotDao,
             provider,
+            facetRepository,
         )
 
         val states = repository.observe(canonicalId()).take(2).toList()
@@ -144,6 +162,7 @@ class GameMetadataRepositoryTest {
         assertEquals(GameDetailState.Loading, states[0])
         assertEquals(GameDetailState.Unavailable(cached = null), states[1])
         assertTrue(provider.requestedIds.isEmpty())
+        assertEquals(0, facetRepository.writeCount)
     }
 
     @Test
@@ -173,9 +192,11 @@ class GameMetadataRepositoryTest {
         gameDao: CanonicalGameDao,
         snapshotDao: GameDetailSnapshotDao,
         provider: SteamCatalogDataSource,
+        facetRepository: GameFacetRepository = FakeGameFacetRepository(snapshotDao),
     ): RoomGameMetadataRepository = RoomGameMetadataRepository(
         canonicalGameDao = gameDao,
         snapshotDao = snapshotDao,
+        gameFacetRepository = facetRepository,
         provider = provider,
         localeProvider = MetadataLocaleProvider { MetadataLocale("en-US", "us") },
         clock = MetadataClock { NOW },
@@ -235,6 +256,28 @@ class GameMetadataRepositoryTest {
 
     private fun decode(entity: GameDetailSnapshotEntity?): CanonicalGameMetadata =
         JSON.decodeFromString(requireNotNull(entity).payloadJson)
+
+    private class FakeGameFacetRepository(
+        private val snapshotDao: GameDetailSnapshotDao,
+    ) : GameFacetRepository {
+        var lastGenres: List<MetadataFacet> = emptyList()
+        var writeCount: Int = 0
+
+        override suspend fun upsertSteamGenresAndSnapshot(
+            canonicalId: CanonicalGameId,
+            genres: List<MetadataFacet>,
+            snapshot: GameDetailSnapshotEntity,
+        ) {
+            writeCount += 1
+            lastGenres = genres
+            snapshotDao.upsert(snapshot)
+        }
+
+        override fun resolveGenres(
+            keys: Set<String>,
+            snapshots: List<GameDetailSnapshotEntity>,
+        ): List<GameFacet> = emptyList()
+    }
 
     private class FakeProvider(
         var metadata: CanonicalGameMetadata? = null,

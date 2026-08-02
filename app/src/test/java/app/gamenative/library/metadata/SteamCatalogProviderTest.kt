@@ -130,6 +130,10 @@ class SteamCatalogProviderTest {
         assertEquals(12, metadata.achievementCount)
         assertEquals(2, metadata.dlcCount)
         assertEquals(2, metadata.features.size)
+        assertEquals(
+            listOf(MetadataFacet(1, "Action"), MetadataFacet(2, "Strategy")),
+            metadata.genres,
+        )
         assertNotNull(metadata.requirements)
         assertEquals(1, metadata.screenshots.size)
         assertEquals(1, metadata.movies.size)

@@ -156,6 +156,7 @@ class CanonicalLibraryViewModelTest {
             PrefManager.librarySortOption = SortOption.INSTALLED_FIRST
         }
         if (PrefManager.librarySteamCollections.isNotEmpty()) PrefManager.librarySteamCollections = emptySet()
+        if (PrefManager.libraryGenreKeys.isNotEmpty()) PrefManager.libraryGenreKeys = emptySet()
         awaitPreference {
             !PrefManager.canonicalPublicLibraryEnabled &&
                 PrefManager.showSteamInLibrary &&
@@ -165,7 +166,8 @@ class CanonicalLibraryViewModelTest {
                 PrefManager.showAmazonInLibrary &&
                 PrefManager.libraryFilter == defaultFilters &&
                 PrefManager.librarySortOption == SortOption.INSTALLED_FIRST &&
-                PrefManager.librarySteamCollections.isEmpty()
+                PrefManager.librarySteamCollections.isEmpty() &&
+                PrefManager.libraryGenreKeys.isEmpty()
         }
         scheduler = TestCoroutineScheduler()
         dispatcher = StandardTestDispatcher(scheduler)
@@ -206,6 +208,10 @@ class CanonicalLibraryViewModelTest {
 
     @After
     fun tearDown() {
+        if (PrefManager.libraryGenreKeys.isNotEmpty()) {
+            PrefManager.libraryGenreKeys = emptySet()
+            awaitPreference { PrefManager.libraryGenreKeys.isEmpty() }
+        }
         if (::viewModelStore.isInitialized) viewModelStore.clear()
         PluviaApp.events.clearAllListeners()
         clearAllMocks()
@@ -239,6 +245,68 @@ class CanonicalLibraryViewModelTest {
             "Enabled by default. Disable + restart GameNative to restore source-native cards/actions. Canonical failures automatically fall back to the source-native library.",
             context.getString(R.string.settings_debug_canonical_library_subtitle),
         )
+    }
+
+    @Test
+    fun `genre selection publishes filtered count coverage and clears immediately`() = runTest(dispatcher) {
+        val action = card(
+            canonicalId = canonicalId(810),
+            name = "Action card",
+            copyKeys = listOf(key(GameSource.STEAM, "810")),
+            genreKeys = setOf("steam:1"),
+            genreLabels = mapOf("steam:1" to "Action"),
+        )
+        val unclassified = card(
+            canonicalId = canonicalId(811),
+            name = "Unclassified card",
+            copyKeys = listOf(key(GameSource.STEAM, "811")),
+        )
+        assertNull(CanonicalLibraryCardValidator.failureOrNull(listOf(action, unclassified)))
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(action, unclassified))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        runCurrent()
+        awaitState { state -> state.cards.size == 2 && state.genreTotalCount == 2 }
+
+        vm.onGenreToggle("steam:1")
+        runCurrent()
+        awaitState { state ->
+            state.cards.map { it.name } == listOf("Action card") &&
+                state.totalAppsInFilter == 1 &&
+                state.discoveryFilters.selectedGenreKeys == setOf("steam:1") &&
+                state.genreFacets.singleOrNull()?.label == "Action" &&
+                state.genreClassifiedCount == 1 &&
+                state.genreTotalCount == 2
+        }
+        awaitPreference { PrefManager.libraryGenreKeys == setOf("steam:1") }
+
+        vm.onClearGenres()
+        runCurrent()
+        awaitState { state ->
+            state.cards.map { it.name } == listOf("Action card", "Unclassified card") &&
+                state.totalAppsInFilter == 2 &&
+                state.discoveryFilters.selectedGenreKeys.isEmpty()
+        }
+        awaitPreference { PrefManager.libraryGenreKeys.isEmpty() }
+    }
+
+    @Test
+    fun `persisted genre chip remains removable when facet is no longer available`() = runTest(dispatcher) {
+        PrefManager.libraryGenreKeys = setOf("steam:99")
+        awaitPreference { PrefManager.libraryGenreKeys == setOf("steam:99") }
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(card(name = "Unclassified")))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        awaitState { state -> state.discoveryFilters.selectedGenreKeys == setOf("steam:99") }
+
+        vm.onGenreToggle("steam:99")
+
+        assertTrue(vm.state.value.discoveryFilters.selectedGenreKeys.isEmpty())
+        awaitPreference { PrefManager.libraryGenreKeys.isEmpty() }
     }
 
     @Test
@@ -3711,6 +3779,8 @@ class CanonicalLibraryViewModelTest {
         nativeTitles: Map<OwnedCopyKey, String> = emptyMap(),
         confidences: Map<OwnedCopyKey, MatchConfidence> = emptyMap(),
         preferred: OwnedCopyKey? = null,
+        genreKeys: Set<String> = emptySet(),
+        genreLabels: Map<String, String> = emptyMap(),
         steamCollectionAppIds: Set<Int> = copyKeys
             .filter { it.source == GameSource.STEAM }
             .mapNotNull { it.stableSourceId.toIntOrNull() }
@@ -3743,6 +3813,8 @@ class CanonicalLibraryViewModelTest {
             preferredCopy = preferred,
             steamCollectionAppIds = steamCollectionAppIds,
             isShared = copies.any { it.isShared },
+            genreKeys = genreKeys,
+            genreLabels = genreLabels,
         )
     }
 

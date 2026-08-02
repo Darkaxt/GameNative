@@ -24,6 +24,7 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
+import app.gamenative.library.discovery.GameFacetRepository
 import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.AppFilter
@@ -266,7 +267,7 @@ class CanonicalLibraryScaleTest {
                 playHistoryDao = history,
                 diagnostics = mockk(relaxed = true),
             )
-            return CanonicalLibraryRepository(dao, registry, diagnostics)
+            return CanonicalLibraryRepository(dao, registry, diagnostics, mockk<GameFacetRepository>(relaxed = true))
         }
     }
 

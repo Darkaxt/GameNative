@@ -6,7 +6,9 @@ import androidx.room.Query
 import androidx.room.Relation
 import androidx.room.Transaction
 import app.gamenative.data.canonical.CanonicalGameEntity
+import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
 import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
+import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.data.canonical.StoreMatchEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -22,6 +24,16 @@ data class CanonicalLibraryAggregate(
         entityColumn = "canonical_id",
     )
     val preferences: List<CanonicalGamePreferenceEntity>,
+    @Relation(
+        parentColumn = "canonical_id",
+        entityColumn = "canonical_id",
+    )
+    val genres: List<CanonicalGameGenreCrossRef> = emptyList(),
+    @Relation(
+        parentColumn = "canonical_id",
+        entityColumn = "canonical_id",
+    )
+    val detailSnapshots: List<GameDetailSnapshotEntity> = emptyList(),
 ) {
     fun preferenceOrNull(): CanonicalGamePreferenceEntity? = preferences.singleOrNull()
 }

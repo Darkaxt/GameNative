@@ -174,6 +174,8 @@ fun HomeLibraryScreen(
         onSortOptionChanged = viewModel::onSortOptionChanged,
         onSteamCollectionToggle = viewModel::onSteamCollectionToggle,
         onClearSteamCollections = viewModel::onClearSteamCollections,
+        onGenreToggle = viewModel::onGenreToggle,
+        onClearGenres = viewModel::onClearGenres,
         onOptionsPanelToggle = viewModel::onOptionsPanelToggle,
         onTabChanged = viewModel::onTabChanged,
         onPreviousTab = viewModel::onPreviousTab,
@@ -223,6 +225,8 @@ internal fun LibraryScreenContent(
     onSortOptionChanged: (SortOption) -> Unit,
     onSteamCollectionToggle: (String) -> Unit,
     onClearSteamCollections: () -> Unit,
+    onGenreToggle: (String) -> Unit = {},
+    onClearGenres: () -> Unit = {},
     onOptionsPanelToggle: (Boolean) -> Unit,
     onTabChanged: (LibraryTab) -> Unit,
     onPreviousTab: () -> Unit,
@@ -1522,6 +1526,13 @@ internal fun LibraryScreenContent(
                 isOffline = isOffline,
                 onSteamCollectionToggle = onSteamCollectionToggle,
                 onClearSteamCollections = onClearSteamCollections,
+                genreFacets = state.genreFacets,
+                selectedGenreKeys = state.discoveryFilters.selectedGenreKeys,
+                genreClassifiedCount = state.genreClassifiedCount,
+                genreTotalCount = state.genreTotalCount,
+                resultCount = state.totalAppsInFilter,
+                onGenreToggle = onGenreToggle,
+                onClearGenres = onClearGenres,
             )
 
             // System menu (START) - renders on top of everything

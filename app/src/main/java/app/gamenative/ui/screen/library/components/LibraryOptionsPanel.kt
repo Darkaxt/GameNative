@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PhotoAlbum
 import androidx.compose.material.icons.filled.PhotoSizeSelectActual
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.ViewCarousel
@@ -54,6 +55,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,6 +71,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
@@ -76,6 +80,7 @@ import androidx.compose.ui.unit.dp
 import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.SteamCollection
+import app.gamenative.library.discovery.GameFacet
 import app.gamenative.ui.component.GameStatsKey
 import app.gamenative.ui.component.OptionListItem
 import app.gamenative.ui.component.OptionRadioItem
@@ -105,9 +110,23 @@ fun LibraryOptionsPanel(
     isOffline: Boolean,
     onSteamCollectionToggle: (String) -> Unit,
     onClearSteamCollections: () -> Unit,
+    genreFacets: List<GameFacet> = emptyList(),
+    selectedGenreKeys: Set<String> = emptySet(),
+    genreClassifiedCount: Int = 0,
+    genreTotalCount: Int = 0,
+    resultCount: Int = 0,
+    onGenreToggle: (String) -> Unit = {},
+    onClearGenres: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
+    var genreSearchQuery by rememberSaveable { mutableStateOf("") }
+    val visibleGenreFacets = remember(genreFacets, genreSearchQuery) {
+        val query = genreSearchQuery.trim()
+        if (query.isEmpty()) genreFacets else genreFacets.filter { facet ->
+            facet.label.contains(query, ignoreCase = true)
+        }
+    }
 
     BackHandler(enabled = isOpen) {
         onDismiss()
@@ -279,6 +298,85 @@ fun LibraryOptionsPanel(
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                 }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OptionSectionHeader(text = stringResource(R.string.genres_title))
+                            if (selectedGenreKeys.isNotEmpty()) {
+                                TextButton(onClick = onClearGenres) {
+                                    Text(stringResource(R.string.genres_clear))
+                                }
+                            }
+                        }
+                        LibraryActiveFilterChips(
+                            genreFacets = genreFacets,
+                            selectedGenreKeys = selectedGenreKeys,
+                            onRemoveGenre = onGenreToggle,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = genreSearchQuery,
+                            onValueChange = { genreSearchQuery = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .testTag("genre-search"),
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.genres_search)) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null)
+                            },
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = pluralStringResource(
+                                    R.plurals.genre_result_count,
+                                    resultCount,
+                                    resultCount,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.genre_coverage,
+                                    genreClassifiedCount,
+                                    genreTotalCount,
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusGroup()
+                                .padding(horizontal = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            visibleGenreFacets.forEach { facet ->
+                                OptionListItem(
+                                    text = facet.label,
+                                    selected = facet.key in selectedGenreKeys,
+                                    onClick = { onGenreToggle(facet.key) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("genre-option:${facet.key}"),
+                                )
                             }
                         }
 

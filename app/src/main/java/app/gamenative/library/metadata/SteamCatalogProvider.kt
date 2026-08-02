@@ -130,6 +130,7 @@ class SteamCatalogProvider internal constructor(
             platforms = parsePlatforms(data["platforms"]),
             languages = parseLanguages(data["supported_languages"].stringOrNull()),
             requirements = parseRequirements(data["pc_requirements"]),
+            genres = parseGenres(data["genres"]),
             features = parseFeatures(data["categories"]),
             achievementCount = data["achievements"].objectOrNull()
                 ?.get("total")
@@ -190,6 +191,17 @@ class SteamCatalogProvider internal constructor(
         return result.takeIf { it.minimum != null || it.recommended != null }
     }
 
+    private fun parseGenres(value: JsonElement?): List<MetadataFacet> = value.arrayOrNull()
+        .orEmpty()
+        .mapNotNull { element ->
+            val genre = element.objectOrNull() ?: return@mapNotNull null
+            val id = genre["id"].positiveIntOrNull() ?: return@mapNotNull null
+            val label = sanitizeSteamText(genre["description"].stringOrNull())
+                ?: return@mapNotNull null
+            MetadataFacet(id = id, label = label)
+        }
+        .distinctBy(MetadataFacet::id)
+
     private fun parseFeatures(value: JsonElement?): List<MetadataFacet> = value.arrayOrNull()
         .orEmpty()
         .mapNotNull { element ->
@@ -223,6 +235,8 @@ private fun JsonElement?.arrayOrNull(): JsonArray? = this as? JsonArray
 private fun JsonElement?.stringOrNull(): String? =
     (this as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull
 private fun JsonElement?.booleanOrNull(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
+private fun JsonElement?.positiveIntOrNull(): Int? =
+    (this as? JsonPrimitive)?.contentOrNull?.toIntOrNull()?.takeIf { it > 0 }
 private fun JsonElement?.nonNegativeIntOrNull(): Int? =
     (this as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }
 

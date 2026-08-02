@@ -1424,6 +1424,16 @@
     <string name="steam_save_import_failed">Failed to import saves: %s</string>
     <string name="library_app_type">App Type</string>
     <string name="library_app_status">App Status</string>
+    <string name="genres_title">Genres</string>
+    <string name="genres_search">Search genres</string>
+    <string name="genres_clear">Clear</string>
+    <string name="genre_coverage">%1$d / %2$d classified</string>
+    <string name="genre_unknown">Unknown genre</string>
+    <string name="genre_remove">Remove %1$s</string>
+    <plurals name="genre_result_count">
+        <item quantity="one">%d result</item>
+        <item quantity="other">%d results</item>
+    </plurals>
     <string name="library_layout">Layout</string>
     <string name="library_layout_list">List</string>
     <string name="library_layout_capsule">Capsule</string>

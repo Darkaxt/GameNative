@@ -17,6 +17,7 @@ data class CanonicalGameMetadata(
     val platforms: Set<GamePlatform>,
     val languages: List<String>,
     val requirements: GameRequirements?,
+    val genres: List<MetadataFacet> = emptyList(),
     val features: List<MetadataFacet>,
     val achievementCount: Int?,
     val dlcCount: Int?,
@@ -74,6 +75,7 @@ enum class MetadataField {
     PLATFORMS,
     LANGUAGES,
     REQUIREMENTS,
+    GENRES,
     FEATURES,
     ACHIEVEMENT_COUNT,
     DLC_COUNT,
@@ -175,6 +177,12 @@ internal fun CanonicalGameMetadata.sanitizedForPersistence(): CanonicalGameMetad
             recommended = sanitizeSteamText(value.recommended),
         ).takeIf { it.minimum != null || it.recommended != null }
     },
+    genres = genres.mapNotNull { facet ->
+        val id = facet.id?.takeIf { it > 0 } ?: return@mapNotNull null
+        sanitizeSteamText(facet.label)?.take(80)?.takeIf(String::isNotBlank)?.let { label ->
+            MetadataFacet(id = id, label = label)
+        }
+    }.distinctBy(MetadataFacet::id),
     features = features.mapNotNull { facet ->
         sanitizeSteamText(facet.label)?.let { label -> facet.copy(label = label) }
     }.distinctBy { it.id to it.label },

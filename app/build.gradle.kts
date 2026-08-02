@@ -64,8 +64,8 @@ android {
         buildConfigField("boolean", "XR_BUILD", "false")
         buildConfigField("boolean", "MODERN_XR", "false")
 
-        versionCode = 24
-        versionName = "1.1.3-nightly.2"
+        versionCode = 25
+        versionName = "1.1.3-nightly.3"
 
         buildConfigField("boolean", "GOLD", "false")
         fun secret(name: String) =

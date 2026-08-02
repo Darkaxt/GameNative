@@ -11,6 +11,7 @@ import app.gamenative.db.dao.CanonicalLibraryDao
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntime
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
+import app.gamenative.library.discovery.GameFacetRepository
 import java.util.Collections
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,6 +30,7 @@ class CanonicalLibraryRepository @Inject constructor(
     private val dao: CanonicalLibraryDao,
     private val runtimeRegistry: OwnedCopyRuntimeRegistry,
     private val diagnostics: CanonicalLibraryDiagnosticSink,
+    private val gameFacetRepository: GameFacetRepository,
 ) {
     fun observeCards(): Flow<List<CanonicalLibraryCard>> = combine(
         dao.observePresentGames().map(::freezeAggregates),
@@ -159,6 +161,10 @@ class CanonicalLibraryRepository @Inject constructor(
             .filter { it.source == GameSource.STEAM }
             .mapNotNull { it.key.stableSourceId.positiveExactDecimalIntOrNull() }
             .toCollection(linkedSetOf())
+        val genreFacets = gameFacetRepository.resolveGenres(
+            keys = aggregate.genres.mapTo(linkedSetOf()) { it.genreKey },
+            snapshots = aggregate.detailSnapshots,
+        )
 
         return CanonicalLibraryCard(
             key = key,
@@ -180,6 +186,8 @@ class CanonicalLibraryRepository @Inject constructor(
             preferredCopy = preferredCopy,
             steamCollectionAppIds = immutableSet(steamCollectionAppIds),
             isShared = copies.any(OwnedCopySummary::isShared),
+            genreKeys = immutableSet(genreFacets.map { it.key }),
+            genreLabels = immutableMap(genreFacets.associate { it.key to it.label }),
         )
     }
 
@@ -312,6 +320,8 @@ class CanonicalLibraryRepository @Inject constructor(
             aggregate.copy(
                 matches = immutableList(aggregate.matches),
                 preferences = immutableList(aggregate.preferences),
+                genres = immutableList(aggregate.genres),
+                detailSnapshots = immutableList(aggregate.detailSnapshots),
             )
         },
     )
@@ -401,6 +411,10 @@ class CanonicalLibraryRepository @Inject constructor(
         fun <T> immutableSet(values: Collection<T>): Set<T> =
             if (values.isEmpty()) emptySet()
             else Collections.unmodifiableSet(LinkedHashSet(values))
+
+        fun <K, V> immutableMap(values: Map<K, V>): Map<K, V> =
+            if (values.isEmpty()) emptyMap()
+            else Collections.unmodifiableMap(LinkedHashMap(values))
 
         val POSITIVE_EXACT_DECIMAL = Regex("[1-9][0-9]*")
     }

@@ -62,6 +62,9 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.OwnedCopyProjection
 import app.gamenative.library.canonical.stableComposeKey
+import app.gamenative.library.discovery.DiscoveryFilterState
+import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.immutableGenreKeys
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonArtwork
@@ -138,6 +141,9 @@ internal data class CanonicalLibraryPage(
     val sourceCounts: Map<GameSource, Int>,
     val steamCollectionCounts: Map<String, Int>,
     val compatibilityRequestNames: List<String>,
+    val genreFacets: List<GameFacet>,
+    val genreClassifiedCount: Int,
+    val genreTotalCount: Int,
 )
 
 internal object CanonicalLibraryCardValidator {
@@ -229,6 +235,16 @@ internal object CanonicalLibraryFilter {
             state.appInfoSortType.contains(AppFilter.INSTALLED)
         val includeShared = state.appInfoSortType.contains(AppFilter.SHARED)
 
+        val genreFacets = cards.asSequence()
+            .flatMap { card ->
+                card.genreKeys.asSequence().mapNotNull { key ->
+                    card.genreLabels[key]?.let { label -> GameFacet(key, label) }
+                }
+            }
+            .distinctBy(GameFacet::key)
+            .sortedWith(compareBy<GameFacet> { it.label.lowercase() }.thenBy(GameFacet::label).thenBy(GameFacet::key))
+            .toList()
+        val selectedGenres = state.discoveryFilters.selectedGenreKeys
         val beforeCollections = cards.asSequence()
             .filter { card -> card.appType in appTypes }
             .filter { card ->
@@ -250,8 +266,11 @@ internal object CanonicalLibraryFilter {
             .filter { entry -> passesStats(state, entry.stats) }
             .toList()
 
+        val beforeCollectionsAfterGenres = beforeCollections.filter { entry ->
+            selectedGenres.isEmpty() || entry.card.genreKeys.any(selectedGenres::contains)
+        }
         val steamCollectionCounts = state.steamCollections?.associate { collection ->
-            collection.id to beforeCollections.count { entry ->
+            collection.id to beforeCollectionsAfterGenres.count { entry ->
                 entry.card.steamCollectionAppIds.any(collection.appIds::contains)
             }
         }.orEmpty()
@@ -259,12 +278,16 @@ internal object CanonicalLibraryFilter {
             selectedIds = state.selectedSteamCollectionIds,
             collections = state.steamCollections,
         )
-        val afterCollections = if (allowedSteamAppIds == null) {
+        val afterCollectionsBeforeGenres = if (allowedSteamAppIds == null) {
             beforeCollections
         } else {
             beforeCollections.filter { entry ->
                 entry.card.steamCollectionAppIds.any(allowedSteamAppIds::contains)
             }
+        }
+        val coverageCards = afterCollectionsBeforeGenres.filter { entry -> admitted(entry.card, state) }
+        val afterCollections = afterCollectionsBeforeGenres.filter { entry ->
+            selectedGenres.isEmpty() || entry.card.genreKeys.any(selectedGenres::contains)
         }
 
         val sourceCounts = LibraryCard.OWNED_SOURCE_ORDER.associateWith { source ->
@@ -324,6 +347,9 @@ internal object CanonicalLibraryFilter {
             sourceCounts = sourceCounts,
             steamCollectionCounts = steamCollectionCounts,
             compatibilityRequestNames = immutableList(compatibilityRequestNames),
+            genreFacets = immutableList(genreFacets),
+            genreClassifiedCount = coverageCards.count { entry -> entry.card.genreKeys.isNotEmpty() },
+            genreTotalCount = coverageCards.size,
         )
     }
 
@@ -1165,6 +1191,37 @@ class LibraryViewModel @Inject constructor(
         onFilterApps(request)
     }
 
+    fun onGenreToggle(key: String) {
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                val selected = current.discoveryFilters.selectedGenreKeys
+                if (key !in selected && current.genreFacets.none { facet -> facet.key == key }) {
+                    return@supersedeRenderForPendingInput current
+                }
+                val updated = selected.toMutableSet()
+                if (!updated.add(key)) updated.remove(key)
+                val immutable = immutableGenreKeys(updated)
+                PrefManager.libraryGenreKeys = immutable
+                current.copy(
+                    discoveryFilters = DiscoveryFilterState(selectedGenreKeys = immutable),
+                )
+            },
+        )
+        onFilterApps(request)
+    }
+
+    fun onClearGenres() {
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                PrefManager.libraryGenreKeys = emptySet()
+                current.copy(discoveryFilters = DiscoveryFilterState())
+            },
+        )
+        onFilterApps(request)
+    }
+
     fun onPageChange(pageIncrement: Int) {
         val request = supersedeRenderForPendingInput(
             paginationPageLocked = {
@@ -1356,6 +1413,7 @@ class LibraryViewModel @Inject constructor(
         if (state.searchQuery.isNotEmpty()) add("search")
         if (state.appInfoSortType.isNotEmpty()) add("app_filter")
         if (state.selectedSteamCollectionIds.isNotEmpty()) add("collection")
+        if (state.discoveryFilters.selectedGenreKeys.isNotEmpty()) add("genre")
         add("source_tab")
     }.joinToString(",")
 
@@ -2390,6 +2448,9 @@ class LibraryViewModel @Inject constructor(
                             0
                         },
                         steamCollectionCounts = page.steamCollectionCounts,
+                        genreFacets = page.genreFacets,
+                        genreClassifiedCount = page.genreClassifiedCount,
+                        genreTotalCount = page.genreTotalCount,
                     )
                 }
                 true

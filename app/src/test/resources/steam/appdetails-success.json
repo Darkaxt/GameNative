@@ -25,6 +25,10 @@
         "minimum": "<strong>Minimum:</strong> 8 GB RAM",
         "recommended": "<strong>Recommended:</strong> 16 GB RAM"
       },
+      "genres": [
+        {"id": "1", "description": "<b>Action</b>"},
+        {"id": "2", "description": "Strategy"}
+      ],
       "categories": [
         {"id": 2, "description": "Single-player"},
         {"id": 22, "description": "Steam Achievements"}

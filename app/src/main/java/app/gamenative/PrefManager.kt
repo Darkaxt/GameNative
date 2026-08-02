@@ -910,6 +910,26 @@ object PrefManager {
             setPref(LIBRARY_SORT_KEY, value.key)
         }
 
+    private val LIBRARY_GENRE_KEYS = stringPreferencesKey("library_genre_keys")
+    private const val GENRE_KEY_SEPARATOR = ""
+    private val STEAM_GENRE_KEY = Regex("steam:[1-9][0-9]*")
+    var libraryGenreKeys: Set<String>
+        get() {
+            val raw = getPref(LIBRARY_GENRE_KEYS, "")
+            if (raw.isEmpty()) return emptySet()
+            return raw.split(GENRE_KEY_SEPARATOR)
+                .filter(STEAM_GENRE_KEY::matches)
+                .toCollection(linkedSetOf())
+        }
+        set(value) {
+            val serialized = value.asSequence()
+                .filter(STEAM_GENRE_KEY::matches)
+                .distinct()
+                .sorted()
+                .joinToString(GENRE_KEY_SEPARATOR)
+            setPref(LIBRARY_GENRE_KEYS, serialized)
+        }
+
     private val LIBRARY_STEAM_COLLECTIONS_CACHE = stringPreferencesKey("library_steam_collections_cache")
     var librarySteamCollectionsCache: String
         get() = getPref(LIBRARY_STEAM_COLLECTIONS_CACHE, "")

@@ -5,6 +5,7 @@ import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.db.dao.CanonicalGameDao
 import app.gamenative.db.dao.GameDetailSnapshotDao
 import app.gamenative.library.canonical.runtime.CanonicalIoDispatcher
+import app.gamenative.library.discovery.GameFacetRepository
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -52,6 +53,7 @@ interface GameMetadataRepository {
 class RoomGameMetadataRepository @Inject constructor(
     private val canonicalGameDao: CanonicalGameDao,
     private val snapshotDao: GameDetailSnapshotDao,
+    private val gameFacetRepository: GameFacetRepository,
     private val provider: SteamCatalogDataSource,
     private val localeProvider: MetadataLocaleProvider,
     private val clock: MetadataClock,
@@ -125,8 +127,10 @@ class RoomGameMetadataRepository @Inject constructor(
                 .copy(fetchedAtEpochMs = clock.nowEpochMs())
                 .sanitizedForPersistence()
             if (metadata.title.isBlank()) return MetadataRefreshResult.Failed
-            snapshotDao.upsert(
-                GameDetailSnapshotEntity(
+            gameFacetRepository.upsertSteamGenresAndSnapshot(
+                canonicalId = canonicalId,
+                genres = metadata.genres,
+                snapshot = GameDetailSnapshotEntity(
                     canonicalId = canonicalId.value,
                     locale = locale.normalizedLocale,
                     country = locale.normalizedCountry,
@@ -175,6 +179,7 @@ class RoomGameMetadataRepository @Inject constructor(
             if (platforms.isNotEmpty()) add(MetadataField.PLATFORMS)
             if (languages.isNotEmpty()) add(MetadataField.LANGUAGES)
             if (requirements != null) add(MetadataField.REQUIREMENTS)
+            if (genres.isNotEmpty()) add(MetadataField.GENRES)
             if (features.isNotEmpty()) add(MetadataField.FEATURES)
             if (achievementCount != null) add(MetadataField.ACHIEVEMENT_COUNT)
             if (dlcCount != null) add(MetadataField.DLC_COUNT)

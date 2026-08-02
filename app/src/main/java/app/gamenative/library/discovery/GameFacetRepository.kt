@@ -1,0 +1,142 @@
+package app.gamenative.library.discovery
+
+import androidx.room.withTransaction
+import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
+import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.GameDetailSnapshotEntity
+import app.gamenative.db.PluviaDatabase
+import app.gamenative.db.dao.CanonicalFacetDao
+import app.gamenative.db.dao.GameDetailSnapshotDao
+import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.MetadataFacet
+import app.gamenative.library.metadata.sanitizeSteamText
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+
+interface GameFacetRepository {
+    suspend fun upsertSteamGenresAndSnapshot(
+        canonicalId: CanonicalGameId,
+        genres: List<MetadataFacet>,
+        snapshot: GameDetailSnapshotEntity,
+    )
+
+    fun resolveGenres(
+        keys: Set<String>,
+        snapshots: List<GameDetailSnapshotEntity>,
+    ): List<GameFacet>
+}
+
+@Singleton
+class RoomGameFacetRepository @Inject constructor(
+    private val database: PluviaDatabase,
+    private val facetDao: CanonicalFacetDao,
+    private val snapshotDao: GameDetailSnapshotDao,
+) : GameFacetRepository {
+    override suspend fun upsertSteamGenresAndSnapshot(
+        canonicalId: CanonicalGameId,
+        genres: List<MetadataFacet>,
+        snapshot: GameDetailSnapshotEntity,
+    ) {
+        require(snapshot.canonicalId == canonicalId.value)
+        val sanitized = sanitizeGenres(genres)
+        database.withTransaction {
+            if (sanitized.isNotEmpty()) {
+                facetDao.upsertGenres(
+                    sanitized.map { facet ->
+                        CanonicalGameGenreCrossRef(canonicalId.value, steamGenreKey(requireNotNull(facet.id)))
+                    },
+                )
+            }
+            snapshotDao.upsert(snapshot)
+        }
+    }
+
+    override fun resolveGenres(
+        keys: Set<String>,
+        snapshots: List<GameDetailSnapshotEntity>,
+    ): List<GameFacet> {
+        val idsByKey = keys.mapNotNull { key ->
+            parseSteamGenreId(key)?.let { id -> key to id }
+        }.toMap()
+        if (idsByKey.isEmpty()) return emptyList()
+
+        val labelsById = linkedMapOf<Int, String>()
+        snapshots.asSequence()
+            .sortedWith(
+                compareByDescending<GameDetailSnapshotEntity> { it.fetchedAt }
+                    .thenBy { it.locale }
+                    .thenBy { it.country },
+            )
+            .mapNotNull(::decodeMetadata)
+            .flatMap { metadata -> sanitizeGenres(metadata.genres).asSequence() }
+            .forEach { facet -> labelsById.putIfAbsent(requireNotNull(facet.id), facet.label) }
+
+        return idsByKey.map { (key, id) ->
+            GameFacet(
+                key = key,
+                label = labelsById[id] ?: STEAM_GENRE_LABELS[id] ?: "Genre $id",
+            )
+        }.sortedWith(compareBy<GameFacet> { it.label.lowercase() }.thenBy(GameFacet::label).thenBy(GameFacet::key))
+    }
+
+    private fun decodeMetadata(snapshot: GameDetailSnapshotEntity): CanonicalGameMetadata? {
+        if (snapshot.sourceRevision != STEAM_APPDETAILS_SOURCE_REVISION) return null
+        return try {
+            JSON.decodeFromString<CanonicalGameMetadata>(snapshot.payloadJson)
+        } catch (_: SerializationException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
+    private companion object {
+        const val STEAM_APPDETAILS_SOURCE_REVISION = "steam_appdetails_v1"
+        val JSON = Json { ignoreUnknownKeys = true }
+        val STEAM_GENRE_LABELS = mapOf(
+            1 to "Action",
+            2 to "Strategy",
+            3 to "RPG",
+            4 to "Casual",
+            5 to "Racing",
+            18 to "Sports",
+            23 to "Indie",
+            25 to "Adventure",
+            28 to "Simulation",
+            29 to "Massively Multiplayer",
+            37 to "Free to Play",
+            51 to "Animation & Modeling",
+            52 to "Audio Production",
+            53 to "Design & Illustration",
+            54 to "Education",
+            55 to "Photo Editing",
+            56 to "Software Training",
+            57 to "Utilities",
+            58 to "Video Production",
+            59 to "Web Publishing",
+            60 to "Game Development",
+            70 to "Early Access",
+        )
+    }
+}
+
+private fun sanitizeGenres(genres: List<MetadataFacet>): List<MetadataFacet> = genres.mapNotNull { facet ->
+    val id = facet.id?.takeIf { it > 0 } ?: return@mapNotNull null
+    val label = sanitizeSteamText(facet.label)?.take(MAX_GENRE_LABEL_LENGTH)?.takeIf(String::isNotBlank)
+        ?: return@mapNotNull null
+    MetadataFacet(id, label)
+}.distinctBy { facet -> facet.id }
+
+private fun steamGenreKey(id: Int): String = "steam:$id"
+
+private fun parseSteamGenreId(key: String): Int? = STEAM_GENRE_KEY.matchEntire(key)
+    ?.groupValues
+    ?.get(1)
+    ?.toIntOrNull()
+    ?.takeIf { it > 0 }
+
+private const val MAX_GENRE_LABEL_LENGTH = 80
+private val STEAM_GENRE_KEY = Regex("steam:([1-9][0-9]*)")

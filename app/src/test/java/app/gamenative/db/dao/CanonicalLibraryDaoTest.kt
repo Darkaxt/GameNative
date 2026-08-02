@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameEntity
+import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
 import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.ClassificationState
 import app.gamenative.data.canonical.MatchConfidence
@@ -162,6 +163,37 @@ class CanonicalLibraryDaoTest {
         database.canonicalPreferenceDao().upsert(changedPreference)
 
         assertEquals(changedPreference, emissions.await().last())
+    }
+
+    @Test
+    fun genreRelationInvalidatesTransactionallyWithoutDuplicatingCanonicalCards() = runTest {
+        val game = game(INCLUDED_ID)
+        database.canonicalGameDao().insert(game)
+        database.storeMatchDao().upsert(match(game.canonicalId, "copy", GameSource.STEAM))
+        database.canonicalFacetDao().upsertGenres(
+            listOf(CanonicalGameGenreCrossRef(game.canonicalId, "steam:1")),
+        )
+        val initial = CompletableDeferred<List<CanonicalLibraryAggregate>>()
+        val emissions = async(start = CoroutineStart.UNDISPATCHED) {
+            dao.observePresentGames()
+                .onEach { aggregates ->
+                    if (!initial.isCompleted) initial.complete(aggregates)
+                }
+                .take(2)
+                .toList()
+        }
+        assertEquals(listOf("steam:1"), initial.await().single().genres.map { it.genreKey })
+
+        database.canonicalFacetDao().upsertGenres(
+            listOf(
+                CanonicalGameGenreCrossRef(game.canonicalId, "steam:1"),
+                CanonicalGameGenreCrossRef(game.canonicalId, "steam:2"),
+            ),
+        )
+
+        val updated = emissions.await().last()
+        assertEquals(1, updated.size)
+        assertEquals(listOf("steam:1", "steam:2"), updated.single().genres.map { it.genreKey }.sorted())
     }
 
     @Test

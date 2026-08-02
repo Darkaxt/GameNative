@@ -96,6 +96,8 @@ data class CanonicalLibraryCard(
     val preferredCopy: OwnedCopyKey?,
     val steamCollectionAppIds: Set<Int>,
     val isShared: Boolean,
+    val genreKeys: Set<String> = emptySet(),
+    val genreLabels: Map<String, String> = emptyMap(),
 ) {
     val isInstalled: Boolean get() = copies.any(OwnedCopySummary::isInstalled)
     val lastPlayedEpochMs: Long? get() = copies.mapNotNull { it.lastPlayedEpochMs }.maxOrNull()
