@@ -9,6 +9,7 @@ import app.gamenative.library.canonical.CanonicalPublicFailure
 import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.discovery.DiscoveryFilterState
 import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.SteamPopularityEnrichmentProgress
 import app.gamenative.library.discovery.SteamTagFacet
 import app.gamenative.library.discovery.immutableGenreKeys
 import app.gamenative.library.discovery.immutableTagIds
@@ -58,6 +59,10 @@ data class LibraryState(
     val tagFacets: List<SteamTagFacet> = emptyList(),
     val tagClassifiedCount: Int = 0,
     val tagTotalCount: Int = 0,
+    val steamReviewMinimum: Int? = PrefManager.librarySteamReviewMinimum,
+    val steamPopularityKnownCount: Int = 0,
+    val steamPopularityEligibleCount: Int = 0,
+    val steamPopularityProgress: SteamPopularityEnrichmentProgress = SteamPopularityEnrichmentProgress(),
 
     // Loading state for skeleton loaders
     val isLoading: Boolean = false,

@@ -20,6 +20,7 @@ import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.LibraryTab
+import app.gamenative.ui.enums.SortOption
 import app.gamenative.ui.model.CanonicalLibraryFilter
 import app.gamenative.utils.DeviceGameStatsService.DeviceGameStats
 import java.util.EnumSet
@@ -298,6 +299,151 @@ class CanonicalDiscoveryFilterTest {
         assertEquals(listOf(ACTION, STRATEGY), PrefManager.libraryGenreKeys.toList())
     }
 
+    @Test
+    fun popularityThresholdEdgesExcludeUnknownOnlyWhenActiveAndClearRestoresThem() {
+        val cards = listOf(
+            card(1, "Unknown", steamReviewCount = null),
+            card(2, "Ninety nine", steamReviewCount = 99),
+            card(3, "One hundred", steamReviewCount = 100),
+            card(4, "Nine hundred ninety nine", steamReviewCount = 999),
+            card(5, "One thousand", steamReviewCount = 1_000),
+            card(6, "Nine thousand nine hundred ninety nine", steamReviewCount = 9_999),
+            card(7, "Ten thousand", steamReviewCount = 10_000),
+        )
+
+        assertEquals(7, project(cards, state(minimumReviews = null)).totalCount)
+        assertEquals(
+            listOf(
+                "Nine hundred ninety nine",
+                "Nine thousand nine hundred ninety nine",
+                "One hundred",
+                "One thousand",
+                "Ten thousand",
+            ),
+            project(cards, state(minimumReviews = 100)).cards.map { it.name },
+        )
+        assertEquals(
+            listOf("Nine thousand nine hundred ninety nine", "One thousand", "Ten thousand"),
+            project(cards, state(minimumReviews = 1_000)).cards.map { it.name },
+        )
+        assertEquals(
+            listOf("Ten thousand"),
+            project(cards, state(minimumReviews = 10_000)).cards.map { it.name },
+        )
+        assertEquals(
+            listOf(
+                "Nine hundred ninety nine",
+                "Nine thousand nine hundred ninety nine",
+                "Ninety nine",
+                "One hundred",
+                "One thousand",
+                "Ten thousand",
+                "Unknown",
+            ),
+            project(cards, state(minimumReviews = null)).cards.map { it.name },
+        )
+    }
+
+    @Test
+    fun popularitySortUsesDescendingKnownCountsNullLastAndExistingNameTieBreak() {
+        val cards = listOf(
+            card(1, "Unknown alpha", steamReviewCount = null),
+            card(2, "Tie zulu", steamReviewCount = 1_000),
+            card(3, "Highest", steamReviewCount = 10_000),
+            card(4, "Tie alpha", steamReviewCount = 1_000),
+            card(5, "Unknown bravo", steamReviewCount = null),
+        )
+
+        val page = project(
+            cards,
+            state(sort = SortOption.STEAM_REVIEW_COUNT),
+        )
+
+        assertEquals(
+            listOf("Highest", "Tie alpha", "Tie zulu", "Unknown alpha", "Unknown bravo"),
+            page.cards.map { it.name },
+        )
+    }
+
+    @Test
+    fun popularityThresholdAndsWithAllExistingFilterGroupsBeforeCountsAndPagination() {
+        val popular = card(
+            1,
+            "Popular action",
+            genreKeys = setOf(ACTION),
+            tagIds = setOf(COOP),
+            steamReviewCount = 100,
+        )
+        val unpopular = card(
+            2,
+            "Unpopular action",
+            genreKeys = setOf(ACTION),
+            tagIds = setOf(COOP),
+            steamReviewCount = 99,
+        )
+        val page = project(
+            cards = listOf(popular, unpopular),
+            state = state(
+                search = "action",
+                selectedGenres = setOf(ACTION),
+                selectedTags = setOf(COOP),
+                minimumReviews = 100,
+            ),
+            pageSize = 1,
+        )
+
+        assertEquals(1, page.totalCount)
+        assertEquals(1, page.allCount)
+        assertEquals(1, page.sourceCounts.getValue(GameSource.STEAM))
+        assertEquals(0, page.lastPage)
+        assertEquals(listOf("Popular action"), page.cards.map { it.name })
+        assertEquals(2, page.steamPopularityEligibleCount)
+        assertEquals(2, page.steamPopularityKnownCount)
+    }
+
+    @Test
+    fun popularityThresholdAndSortSurvivePreferenceRestart() {
+        PrefManager.librarySteamReviewMinimum = 1_000
+        PrefManager.librarySortOption = SortOption.STEAM_REVIEW_COUNT
+        awaitPreference {
+            PrefManager.librarySteamReviewMinimum == 1_000 &&
+                PrefManager.librarySortOption == SortOption.STEAM_REVIEW_COUNT
+        }
+
+        PrefManager.init(context)
+
+        assertEquals(1_000, PrefManager.librarySteamReviewMinimum)
+        assertEquals(SortOption.STEAM_REVIEW_COUNT, PrefManager.librarySortOption)
+    }
+
+    @Test(timeout = 5_000L)
+    fun nineHundredPopularityCardsFilterSortCountAndPaginateInOnePass() {
+        val cards = List(900) { index ->
+            card(
+                number = index + 1,
+                name = "Game ${index.toString().padStart(3, '0')}",
+                steamReviewCount = if (index % 5 == 0) null else index * 100,
+            )
+        }
+
+        val page = project(
+            cards = cards,
+            state = state(
+                minimumReviews = 10_000,
+                sort = SortOption.STEAM_REVIEW_COUNT,
+            ),
+            paginationPage = 1,
+            pageSize = 50,
+        )
+
+        assertEquals(640, page.totalCount)
+        assertEquals(100, page.cards.size)
+        assertEquals(12, page.lastPage)
+        assertEquals(900, page.steamPopularityEligibleCount)
+        assertEquals(720, page.steamPopularityKnownCount)
+        assertEquals("Game 899", page.cards.first().name)
+    }
+
     @Test(timeout = 5_000L)
     fun nineHundredCardsCompleteInOneInMemoryPass() {
         val cards = List(900) { index ->
@@ -357,9 +503,13 @@ class CanonicalDiscoveryFilterTest {
         selectedCollections: Set<String> = emptySet(),
         collections: List<SteamCollection>? = emptyList(),
         deviceStats: Map<GameSource, Map<String, DeviceGameStats>> = emptyMap(),
+        minimumReviews: Int? = null,
+        sort: SortOption = SortOption.NAME_ASC,
     ) = LibraryState(
         appInfoSortType = filters,
         searchQuery = search,
+        currentSortOption = sort,
+        steamReviewMinimum = minimumReviews,
         currentTab = tab,
         discoveryFilters = DiscoveryFilterState(
             selectedGenreKeys = selectedGenres,
@@ -383,6 +533,8 @@ class CanonicalDiscoveryFilterTest {
         genreKeys: Set<String> = emptySet(),
         tagIds: Set<Int> = emptySet(),
         copySources: List<GameSource> = listOf(GameSource.STEAM),
+        steamAppId: Int? = number,
+        steamReviewCount: Int? = null,
     ): CanonicalLibraryCard {
         val canonicalId = CanonicalGameId.parse(
             "00000000-0000-0000-0000-${number.toString().padStart(12, '0')}",
@@ -406,6 +558,8 @@ class CanonicalDiscoveryFilterTest {
                 .mapNotNull { it.key.stableSourceId.substringBefore('-').toIntOrNull() }
                 .toSet(),
             isShared = false,
+            steamAppId = steamAppId,
+            steamReviewCount = steamReviewCount,
             genreKeys = genreKeys,
             genreLabels = genreKeys.associateWith { key ->
                 when (key) {
@@ -451,6 +605,16 @@ class CanonicalDiscoveryFilterTest {
         else EnumSet.copyOf(values.toList())
 
     private fun clearPreferencesAndAwait() {
+        if (PrefManager.librarySteamReviewMinimum != null ||
+            PrefManager.librarySortOption != SortOption.INSTALLED_FIRST
+        ) {
+            PrefManager.librarySteamReviewMinimum = null
+            PrefManager.librarySortOption = SortOption.INSTALLED_FIRST
+            awaitPreference {
+                PrefManager.librarySteamReviewMinimum == null &&
+                    PrefManager.librarySortOption == SortOption.INSTALLED_FIRST
+            }
+        }
         if (PrefManager.libraryGenreKeys.isNotEmpty()) {
             PrefManager.libraryGenreKeys = emptySet()
             awaitPreference { PrefManager.libraryGenreKeys.isEmpty() }

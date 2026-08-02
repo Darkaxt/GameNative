@@ -96,6 +96,8 @@ data class CanonicalLibraryCard(
     val preferredCopy: OwnedCopyKey?,
     val steamCollectionAppIds: Set<Int>,
     val isShared: Boolean,
+    val steamAppId: Int? = null,
+    val steamReviewCount: Int? = null,
     val genreKeys: Set<String> = emptySet(),
     val genreLabels: Map<String, String> = emptyMap(),
     val tagIds: Set<Int> = emptySet(),

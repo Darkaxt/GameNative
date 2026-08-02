@@ -59,6 +59,8 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.OwnedCopyProjection
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.discovery.GameFacetRepository
+import app.gamenative.library.discovery.SteamPopularityEnricher
+import app.gamenative.library.discovery.SteamPopularityEnrichmentProgress
 import app.gamenative.library.discovery.SteamTagDictionaryRefreshResult
 import app.gamenative.library.discovery.SteamTagFacet
 import app.gamenative.library.discovery.TagMatchMode
@@ -165,6 +167,9 @@ class CanonicalLibraryViewModelTest {
         if (PrefManager.libraryTagMatchMode != TagMatchMode.ANY) {
             PrefManager.libraryTagMatchMode = TagMatchMode.ANY
         }
+        if (PrefManager.librarySteamReviewMinimum != null) {
+            PrefManager.librarySteamReviewMinimum = null
+        }
         awaitPreference {
             !PrefManager.canonicalPublicLibraryEnabled &&
                 PrefManager.showSteamInLibrary &&
@@ -177,7 +182,8 @@ class CanonicalLibraryViewModelTest {
                 PrefManager.librarySteamCollections.isEmpty() &&
                 PrefManager.libraryGenreKeys.isEmpty() &&
                 PrefManager.libraryTagIds.isEmpty() &&
-                PrefManager.libraryTagMatchMode == TagMatchMode.ANY
+                PrefManager.libraryTagMatchMode == TagMatchMode.ANY &&
+                PrefManager.librarySteamReviewMinimum == null
         }
         scheduler = TestCoroutineScheduler()
         dispatcher = StandardTestDispatcher(scheduler)
@@ -228,6 +234,10 @@ class CanonicalLibraryViewModelTest {
             awaitPreference {
                 PrefManager.libraryTagIds.isEmpty() && PrefManager.libraryTagMatchMode == TagMatchMode.ANY
             }
+        }
+        if (PrefManager.librarySteamReviewMinimum != null) {
+            PrefManager.librarySteamReviewMinimum = null
+            awaitPreference { PrefManager.librarySteamReviewMinimum == null }
         }
         if (::viewModelStore.isInitialized) viewModelStore.clear()
         PluviaApp.events.clearAllListeners()
@@ -394,6 +404,106 @@ class CanonicalLibraryViewModelTest {
                 state.discoveryFilters.selectedTagIds.isEmpty()
         }
         awaitPreference { PrefManager.libraryTagIds.isEmpty() }
+    }
+
+    @Test
+    fun `popularity enrichment starts only when options open and publishes coverage progress failure retry`() = runTest(dispatcher) {
+        val known = card(
+            canonicalId = canonicalId(830),
+            name = "Known",
+            copyKeys = listOf(key(GameSource.STEAM, "830")),
+            steamAppId = 830,
+            steamReviewCount = 500,
+        )
+        val missing = card(
+            canonicalId = canonicalId(831),
+            name = "Missing",
+            copyKeys = listOf(key(GameSource.STEAM, "831")),
+            steamAppId = 831,
+            steamReviewCount = null,
+        )
+        val nonSteamMatched = card(
+            canonicalId = canonicalId(832),
+            name = "Not eligible",
+            copyKeys = listOf(key(GameSource.STEAM, "832")),
+            steamAppId = null,
+            steamReviewCount = null,
+        )
+        val enricher = mockk<SteamPopularityEnricher>()
+        coEvery { enricher.enrich(any(), any(), any()) } coAnswers {
+            val callback = thirdArg<(SteamPopularityEnrichmentProgress) -> Unit>()
+            callback(SteamPopularityEnrichmentProgress(1, 0, 0, true))
+            SteamPopularityEnrichmentProgress(1, 1, 1, false).also(callback)
+        }
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(known, missing, nonSteamMatched))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+            popularityEnricher = enricher,
+        )
+        runCurrent()
+        awaitState { state ->
+            state.cards.size == 3 &&
+                state.steamPopularityKnownCount == 1 &&
+                state.steamPopularityEligibleCount == 2
+        }
+        coVerify(exactly = 0) { enricher.enrich(any(), any(), any()) }
+
+        vm.onOptionsPanelToggle(true)
+        runCurrent()
+        awaitState { state -> state.steamPopularityProgress.failed == 1 }
+
+        coVerify(exactly = 1) {
+            enricher.enrich(
+                match { targets -> targets.map { it.steamAppId } == listOf(830, 831) },
+                match { targets -> targets.map { it.steamAppId } == listOf(830, 831) },
+                any(),
+            )
+        }
+        assertEquals(SteamPopularityEnrichmentProgress(1, 1, 1, false), vm.state.value.steamPopularityProgress)
+
+        vm.retrySteamPopularityEnrichment()
+        runCurrent()
+        coVerify(exactly = 2) { enricher.enrich(any(), any(), any()) }
+    }
+
+    @Test
+    fun `popularity threshold persists filters unknown immediately and clearing restores cached view`() = runTest(dispatcher) {
+        val known = card(
+            canonicalId = canonicalId(840),
+            name = "Known",
+            copyKeys = listOf(key(GameSource.STEAM, "840")),
+            steamAppId = 840,
+            steamReviewCount = 100,
+        )
+        val unknown = card(
+            canonicalId = canonicalId(841),
+            name = "Unknown",
+            copyKeys = listOf(key(GameSource.STEAM, "841")),
+            steamAppId = 841,
+            steamReviewCount = null,
+        )
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(known, unknown))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        runCurrent()
+        awaitState { it.cards.map { card -> card.name } == listOf("Known", "Unknown") }
+
+        vm.onSteamReviewMinimumChanged(100)
+        runCurrent()
+        awaitState { state ->
+            state.steamReviewMinimum == 100 && state.cards.map { card -> card.name } == listOf("Known")
+        }
+        awaitPreference { PrefManager.librarySteamReviewMinimum == 100 }
+
+        vm.onSteamReviewMinimumChanged(null)
+        runCurrent()
+        awaitState { state ->
+            state.steamReviewMinimum == null && state.cards.map { card -> card.name } == listOf("Known", "Unknown")
+        }
+        awaitPreference { PrefManager.librarySteamReviewMinimum == null }
     }
 
     @Test
@@ -3788,6 +3898,7 @@ class CanonicalLibraryViewModelTest {
         projectionClock: CanonicalProjectionClock = CanonicalProjectionClock { 1L },
         diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
         facetRepository: GameFacetRepository = facetRepository(),
+        popularityEnricher: SteamPopularityEnricher = mockk(relaxed = true),
     ): LibraryViewModel {
         val history = mockk<LibraryPlayHistoryDao>(relaxed = true)
         every { history.getAll() } returns emptyFlow()
@@ -3817,6 +3928,7 @@ class CanonicalLibraryViewModelTest {
             canonicalDispatcher = ioDispatcher,
             diagnostics = diagnostics,
             gameFacetRepository = facetRepository,
+            steamPopularityEnricher = popularityEnricher,
         ).also { viewModel ->
             latestVm = viewModel
             viewModelStore.put("latest", viewModel)
@@ -3883,6 +3995,8 @@ class CanonicalLibraryViewModelTest {
             .filter { it.source == GameSource.STEAM }
             .mapNotNull { it.stableSourceId.toIntOrNull() }
             .toSet(),
+        steamAppId: Int? = steamCollectionAppIds.singleOrNull(),
+        steamReviewCount: Int? = null,
     ): CanonicalLibraryCard {
         val copies = copyKeys.map { key ->
             copy(
@@ -3911,6 +4025,8 @@ class CanonicalLibraryViewModelTest {
             preferredCopy = preferred,
             steamCollectionAppIds = steamCollectionAppIds,
             isShared = copies.any { it.isShared },
+            steamAppId = steamAppId,
+            steamReviewCount = steamReviewCount,
             genreKeys = genreKeys,
             genreLabels = genreLabels,
             tagIds = tagIds,

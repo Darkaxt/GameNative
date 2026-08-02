@@ -21,6 +21,22 @@ interface CanonicalGameDao {
     @Query("SELECT * FROM canonical_game ORDER BY canonical_id")
     suspend fun getAll(): List<CanonicalGameEntity>
 
+    @Query(
+        """
+        UPDATE canonical_game
+        SET steam_review_count = :totalReviews
+        WHERE canonical_id = :canonicalId
+          AND steam_app_id = :steamAppId
+          AND steam_review_count IS NULL
+          AND :totalReviews >= 0
+        """,
+    )
+    suspend fun updateSteamReviewCountIfMissing(
+        canonicalId: String,
+        steamAppId: Int,
+        totalReviews: Long,
+    ): Int
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entity: CanonicalGameEntity)
 

@@ -180,6 +180,8 @@ fun HomeLibraryScreen(
         onTagToggle = viewModel::onTagToggle,
         onTagMatchModeChanged = viewModel::onTagMatchModeChanged,
         onClearTags = viewModel::onClearTags,
+        onSteamReviewMinimumChanged = viewModel::onSteamReviewMinimumChanged,
+        onRetrySteamPopularity = viewModel::retrySteamPopularityEnrichment,
         onOptionsPanelToggle = viewModel::onOptionsPanelToggle,
         onTabChanged = viewModel::onTabChanged,
         onPreviousTab = viewModel::onPreviousTab,
@@ -234,6 +236,8 @@ internal fun LibraryScreenContent(
     onTagToggle: (Int) -> Unit = {},
     onTagMatchModeChanged: (TagMatchMode) -> Unit = {},
     onClearTags: () -> Unit = {},
+    onSteamReviewMinimumChanged: (Int?) -> Unit = {},
+    onRetrySteamPopularity: () -> Unit = {},
     onOptionsPanelToggle: (Boolean) -> Unit,
     onTabChanged: (LibraryTab) -> Unit,
     onPreviousTab: () -> Unit,
@@ -1548,6 +1552,12 @@ internal fun LibraryScreenContent(
                 onTagToggle = onTagToggle,
                 onTagMatchModeChanged = onTagMatchModeChanged,
                 onClearTags = onClearTags,
+                steamReviewMinimum = state.steamReviewMinimum,
+                steamPopularityKnownCount = state.steamPopularityKnownCount,
+                steamPopularityEligibleCount = state.steamPopularityEligibleCount,
+                steamPopularityProgress = state.steamPopularityProgress,
+                onSteamReviewMinimumChanged = onSteamReviewMinimumChanged,
+                onRetrySteamPopularity = onRetrySteamPopularity,
             )
 
             // System menu (START) - renders on top of everything

@@ -64,6 +64,8 @@ import app.gamenative.library.canonical.source.OwnedCopyProjection
 import app.gamenative.library.canonical.stableComposeKey
 import app.gamenative.library.discovery.GameFacet
 import app.gamenative.library.discovery.GameFacetRepository
+import app.gamenative.library.discovery.SteamPopularityEnricher
+import app.gamenative.library.discovery.SteamPopularityTarget
 import app.gamenative.library.discovery.SteamTagDictionaryRefreshResult
 import app.gamenative.library.discovery.SteamTagFacet
 import app.gamenative.library.discovery.TagMatchMode
@@ -79,6 +81,7 @@ import app.gamenative.service.gog.GOGService
 import app.gamenative.steam.SteamCollectionFilter
 import app.gamenative.ui.data.GameCardStats
 import app.gamenative.ui.data.LibraryCard
+import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.data.statsFor
 import app.gamenative.ui.enums.AppFilter
@@ -152,6 +155,8 @@ internal data class CanonicalLibraryPage(
     val tagFacets: List<SteamTagFacet>,
     val tagClassifiedCount: Int,
     val tagTotalCount: Int,
+    val steamPopularityKnownCount: Int,
+    val steamPopularityEligibleCount: Int,
 )
 
 internal object CanonicalLibraryCardValidator {
@@ -302,12 +307,17 @@ internal object CanonicalLibraryFilter {
         val afterCollections = afterCollectionsBeforeDiscovery.filter { entry ->
             matchesDiscovery(entry.card, selectedGenres, selectedTags, tagMode)
         }
+        val afterPopularity = state.steamReviewMinimum?.let { minimum ->
+            afterCollections.filter { entry ->
+                entry.card.steamReviewCount?.let { count -> count >= minimum } == true
+            }
+        } ?: afterCollections
 
         val sourceCounts = LibraryCard.OWNED_SOURCE_ORDER.associateWith { source ->
-            afterCollections.count { entry -> source in entry.card.ownedSources }
+            afterPopularity.count { entry -> source in entry.card.ownedSources }
         }
-        val allCount = afterCollections.count { entry -> ownsEnabledSource(entry.card, state) }
-        val admitted = afterCollections.filter { entry -> admitted(entry.card, state) }
+        val allCount = afterPopularity.count { entry -> ownsEnabledSource(entry.card, state) }
+        val admitted = afterPopularity.filter { entry -> admitted(entry.card, state) }
         val sorted = admitted.sortedWith(comparator(state.currentSortOption))
         val totalCount = sorted.size
         val lastPage = if (totalCount == 0) 0 else (totalCount - 1) / pageSize
@@ -351,6 +361,10 @@ internal object CanonicalLibraryFilter {
                 card.copy(index = card.index + 1)
             }
         }
+        val popularityEligible = cards.asSequence()
+            .filter { card -> card.steamAppId?.let { it > 0 } == true }
+            .distinctBy(CanonicalLibraryCard::canonicalId)
+            .toList()
         return CanonicalLibraryPage(
             cards = immutableList(displayCards),
             totalCount = totalCount,
@@ -368,6 +382,10 @@ internal object CanonicalLibraryFilter {
                 entry.card.tagIds.any(knownTagIds::contains)
             },
             tagTotalCount = coverageCards.size,
+            steamPopularityKnownCount = popularityEligible.count { card ->
+                card.steamReviewCount?.let { it >= 0 } == true
+            },
+            steamPopularityEligibleCount = popularityEligible.size,
         )
     }
 
@@ -443,6 +461,10 @@ internal object CanonicalLibraryFilter {
             SortOption.RUNS_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.runsGpu ?: -1 }.then(name)
             SortOption.REVIEWS_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.reviewsDevice ?: -1 }.then(name)
             SortOption.REVIEWS_GPU_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.reviewsGpu ?: -1 }.then(name)
+            SortOption.STEAM_REVIEW_COUNT -> compareBy<CanonicalEntry> {
+                it.card.steamReviewCount == null
+            }.thenByDescending { it.card.steamReviewCount ?: Int.MIN_VALUE }
+                .then(name)
         }
     }
 
@@ -563,6 +585,7 @@ class LibraryViewModel @Inject constructor(
     @CanonicalIoDispatcher private val canonicalDispatcher: CoroutineDispatcher,
     private val diagnostics: CanonicalLibraryDiagnosticSink,
     private val gameFacetRepository: GameFacetRepository,
+    private val steamPopularityEnricher: SteamPopularityEnricher,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(LibraryState(isLoading = true))
@@ -603,6 +626,8 @@ class LibraryViewModel @Inject constructor(
     @Volatile private var activeRenderToken: LibraryRenderToken? = null
     @Volatile private var latestPublishedToken: LibraryRenderToken? = null
     private var renderJob: Job? = null
+    @Volatile private var steamPopularityRequested = false
+    private var steamPopularityJob: Job? = null
 
     private var legacyPhysicalJob: Job? = null
     private var legacyPhysicalToken: LibraryRenderToken? = null
@@ -884,6 +909,7 @@ class LibraryViewModel @Inject constructor(
                 legacyRetryJob,
                 canonicalCollectionJob,
                 canonicalRetryJob,
+                steamPopularityJob,
             )
             renderJob = null
             legacyPhysicalJob = null
@@ -894,6 +920,7 @@ class LibraryViewModel @Inject constructor(
             legacyRetryJob = null
             canonicalCollectionJob = null
             canonicalRetryJob = null
+            steamPopularityJob = null
             activeRenderToken = null
             jobs
         }
@@ -1161,10 +1188,67 @@ class LibraryViewModel @Inject constructor(
             },
         )
         onFilterApps(request)
+        if (sortOption == SortOption.STEAM_REVIEW_COUNT) requestSteamPopularityEnrichment()
+    }
+
+    fun onSteamReviewMinimumChanged(minimum: Int?) {
+        if (minimum != null && minimum != 100 && minimum != 1_000 && minimum != 10_000) return
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                PrefManager.librarySteamReviewMinimum = minimum
+                current.copy(steamReviewMinimum = minimum)
+            },
+        )
+        onFilterApps(request)
+        requestSteamPopularityEnrichment()
     }
 
     fun onOptionsPanelToggle(isOpen: Boolean) {
         _state.update { it.copy(isOptionsPanelOpen = isOpen) }
+        if (isOpen) requestSteamPopularityEnrichment()
+    }
+
+    fun retrySteamPopularityEnrichment() {
+        requestSteamPopularityEnrichment()
+    }
+
+    private fun requestSteamPopularityEnrichment() {
+        steamPopularityRequested = true
+        val job = synchronized(renderLock) {
+            if (steamPopularityJob?.isActive == true) return
+            val allCards = latestCanonicalCards ?: return
+            val visibleKeys = _state.value.cards.mapNotNull { card ->
+                (card.identity as? LibraryCardIdentity.Canonical)?.key
+            }.toSet()
+            val allTargets = allCards.mapNotNull { card -> card.steamPopularityTargetOrNull() }
+                .distinctBy(SteamPopularityTarget::canonicalId)
+            val visibleTargets = allCards.asSequence()
+                .filter { card -> card.key in visibleKeys }
+                .mapNotNull { card -> card.steamPopularityTargetOrNull() }
+                .distinctBy(SteamPopularityTarget::canonicalId)
+                .toList()
+            lateinit var launched: Job
+            launched = viewModelScope.launch(canonicalDispatcher, start = CoroutineStart.LAZY) {
+                try {
+                    steamPopularityEnricher.enrich(visibleTargets, allTargets) { progress ->
+                        _state.update { current -> current.copy(steamPopularityProgress = progress) }
+                    }
+                } finally {
+                    synchronized(renderLock) {
+                        if (steamPopularityJob === launched) steamPopularityJob = null
+                    }
+                }
+            }
+            steamPopularityJob = launched
+            launched
+        }
+        job.start()
+    }
+
+    private fun CanonicalLibraryCard.steamPopularityTargetOrNull(): SteamPopularityTarget? {
+        val appId = steamAppId?.takeIf { it > 0 } ?: return null
+        return SteamPopularityTarget(canonicalId, appId, steamReviewCount?.takeIf { it >= 0 })
     }
 
     fun onTabChanged(tab: LibraryTab) {
@@ -1527,6 +1611,7 @@ class LibraryViewModel @Inject constructor(
         if (state.selectedSteamCollectionIds.isNotEmpty()) add("collection")
         if (state.discoveryFilters.selectedGenreKeys.isNotEmpty()) add("genre")
         if (state.discoveryFilters.selectedTagIds.isNotEmpty()) add("tag")
+        if (state.steamReviewMinimum != null) add("popularity")
         add("source_tab")
     }.joinToString(",")
 
@@ -2567,6 +2652,8 @@ class LibraryViewModel @Inject constructor(
                         tagFacets = page.tagFacets,
                         tagClassifiedCount = page.tagClassifiedCount,
                         tagTotalCount = page.tagTotalCount,
+                        steamPopularityKnownCount = page.steamPopularityKnownCount,
+                        steamPopularityEligibleCount = page.steamPopularityEligibleCount,
                     )
                 }
                 true
@@ -2574,6 +2661,7 @@ class LibraryViewModel @Inject constructor(
         }
         retryToCancel?.cancel()
         if (!committed) return RenderPublicationOutcome.Superseded(token)
+        if (steamPopularityRequested) requestSteamPopularityEnrichment()
 
         fetchCompatibilityForPage(page.compatibilityRequestNames, token)
         FeatureDiagnostics.record(
@@ -3020,6 +3108,8 @@ class LibraryViewModel @Inject constructor(
                 SortOption.REVIEWS_GPU_HIGH -> compareByDescending<LibraryEntry> {
                     currentState.statsFor(it.item)?.reviewsGpu ?: -1
                 }.thenBy { it.item.name.lowercase() }
+
+                SortOption.STEAM_REVIEW_COUNT -> compareBy { it.item.name.lowercase() }
             }
 
             // A Steam collection can only contain Steam apps, so when one is selected the non-Steam

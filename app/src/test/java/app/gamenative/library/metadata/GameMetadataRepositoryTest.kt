@@ -341,6 +341,11 @@ class GameMetadataRepositoryTest {
 
         override suspend fun findByTitleKey(titleKey: String): List<CanonicalGameEntity> = emptyList()
         override suspend fun getAll(): List<CanonicalGameEntity> = listOfNotNull(entity)
+        override suspend fun updateSteamReviewCountIfMissing(
+            canonicalId: String,
+            steamAppId: Int,
+            totalReviews: Long,
+        ): Int = 0
         override suspend fun insert(entity: CanonicalGameEntity) {
             this.entity = entity
         }

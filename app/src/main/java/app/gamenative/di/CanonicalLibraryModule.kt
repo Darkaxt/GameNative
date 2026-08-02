@@ -40,6 +40,8 @@ import app.gamenative.library.canonical.source.OwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
 import app.gamenative.library.discovery.GameFacetRepository
 import app.gamenative.library.discovery.RoomGameFacetRepository
+import app.gamenative.library.discovery.SteamReviewSummaryProvider
+import app.gamenative.library.discovery.SteamReviewSummarySource
 import app.gamenative.library.metadata.GameMetadataRepository
 import app.gamenative.library.metadata.MetadataClock
 import app.gamenative.library.metadata.MetadataLocaleProvider
@@ -119,6 +121,12 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamCatalogDataSource(
         implementation: SteamCatalogProvider,
     ): SteamCatalogDataSource
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamReviewSummarySource(
+        implementation: SteamReviewSummaryProvider,
+    ): SteamReviewSummarySource
 
     @Binds
     @Singleton

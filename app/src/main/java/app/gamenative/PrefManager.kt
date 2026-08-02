@@ -911,6 +911,18 @@ object PrefManager {
             setPref(LIBRARY_SORT_KEY, value.key)
         }
 
+    private val LIBRARY_STEAM_REVIEW_MINIMUM = intPreferencesKey("library_steam_review_minimum")
+    var librarySteamReviewMinimum: Int?
+        get() = getPref(LIBRARY_STEAM_REVIEW_MINIMUM, 0).takeIf {
+            it == 100 || it == 1_000 || it == 10_000
+        }
+        set(value) {
+            val persisted = value?.takeIf {
+                it == 100 || it == 1_000 || it == 10_000
+            } ?: 0
+            setPref(LIBRARY_STEAM_REVIEW_MINIMUM, persisted)
+        }
+
     private val LIBRARY_GENRE_KEYS = stringPreferencesKey("library_genre_keys")
     private const val GENRE_KEY_SEPARATOR = ""
     private val STEAM_GENRE_KEY = Regex("steam:[1-9][0-9]*")

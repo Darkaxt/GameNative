@@ -19,6 +19,29 @@ class LibraryOptionsPanelPrivacyTest {
         assertTrue(source.contains("tagSearchQuery by remember {"))
     }
 
+    @Test
+    fun popularityControlsExposeExactThresholdCoverageProgressFailureAndRetryWithoutPrivateContent() {
+        val root = repositoryRoot()
+        val source = File(
+            root,
+            "app/src/main/java/app/gamenative/ui/screen/library/components/LibraryOptionsPanel.kt",
+        ).readText()
+        val strings = File(root, "app/src/main/res/values/strings.xml").readText()
+
+        assertTrue(source.contains("listOf(null, 100, 1_000, 10_000)"))
+        assertTrue(source.contains("steamPopularityKnownCount"))
+        assertTrue(source.contains("steamPopularityEligibleCount"))
+        assertTrue(source.contains("steamPopularityProgress.completed"))
+        assertTrue(source.contains("steamPopularityProgress.total"))
+        assertTrue(source.contains("steamPopularityProgress.failed"))
+        assertTrue(source.contains("onRetrySteamPopularity"))
+        assertTrue(strings.contains("Steam review indexing failed. Cached counts are still available."))
+        assertTrue(strings.contains(">Retry</string>"))
+        assertFalse(source.contains("steamAppId"))
+        assertFalse(source.contains("reviewBody"))
+        assertFalse(source.contains("reviewText"))
+    }
+
     private fun repositoryRoot(): File {
         val workingDirectory = File(checkNotNull(System.getProperty("user.dir")))
         return generateSequence(workingDirectory) { it.parentFile }

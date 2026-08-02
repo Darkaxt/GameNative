@@ -1105,6 +1105,12 @@ class CanonicalGameResolverTest {
         override suspend fun getAll(): List<CanonicalGameEntity> =
             error("Resolver must not load every canonical game")
 
+        override suspend fun updateSteamReviewCountIfMissing(
+            canonicalId: String,
+            steamAppId: Int,
+            totalReviews: Long,
+        ): Int = error("Resolver must not persist Steam review counts")
+
         override suspend fun insert(entity: CanonicalGameEntity): Unit =
             error("Resolver must not persist canonical games")
 

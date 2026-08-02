@@ -84,6 +84,7 @@ import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.SteamCollection
 import app.gamenative.library.discovery.GameFacet
+import app.gamenative.library.discovery.SteamPopularityEnrichmentProgress
 import app.gamenative.library.discovery.SteamTagFacet
 import app.gamenative.library.discovery.TagMatchMode
 import app.gamenative.ui.component.GameStatsKey
@@ -130,6 +131,12 @@ fun LibraryOptionsPanel(
     onTagToggle: (Int) -> Unit = {},
     onTagMatchModeChanged: (TagMatchMode) -> Unit = {},
     onClearTags: () -> Unit = {},
+    steamReviewMinimum: Int? = null,
+    steamPopularityKnownCount: Int = 0,
+    steamPopularityEligibleCount: Int = 0,
+    steamPopularityProgress: SteamPopularityEnrichmentProgress = SteamPopularityEnrichmentProgress(),
+    onSteamReviewMinimumChanged: (Int?) -> Unit = {},
+    onRetrySteamPopularity: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
@@ -262,6 +269,72 @@ fun LibraryOptionsPanel(
                                     focusRequester = if (index == 0) firstItemFocusRequester else remember { FocusRequester() },
                                     modifier = Modifier.fillMaxWidth()
                                 )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        OptionSectionHeader(text = stringResource(R.string.steam_popularity_title))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusGroup()
+                                .padding(horizontal = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            listOf(null, 100, 1_000, 10_000).forEach { minimum ->
+                                OptionRadioItem(
+                                    text = stringResource(
+                                        when (minimum) {
+                                            null -> R.string.steam_popularity_any
+                                            100 -> R.string.steam_popularity_100
+                                            1_000 -> R.string.steam_popularity_1000
+                                            else -> R.string.steam_popularity_10000
+                                        },
+                                    ),
+                                    selected = steamReviewMinimum == minimum,
+                                    onClick = { onSteamReviewMinimumChanged(minimum) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("steam-popularity:${minimum ?: "any"}"),
+                                )
+                            }
+                        }
+                        Text(
+                            text = stringResource(
+                                R.string.steam_popularity_coverage,
+                                steamPopularityKnownCount,
+                                steamPopularityEligibleCount,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.steam_popularity_progress,
+                                steamPopularityProgress.completed,
+                                steamPopularityProgress.total,
+                                steamPopularityProgress.failed,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        if (steamPopularityProgress.failed > 0 && !steamPopularityProgress.isRunning) {
+                            Text(
+                                text = stringResource(R.string.steam_popularity_failure),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                            TextButton(
+                                onClick = onRetrySteamPopularity,
+                                modifier = Modifier
+                                    .padding(horizontal = 8.dp)
+                                    .testTag("steam-popularity-retry"),
+                            ) {
+                                Text(stringResource(R.string.steam_popularity_retry))
                             }
                         }
 
@@ -745,4 +818,5 @@ private fun SortOption.icon(): ImageVector = when (this) {
     SortOption.RUNS_HIGH -> Icons.Rounded.SportsEsports
     SortOption.REVIEWS_HIGH -> Icons.Rounded.Star
     SortOption.REVIEWS_GPU_HIGH -> Icons.Rounded.Stars
+    SortOption.STEAM_REVIEW_COUNT -> Icons.Rounded.Star
 }

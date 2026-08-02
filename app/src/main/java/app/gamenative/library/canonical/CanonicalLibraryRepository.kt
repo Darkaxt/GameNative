@@ -186,6 +186,10 @@ class CanonicalLibraryRepository @Inject constructor(
             preferredCopy = preferredCopy,
             steamCollectionAppIds = immutableSet(steamCollectionAppIds),
             isShared = copies.any(OwnedCopySummary::isShared),
+            steamAppId = game.steamAppId?.takeIf { it > 0 },
+            steamReviewCount = game.steamReviewCount
+                ?.takeIf { count -> count in 0..Int.MAX_VALUE.toLong() }
+                ?.toInt(),
             genreKeys = immutableSet(genreFacets.map { it.key }),
             genreLabels = immutableMap(genreFacets.associate { it.key to it.label }),
             tagIds = immutableSet(
