@@ -133,8 +133,8 @@ fun LibraryOptionsPanel(
     modifier: Modifier = Modifier,
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
-    var genreSearchQuery by rememberSaveable { mutableStateOf("") }
-    var tagSearchQuery by rememberSaveable { mutableStateOf("") }
+    var genreSearchQuery by remember { mutableStateOf("") }
+    var tagSearchQuery by remember { mutableStateOf("") }
     val visibleGenreFacets = remember(genreFacets, genreSearchQuery) {
         val query = genreSearchQuery.trim()
         if (query.isEmpty()) genreFacets else genreFacets.filter { facet ->
