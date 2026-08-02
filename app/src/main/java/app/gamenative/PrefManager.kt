@@ -168,7 +168,7 @@ object PrefManager {
     private val CANONICAL_PUBLIC_LIBRARY_ENABLED =
         booleanPreferencesKey("canonical_public_library_enabled")
     var canonicalPublicLibraryEnabled: Boolean
-        get() = getPref(CANONICAL_PUBLIC_LIBRARY_ENABLED, false)
+        get() = getPref(CANONICAL_PUBLIC_LIBRARY_ENABLED, true)
         set(value) {
             setPref(CANONICAL_PUBLIC_LIBRARY_ENABLED, value)
         }

@@ -233,16 +233,22 @@ class CanonicalLibraryViewModelTest {
     }
 
     @Test
-    fun `debug setting explains prerequisite restart and source-native recovery`() {
-        assertEquals("Experimental canonical library", context.getString(R.string.settings_debug_canonical_library_title))
+    fun `debug setting explains default recovery restart and automatic fallback`() {
+        assertEquals("Canonical library cards", context.getString(R.string.settings_debug_canonical_library_title))
         assertEquals(
-            "Enable + restart GameNative to test canonical cards/actions. Disable + restart GameNative to restore source-native cards/actions.",
+            "Enabled by default. Disable + restart GameNative to restore source-native cards/actions. Canonical failures automatically fall back to the source-native library.",
             context.getString(R.string.settings_debug_canonical_library_subtitle),
         )
     }
 
     @Test
-    fun `gate off keeps realistic legacy source card and never collects canonical repository`() = runTest(dispatcher) {
+    fun `explicitly stored false survives restart and restores source-native cards and actions`() = runTest(dispatcher) {
+        PrefManager.canonicalPublicLibraryEnabled = true
+        awaitPreference { PrefManager.canonicalPublicLibraryEnabled }
+        PrefManager.canonicalPublicLibraryEnabled = false
+        awaitPreference { !PrefManager.canonicalPublicLibraryEnabled }
+        PrefManager.init(context)
+        assertFalse(PrefManagerCanonicalPublicLibraryGate().isEnabled())
         PrefManager.showSteamInLibrary = false
         PrefManager.showCustomGamesInLibrary = false
         PrefManager.showGOGInLibrary = true
@@ -274,9 +280,10 @@ class CanonicalLibraryViewModelTest {
 
         viewModel(
             repository = repository,
-            gateEnabled = false,
+            gateEnabled = true,
             readiness = readiness,
             gogRows = gogRows,
+            gate = PrefManagerCanonicalPublicLibraryGate(),
         )
         runCurrent()
         awaitState { it.cards.any { card -> card.name == "Exact Legacy" } }
@@ -295,6 +302,10 @@ class CanonicalLibraryViewModelTest {
 
     @Test
     fun `gate on waits for readiness then wakes from readiness alone`() = runTest(dispatcher) {
+        every { GOGService.hasStoredCredentials(any()) } returns true
+        val gogRows = MutableStateFlow(
+            listOf(GOGGame(id = "readiness-legacy", title = "Readiness Legacy", isInstalled = true)),
+        )
         val repository = repository(MutableStateFlow(listOf(card(name = "Ready Card"))))
         val readiness = CanonicalProjectionReadiness()
         val diagnostics = mockk<CanonicalLibraryDiagnosticSink>(relaxed = true)
@@ -302,10 +313,15 @@ class CanonicalLibraryViewModelTest {
             repository,
             gateEnabled = true,
             readiness = readiness,
+            gogRows = gogRows,
             diagnostics = diagnostics,
         )
         runCurrent()
 
+        assertTrue(
+            vm.state.value.cards.single { it.name == "Readiness Legacy" }.identity is
+                LibraryCardIdentity.SourceCopy,
+        )
         assertEquals(CanonicalPublicFailure.MISSING_PROJECTION_PREREQUISITE, vm.state.value.canonicalPublicFailure)
         verify(exactly = 0) { repository.observeCards() }
         repeat(6) { index ->
@@ -336,6 +352,10 @@ class CanonicalLibraryViewModelTest {
 
     @Test
     fun `canonical flow failure falls back retries with capped deterministic backoff and recovers`() = runTest(dispatcher) {
+        every { GOGService.hasStoredCredentials(any()) } returns true
+        val gogRows = MutableStateFlow(
+            listOf(GOGGame(id = "assembly-legacy", title = "Assembly Legacy", isInstalled = true)),
+        )
         var attempts = 0
         val repository = mockk<CanonicalLibraryRepository>()
         every { repository.observeCards() } answers {
@@ -347,10 +367,19 @@ class CanonicalLibraryViewModelTest {
             }
         }
         val readiness = CanonicalProjectionReadiness().apply { markSucceeded() }
-        val vm = viewModel(repository, gateEnabled = true, readiness = readiness)
+        val vm = viewModel(
+            repository,
+            gateEnabled = true,
+            readiness = readiness,
+            gogRows = gogRows,
+        )
         runCurrent()
 
         assertEquals(1, attempts)
+        assertTrue(
+            vm.state.value.cards.single { it.name == "Assembly Legacy" }.identity is
+                LibraryCardIdentity.SourceCopy,
+        )
         assertEquals(CanonicalPublicFailure.ASSEMBLY_FAILED, vm.state.value.canonicalPublicFailure)
         val retryDelays = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 32_000L, 60_000L, 60_000L)
         retryDelays.forEachIndexed { index, retryDelay ->

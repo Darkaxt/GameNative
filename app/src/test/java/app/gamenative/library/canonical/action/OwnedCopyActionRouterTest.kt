@@ -515,31 +515,35 @@ class OwnedCopyActionRouterTest {
     }
 
     @Test
-    fun publicGateIsIndependentDefaultOffAndRequiresProjectionAndPublicPreferences() {
+    fun publicGateDefaultsOnAndRequiresProjectionAndPublicPreferences() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         PrefManager.init(context)
         PrefManager.clearPreferences()
         awaitPreference {
-            PrefManager.canonicalProjectionEnabled && !PrefManager.canonicalPublicLibraryEnabled
+            PrefManager.canonicalProjectionEnabled && PrefManager.canonicalPublicLibraryEnabled
         }
         val gate = PrefManagerCanonicalPublicLibraryGate()
-        assertFalse(PrefManager.canonicalPublicLibraryEnabled)
-        assertFalse(gate.isEnabled())
 
-        PrefManager.canonicalPublicLibraryEnabled = true
-        awaitPreference { PrefManager.canonicalPublicLibraryEnabled }
-        assertTrue(gate.isEnabled())
+        try {
+            assertTrue(PrefManager.canonicalPublicLibraryEnabled)
+            assertTrue(gate.isEnabled())
 
-        PrefManager.canonicalProjectionEnabled = false
-        awaitPreference { !PrefManager.canonicalProjectionEnabled }
-        assertFalse(gate.isEnabled())
+            PrefManager.canonicalPublicLibraryEnabled = false
+            awaitPreference { !PrefManager.canonicalPublicLibraryEnabled }
+            assertFalse(gate.isEnabled())
 
-        PrefManager.canonicalPublicLibraryEnabled = false
-        PrefManager.canonicalProjectionEnabled = true
-        awaitPreference {
-            !PrefManager.canonicalPublicLibraryEnabled && PrefManager.canonicalProjectionEnabled
+            PrefManager.canonicalPublicLibraryEnabled = true
+            PrefManager.canonicalProjectionEnabled = false
+            awaitPreference {
+                PrefManager.canonicalPublicLibraryEnabled && !PrefManager.canonicalProjectionEnabled
+            }
+            assertFalse(gate.isEnabled())
+        } finally {
+            PrefManager.clearPreferences()
+            awaitPreference {
+                PrefManager.canonicalProjectionEnabled && PrefManager.canonicalPublicLibraryEnabled
+            }
         }
-        assertFalse(gate.isEnabled())
     }
 
     @Test

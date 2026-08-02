@@ -4,23 +4,86 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing immutable prerelease tag to publish"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      release_tag_target: ${{ steps.release-tag.outputs.expected_target }}
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Validate release tag
+      - name: Validate existing release tag
+        id: release-tag
+        env:
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "Invalid release tag: $TAG" >&2
+          TAG="$RELEASE_TAG"
+          manual_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+-(nightly\.[0-9]+|rc[0-9]+|prerelease)$'
+          pushed_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if [[ ! "$TAG" =~ $manual_tag_pattern ]]; then
+              echo "Invalid manual release tag: $TAG" >&2
+              exit 1
+            fi
+          elif [[ ! "$TAG" =~ $pushed_tag_pattern ]]; then
+            echo "Invalid pushed release tag: $TAG" >&2
+            exit 1
+          fi
+
+          tag_oid=""
+          peeled_oid=""
+          while read -r oid ref; do
+            case "$ref" in
+              "refs/tags/$TAG") tag_oid="$oid" ;;
+              "refs/tags/$TAG^{}") peeled_oid="$oid" ;;
+            esac
+          done < <(
+            git ls-remote --tags "$REPOSITORY_URL" \
+              "refs/tags/$TAG" "refs/tags/$TAG^{}"
+          )
+          if [ -z "$tag_oid" ]; then
+            echo "Release tag does not exist: $TAG" >&2
+            exit 1
+          fi
+          expected_target="${peeled_oid:-$tag_oid}"
+          if [[ ! "$expected_target" =~ ^[0-9a-f]{40,64}$ ]]; then
+            echo "Release tag target is invalid" >&2
+            exit 1
+          fi
+          printf 'expected_target=%s\n' "$expected_target" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify checked-out release tag target
+        env:
+          EXPECTED_TAG_TARGET: ${{ steps.release-tag.outputs.expected_target }}
+        run: |
+          set -euo pipefail
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          checked_out_commit="$(git rev-parse HEAD)"
+          tag_target="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [ "$tag_target" != "$EXPECTED_TAG_TARGET" ]; then
+            echo "Release tag target changed before checkout" >&2
+            exit 1
+          fi
+          if [ "$checked_out_commit" != "$tag_target" ]; then
+            echo "Checked-out commit does not match release tag target" >&2
             exit 1
           fi
 
@@ -194,7 +257,7 @@ jobs:
 
       - name: Rename signed APKs
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_TAG}"
           mv universal.apk "gamenative-$TAG.apk"
           mv universal-legacy-xr.apk "gamenative-$TAG-legacy-xr.apk"
 
@@ -208,8 +271,8 @@ jobs:
             BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/34.0.0"
           fi
           APKS=(
-            "gamenative-${GITHUB_REF_NAME}.apk"
-            "gamenative-${GITHUB_REF_NAME}-legacy-xr.apk"
+            "gamenative-${RELEASE_TAG}.apk"
+            "gamenative-${RELEASE_TAG}-legacy-xr.apk"
           )
           for apk in "${APKS[@]}"; do
             verify_output=$("${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$apk")
@@ -237,11 +300,11 @@ jobs:
       - name: Upload release assets for next job
         uses: actions/upload-artifact@v4
         with:
-          name: release-assets-${{ github.ref_name }}
+          name: release-assets-${{ env.RELEASE_TAG }}
           if-no-files-found: error
           path: |
-            gamenative-${{ github.ref_name }}.apk
-            gamenative-${{ github.ref_name }}-legacy-xr.apk
+            gamenative-${{ env.RELEASE_TAG }}.apk
+            gamenative-${{ env.RELEASE_TAG }}-legacy-xr.apk
             SHA256SUMS
 
   release:
@@ -252,7 +315,7 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: release-assets-${{ github.ref_name }}
+          name: release-assets-${{ env.RELEASE_TAG }}
           path: ./
 
       - name: Build release notes
@@ -270,44 +333,65 @@ jobs:
           EOF
           fi
           cat <<'EOF' >> release-body.md
-          ## Experimental opt-in canonical library
+          ## Canonical library cards
 
-          Canonical library testing is experimental and remains off by default.
+          Canonical library cards are enabled by default.
 
-          ### Enable + restart for testing
+          ### Disable + restart for source-native recovery
           1. Open **Settings → Debug**.
-          2. Enable **Experimental canonical library** (canonical library cards).
+          2. Disable **Canonical library cards**.
           3. Restart GameNative.
 
-          ### Disable + restart for legacy fallback
-          1. Open **Settings → Debug**.
-          2. Disable **Experimental canonical library**.
-          3. Restart GameNative.
+          Disabling and restarting restores exact source-native cards/actions. Missing readiness, unsupported contexts, or canonical assembly failures also fall back automatically, and the independent canonical projection kill switch remains available.
 
-          Disabling and restarting restores source-native cards/actions. Readiness or assembly failures also fall back automatically, and the independent canonical projection kill switch remains available.
-
-          Tasks 11–14 and full signed-in validation are deferred. This prerelease does not claim exhaustive validation.
+          Later Steam-first detail and discovery slices are not included in this prerelease.
 
           ## Downloads
           EOF
           printf '%s\n' \
-            "- **\`gamenative-${GITHUB_REF_NAME}.apk\`** — Standard build. Recommended for most users." \
-            "- **\`gamenative-${GITHUB_REF_NAME}-legacy-xr.apk\`** — XR build for Quest headsets." \
+            "- **\`gamenative-${RELEASE_TAG}.apk\`** — Standard build. Recommended for most users." \
+            "- **\`gamenative-${RELEASE_TAG}-legacy-xr.apk\`** — XR build for Quest headsets." \
             '- **`SHA256SUMS`** — SHA-256 checksums for both APKs.' \
             >> release-body.md
+
+      - name: Verify release tag remains immutable
+        env:
+          EXPECTED_TAG_TARGET: ${{ needs.build.outputs.release_tag_target }}
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          tag_oid=""
+          peeled_oid=""
+          while read -r oid ref; do
+            case "$ref" in
+              "refs/tags/$RELEASE_TAG") tag_oid="$oid" ;;
+              "refs/tags/$RELEASE_TAG^{}") peeled_oid="$oid" ;;
+            esac
+          done < <(
+            git ls-remote --tags "$REPOSITORY_URL" \
+              "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}"
+          )
+          if [ -z "$tag_oid" ]; then
+            echo "Release tag no longer exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if [ "${peeled_oid:-$tag_oid}" != "$EXPECTED_TAG_TARGET" ]; then
+            echo "Release tag target changed after build" >&2
+            exit 1
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Experimental opt-in canonical library — ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Canonical library by default — ${{ env.RELEASE_TAG }}
           prerelease: true
           generate_release_notes: true
           append_body: true
           body_path: release-body.md
           files: |
-            gamenative-${{ github.ref_name }}.apk
-            gamenative-${{ github.ref_name }}-legacy-xr.apk
+            gamenative-${{ env.RELEASE_TAG }}.apk
+            gamenative-${{ env.RELEASE_TAG }}-legacy-xr.apk
             SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
