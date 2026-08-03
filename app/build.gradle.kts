@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.android.application)
@@ -320,6 +321,20 @@ android {
     //         exclude(group = "junit", module = "junit")
     //     }
     // }
+}
+
+tasks.withType<Test>().configureEach {
+    val isolatedTmpDir = layout.buildDirectory.dir("test-tmp/$name").get().asFile
+    systemProperty("java.io.tmpdir", isolatedTmpDir.absolutePath)
+    doFirst {
+        isolatedTmpDir.deleteRecursively()
+        check(isolatedTmpDir.mkdirs() || isolatedTmpDir.isDirectory) {
+            "Could not create isolated test temp directory"
+        }
+    }
+    doLast {
+        isolatedTmpDir.deleteRecursively()
+    }
 }
 
 dependencies {
