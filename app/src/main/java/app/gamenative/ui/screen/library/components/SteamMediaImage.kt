@@ -21,8 +21,9 @@ import com.skydoves.landscapist.coil.CoilImage
 @Composable
 internal fun SteamMediaImage(
     imageUrl: String?,
-    contentDescription: String,
+    contentDescription: String?,
     modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
 ) {
     val safeUrl = imageUrl?.takeIf(String::isNotBlank) ?: return
     val imageLoader = rememberSteamMediaImageLoader()
@@ -32,7 +33,7 @@ internal fun SteamMediaImage(
         imageLoader = { imageLoader },
         imageOptions = ImageOptions(
             contentDescription = contentDescription,
-            contentScale = ContentScale.Crop,
+            contentScale = contentScale,
         ),
         modifier = modifier.testTag("steam-media-image"),
     )

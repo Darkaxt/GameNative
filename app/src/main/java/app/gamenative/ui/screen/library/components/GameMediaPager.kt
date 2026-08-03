@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -28,7 +29,7 @@ data class GameMediaItem(
 
 internal enum class GameMediaLoadingPolicy {
     DEFAULT,
-    STEAM_IMAGES_ONLY,
+    STEAM_MEDIA,
 }
 
 @Composable
@@ -39,61 +40,70 @@ internal fun GameMediaPager(
     modifier: Modifier = Modifier,
     loadingPolicy: GameMediaLoadingPolicy = GameMediaLoadingPolicy.DEFAULT,
 ) {
-    val safeMedia = remember(media, loadingPolicy) {
-        when (loadingPolicy) {
-            GameMediaLoadingPolicy.DEFAULT -> media.filter {
-                !it.videoUrl.isNullOrBlank() || !it.imageUrl.isNullOrBlank()
-            }
-            GameMediaLoadingPolicy.STEAM_IMAGES_ONLY -> media.filter {
-                !it.imageUrl.isNullOrBlank()
-            }
-        }
-    }
+    val safeMedia = rememberSafeMedia(media, loadingPolicy)
     val pagerState = rememberPagerState(pageCount = { safeMedia.size.coerceAtLeast(1) })
+    GameMediaPager(
+        media = safeMedia,
+        fallbackImageUrl = fallbackImageUrl,
+        contentDescription = contentDescription,
+        pagerState = pagerState,
+        modifier = modifier,
+        loadingPolicy = loadingPolicy,
+    )
+}
+
+@Composable
+internal fun GameMediaPager(
+    media: List<GameMediaItem>,
+    fallbackImageUrl: String?,
+    contentDescription: String,
+    pagerState: PagerState,
+    modifier: Modifier = Modifier,
+    loadingPolicy: GameMediaLoadingPolicy = GameMediaLoadingPolicy.DEFAULT,
+) {
+    val safeMedia = rememberSafeMedia(media, loadingPolicy)
 
     Box(modifier = modifier.testTag("game-media-pager")) {
         if (safeMedia.isEmpty()) {
-            when (loadingPolicy) {
-                GameMediaLoadingPolicy.DEFAULT -> VideoHero(
-                    videoUrl = null,
-                    fallbackImageUrl = fallbackImageUrl.orEmpty(),
-                    contentDescription = contentDescription,
-                    modifier = Modifier.fillMaxSize(),
-                )
-                GameMediaLoadingPolicy.STEAM_IMAGES_ONLY -> SteamMediaImage(
-                    imageUrl = fallbackImageUrl,
-                    contentDescription = contentDescription,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            MediaFallback(
+                fallbackImageUrl = fallbackImageUrl,
+                contentDescription = contentDescription,
+                loadingPolicy = loadingPolicy,
+            )
         } else {
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                 val item = safeMedia[page]
                 when {
-                    loadingPolicy == GameMediaLoadingPolicy.STEAM_IMAGES_ONLY -> SteamMediaImage(
-                        imageUrl = item.imageUrl,
-                        contentDescription = contentDescription,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    !item.videoUrl.isNullOrBlank() -> {
-                        VideoHero(
+                    loadingPolicy == GameMediaLoadingPolicy.STEAM_MEDIA && !item.videoUrl.isNullOrBlank() -> {
+                        SteamVideoHero(
                             videoUrl = item.videoUrl,
-                            fallbackImageUrl = (item.imageUrl ?: fallbackImageUrl).orEmpty(),
+                            fallbackImageUrl = item.imageUrl ?: fallbackImageUrl,
                             contentDescription = contentDescription,
                             active = page == pagerState.currentPage,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
-                    else -> {
-                        CoilImage(
-                            imageModel = { item.imageUrl },
-                            imageOptions = ImageOptions(
-                                contentDescription = contentDescription,
-                                contentScale = ContentScale.Crop,
-                            ),
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
+                    loadingPolicy == GameMediaLoadingPolicy.STEAM_MEDIA -> SteamMediaImage(
+                        imageUrl = item.imageUrl,
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                    !item.videoUrl.isNullOrBlank() -> VideoHero(
+                        videoUrl = item.videoUrl,
+                        fallbackImageUrl = (item.imageUrl ?: fallbackImageUrl).orEmpty(),
+                        contentDescription = contentDescription,
+                        active = page == pagerState.currentPage,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    else -> CoilImage(
+                        imageModel = { item.imageUrl },
+                        imageOptions = ImageOptions(
+                            contentDescription = contentDescription,
+                            contentScale = ContentScale.Crop,
+                        ),
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
         }
@@ -114,5 +124,41 @@ internal fun GameMediaPager(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun rememberSafeMedia(
+    media: List<GameMediaItem>,
+    loadingPolicy: GameMediaLoadingPolicy,
+): List<GameMediaItem> = remember(media, loadingPolicy) {
+    media.filter { item ->
+        when (loadingPolicy) {
+            GameMediaLoadingPolicy.DEFAULT,
+            GameMediaLoadingPolicy.STEAM_MEDIA,
+            -> !item.videoUrl.isNullOrBlank() || !item.imageUrl.isNullOrBlank()
+        }
+    }
+}
+
+@Composable
+private fun MediaFallback(
+    fallbackImageUrl: String?,
+    contentDescription: String,
+    loadingPolicy: GameMediaLoadingPolicy,
+) {
+    when (loadingPolicy) {
+        GameMediaLoadingPolicy.DEFAULT -> VideoHero(
+            videoUrl = null,
+            fallbackImageUrl = fallbackImageUrl.orEmpty(),
+            contentDescription = contentDescription,
+            modifier = Modifier.fillMaxSize(),
+        )
+        GameMediaLoadingPolicy.STEAM_MEDIA -> SteamMediaImage(
+            imageUrl = fallbackImageUrl,
+            contentDescription = contentDescription,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Fit,
+        )
     }
 }

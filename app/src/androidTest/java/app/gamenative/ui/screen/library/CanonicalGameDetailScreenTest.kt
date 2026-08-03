@@ -25,7 +25,7 @@ class CanonicalGameDetailScreenTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun fourTabsShowHonestContentActionsAndOfflineStaleSemantics() {
+    fun tabsShowHonestContentActionsResourcesAndOfflineStaleSemantics() {
         var copiesClicks = 0
         var sourceDetailsClicks = 0
         composeRule.setContent {
@@ -38,6 +38,7 @@ class CanonicalGameDetailScreenTest {
                     ),
                     fallbackTitle = "Canonical fallback",
                     fallbackImageUrl = "",
+                    steamAppId = 123456,
                     ownedSources = setOf(GameSource.STEAM, GameSource.GOG),
                     compatibilityStatus = GameCompatibilityStatus.COMPATIBLE,
                     hltbStats = HltbService.Stats("10", "15", "20", "12"),
@@ -55,6 +56,7 @@ class CanonicalGameDetailScreenTest {
         composeRule.onNodeWithText("Reviews").assertIsDisplayed()
         composeRule.onNodeWithText("Discussions").assertIsDisplayed()
         composeRule.onNodeWithText("Details").assertIsDisplayed()
+        composeRule.onNodeWithText("Resources").assertIsDisplayed()
         composeRule.onNodeWithText("Showing saved details offline").assertIsDisplayed()
         composeRule.onNodeWithText("Saved details may be out of date").assertIsDisplayed()
         composeRule.onNodeWithText("Plain short description").assertIsDisplayed()
@@ -72,9 +74,9 @@ class CanonicalGameDetailScreenTest {
         }
 
         composeRule.onNodeWithText("Reviews").performClick()
-        composeRule.onNodeWithText("Review browsing is not available in this build").assertIsDisplayed()
+        composeRule.onNodeWithText("Native review browsing is not available yet.").assertIsDisplayed()
         composeRule.onNodeWithText("Discussions").performClick()
-        composeRule.onNodeWithText("Discussion browsing is not available in this build").assertIsDisplayed()
+        composeRule.onNodeWithText("Native discussion browsing is not available yet.").assertIsDisplayed()
         composeRule.onNodeWithText("Details").performClick()
         composeRule.onNodeWithText("Fixture Studio").assertIsDisplayed()
         composeRule.onNodeWithText("Fixture Publisher").assertIsDisplayed()
@@ -84,10 +86,13 @@ class CanonicalGameDetailScreenTest {
         composeRule.onNodeWithText("Minimum: 8 GB RAM").assertIsDisplayed()
         composeRule.onNodeWithText("12").assertIsDisplayed()
         composeRule.onNodeWithText("2").assertIsDisplayed()
+        composeRule.onNodeWithText("Resources").performClick()
+        composeRule.onNodeWithText("Steam store").assertIsDisplayed()
+        composeRule.onNodeWithText("Community hub").assertIsDisplayed()
     }
 
     @Test
-    fun steamMetadataUsesScopedImageLoaderAndNeverSharedVideoPath() {
+    fun steamMetadataUsesScopedImageAndVideoLoaders() {
         composeRule.setContent {
             PluviaTheme {
                 CanonicalGameDetailScreen(
@@ -106,6 +111,7 @@ class CanonicalGameDetailScreenTest {
                     ),
                     fallbackTitle = "Canonical fallback",
                     fallbackImageUrl = "",
+                    steamAppId = 123456,
                     ownedSources = setOf(GameSource.STEAM),
                     compatibilityStatus = null,
                     hltbStats = null,
@@ -118,7 +124,8 @@ class CanonicalGameDetailScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("steam-media-image").assertIsDisplayed()
+        composeRule.onNodeWithTag("steam-media-gallery").assertIsDisplayed()
+        composeRule.onNodeWithTag("steam-media-video").assertIsDisplayed()
     }
 
     private fun metadata() = CanonicalGameMetadata(

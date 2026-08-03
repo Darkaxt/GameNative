@@ -3,12 +3,11 @@ package app.gamenative.ui.screen.library
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameMovie
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class CanonicalSteamMediaBoundaryTest {
     @Test
-    fun metadataMoviesContributePostersButNeverPlaybackUrls() {
+    fun metadataMoviesKeepPlaybackAndPosterBeforeScreenshots() {
         val streamUrl = "https://video.akamai.steamstatic.com/movie.webm"
         val posterUrl = "https://shared.akamai.steamstatic.com/poster.jpg"
         val screenshotUrl = "https://shared.akamai.steamstatic.com/screenshot.jpg"
@@ -37,9 +36,11 @@ class CanonicalSteamMediaBoundaryTest {
             fetchedAtEpochMs = 1L,
         )
 
-        val imageUrls = canonicalSteamImageUrls(metadata)
+        val media = canonicalSteamMediaItems(metadata)
 
-        assertEquals(listOf(posterUrl, screenshotUrl), imageUrls)
-        assertFalse(imageUrls.contains(streamUrl))
+        assertEquals(2, media.size)
+        assertEquals(streamUrl, media[0].videoUrl)
+        assertEquals(posterUrl, media[0].imageUrl)
+        assertEquals(screenshotUrl, media[1].imageUrl)
     }
 }

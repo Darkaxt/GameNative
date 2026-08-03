@@ -1406,6 +1406,7 @@ internal fun LibraryScreenContent(
                     state = gameDetailState,
                     fallbackTitle = selectedCanonicalCard.displayName,
                     fallbackImageUrl = selectedCanonicalCard.headerImageUrl,
+                    steamAppId = selectedCanonicalCard.steamAppId,
                     ownedSources = selectedCanonicalCard.ownedSources,
                     compatibilityStatus = presentationCard.compatibilityStatus,
                     hltbStats = HltbCache.get(selectedCanonicalCard.displayName),
