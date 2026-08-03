@@ -21,8 +21,8 @@ class TaggedReleaseWorkflowContractTest {
         )
         val universalApks = "universal-compat.apk universal-compat-legacy-xr.apk universal-side-by-side.apk universal-side-by-side-legacy-xr.apk"
 
-        assertTrue(appGradle.contains("versionCode = 28"))
-        assertTrue(appGradle.contains("versionName = \"1.1.3-rc2\""))
+        assertTrue(appGradle.contains("versionCode = 29"))
+        assertTrue(appGradle.contains("versionName = \"1.1.3-rc3\""))
         assertTrue(workflow.contains("timeout-minutes: 75"))
         assertTrue(workflow.contains(":app:bundleLegacyRelease"))
         assertTrue(workflow.contains(":app:bundleLegacyXrRelease"))
