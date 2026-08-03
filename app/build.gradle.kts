@@ -190,9 +190,9 @@ android {
             buildConfigField("boolean", "OFFICIAL_ANALYTICS_ENABLED", "false")
             buildConfigField("String", "PUBLIC_INSTALL_DIR_NAME", "\"GameNative-Darkaxt\"")
             manifestPlaceholders["internalDeepLinkHost"] = "pluvia-darkaxt"
-            manifestPlaceholders["icon"] = "@mipmap/ic_launcher_darkaxt"
-            manifestPlaceholders["roundIcon"] = "@mipmap/ic_launcher_darkaxt_round"
-            manifestPlaceholders["altIcon"] = "@mipmap/ic_launcher_darkaxt"
+            manifestPlaceholders["icon"] = "@mipmap/ic_launcher"
+            manifestPlaceholders["roundIcon"] = "@mipmap/ic_launcher_round"
+            manifestPlaceholders["altIcon"] = "@mipmap/ic_launcher_alt"
         }
         create("release-signed") {
             isMinifyEnabled = true
