@@ -2,6 +2,7 @@ package app.gamenative.utils
 
 import android.content.Context
 import android.content.Intent
+import app.gamenative.BuildConfig
 import app.gamenative.PrefManager
 import app.gamenative.data.GameSource
 import com.winlator.container.Container
@@ -19,19 +20,23 @@ object IntentLaunchManager {
 
     private const val EXTRA_GAME_SOURCE = "game_source"
     private const val EXTRA_CONTAINER_CONFIG = "container_config"
-    private const val ACTION_LAUNCH_GAME = "app.gamenative.LAUNCH_GAME"
     private const val MAX_CONFIG_JSON_SIZE = 50000 // 50KB limit to prevent memory exhaustion
+
+    fun launchAction(applicationId: String = BuildConfig.APPLICATION_ID): String = "$applicationId.LAUNCH_GAME"
 
     data class LaunchRequest(
         val appId: String,
         val containerConfig: ContainerData? = null,
     )
 
-    fun parseLaunchIntent(intent: Intent): LaunchRequest? {
+    fun parseLaunchIntent(
+        intent: Intent,
+        expectedAction: String = launchAction(),
+    ): LaunchRequest? {
         Timber.d("[IntentLaunchManager]: Parsing intent: action=${intent.action}")
 
-        if (intent.action != ACTION_LAUNCH_GAME) {
-            Timber.d("[IntentLaunchManager]: Intent action '${intent.action}' doesn't match expected action '$ACTION_LAUNCH_GAME'")
+        if (intent.action != expectedAction) {
+            Timber.d("[IntentLaunchManager]: Intent action '${intent.action}' doesn't match expected action '$expectedAction'")
             return null
         }
 

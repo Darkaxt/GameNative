@@ -69,6 +69,10 @@ android {
         versionName = "1.1.3-rc1"
 
         buildConfigField("boolean", "GOLD", "false")
+        buildConfigField("String", "RELEASE_CHANNEL", "\"compatibility\"")
+        buildConfigField("boolean", "OFFICIAL_UPDATER_ENABLED", "true")
+        buildConfigField("boolean", "OFFICIAL_ANALYTICS_ENABLED", "true")
+        buildConfigField("String", "PUBLIC_INSTALL_DIR_NAME", "\"GameNative\"")
         fun secret(name: String) =
             project.findProperty(name) as String? ?: System.getenv(name) ?: ""
 
@@ -82,6 +86,8 @@ android {
             mapOf(
                 "icon" to iconValue,
                 "roundIcon" to iconRoundValue,
+                "internalDeepLinkHost" to "pluvia",
+                "altIcon" to "@mipmap/ic_launcher_alt",
             ),
         )
 
@@ -173,6 +179,20 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             signingConfig = signingConfigs.getByName("debug")
+        }
+        create("releaseDarkaxt") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            applicationIdSuffix = ".darkaxt"
+            resValue("string", "app_name", "GameNative Darkaxt")
+            buildConfigField("String", "RELEASE_CHANNEL", "\"darkaxt-side-by-side\"")
+            buildConfigField("boolean", "OFFICIAL_UPDATER_ENABLED", "false")
+            buildConfigField("boolean", "OFFICIAL_ANALYTICS_ENABLED", "false")
+            buildConfigField("String", "PUBLIC_INSTALL_DIR_NAME", "\"GameNative-Darkaxt\"")
+            manifestPlaceholders["internalDeepLinkHost"] = "pluvia-darkaxt"
+            manifestPlaceholders["icon"] = "@mipmap/ic_launcher_darkaxt"
+            manifestPlaceholders["roundIcon"] = "@mipmap/ic_launcher_darkaxt_round"
+            manifestPlaceholders["altIcon"] = "@mipmap/ic_launcher_darkaxt"
         }
         create("release-signed") {
             isMinifyEnabled = true

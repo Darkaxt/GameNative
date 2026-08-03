@@ -38,6 +38,7 @@
         android:allowBackup="false"
         android:extractNativeLibs="true"
         android:icon="${icon}"
+        android:roundIcon="${roundIcon}"
         android:isGame="true"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -65,7 +66,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
 
                 <data
-                    android:host="pluvia"
+                    android:host="${internalDeepLinkHost}"
                     android:scheme="home" />
             </intent-filter>
             <intent-filter>
@@ -78,7 +79,7 @@
                 <data android:scheme="nxm" />
             </intent-filter>
             <intent-filter>
-                <action android:name="app.gamenative.LAUNCH_GAME" />
+                <action android:name="${applicationId}.LAUNCH_GAME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
@@ -112,7 +113,7 @@
             android:name=".MainActivityAliasDefault"
             android:enabled="true"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher"
+            android:icon="${icon}"
             android:label="@string/app_name"
             android:targetActivity=".MainActivity">
             <intent-filter>
@@ -124,7 +125,7 @@
             android:name=".MainActivityAliasAlt"
             android:enabled="false"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher_alt"
+            android:icon="${altIcon}"
             android:label="@string/app_name"
             android:targetActivity=".MainActivity">
             <intent-filter>

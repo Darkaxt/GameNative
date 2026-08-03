@@ -1027,9 +1027,16 @@ class SteamAppScreen : BaseAppScreen() {
             contract = ActivityResultContracts.RequestMultiplePermissions(),
             onResult = { permission ->
                 scope.launch {
+                    val appFilesDir = File(
+                        Environment.getExternalStorageDirectory(),
+                        "Android/data/${BuildConfig.APPLICATION_ID}/files",
+                    )
+                    val migrationSource = StorageUtils.publicInstallRoot(appFilesDir)
+                        ?.let { File(it, "Steam").path }
+                        ?: return@launch
                     showMoveDialog = true
                     StorageUtils.moveGamesFromOldPath(
-                        Paths.get(Environment.getExternalStorageDirectory().absolutePath, "GameNative", "Steam").pathString,
+                        migrationSource,
                         oldGamesDirectory,
                         onProgressUpdate = { currentFile, fileProgress, movedFiles, totalFiles ->
                             current = currentFile

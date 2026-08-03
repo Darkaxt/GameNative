@@ -28,6 +28,10 @@ android {
     }
 
     buildTypes {
+        create("releaseDarkaxt") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+        }
         create("release-signed") {
             initWith(getByName("release"))
         }

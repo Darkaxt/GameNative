@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.os.storage.StorageManager
+import app.gamenative.BuildConfig
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -98,19 +99,22 @@ object StorageUtils {
         return result
     }
 
-    private const val PUBLIC_INSTALL_DIR_NAME = "GameNative"
-
     /**
-     * Maps an app-specific dir (<volume>/Android/data/<pkg>/files) to a public install root
-     * (<volume>/GameNative). MediaProvider disables FUSE kernel caching under Android/data,
+     * Maps an app-specific dir (<volume>/Android/data/<pkg>/files) to this channel's
+     * public install root. MediaProvider disables FUSE kernel caching under Android/data,
      * making per-open metadata ops ~1000x slower there; public dirs get normal dcache treatment.
      */
-    fun publicInstallRoot(appFilesDir: File): File? {
-        val path = appFilesDir.absolutePath
+    fun publicInstallRoot(
+        appFilesDir: File,
+        installDirName: String = BuildConfig.PUBLIC_INSTALL_DIR_NAME,
+    ): File? {
+        val path = appFilesDir.path.replace('\\', '/')
         val idx = path.indexOf("/Android/data/")
         if (idx <= 0) return null
-        return File(path.substring(0, idx), PUBLIC_INSTALL_DIR_NAME)
+        return File(path.substring(0, idx), installDirName)
     }
+
+    fun isSharedCompatibilityRoot(root: File): Boolean = root.name == "GameNative"
 
     fun ensureInstallRoot(dir: File): Boolean {
         if (!dir.isDirectory && !dir.mkdirs()) return false

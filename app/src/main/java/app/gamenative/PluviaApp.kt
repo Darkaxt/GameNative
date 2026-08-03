@@ -19,6 +19,7 @@ import app.gamenative.sync.FrontendSyncManager
 import app.gamenative.utils.ContainerMigrator
 import app.gamenative.utils.IntentLaunchManager
 import app.gamenative.utils.PlayIntegrity
+import app.gamenative.utils.ReleaseChannelPolicy
 import app.gamenative.utils.downloader.ContainerFilesDownloader
 import java.io.File
 import javax.inject.Inject
@@ -115,24 +116,24 @@ class PluviaApp : SplitCompatApplication() {
             Timber.e(e, "[PluviaApp]: Failed to clear temporary config overrides")
         }
 
-        // Initialize PostHog Analytics
-        val postHogConfig = PostHogAndroidConfig(
-            apiKey = BuildConfig.POSTHOG_API_KEY,
-            host = BuildConfig.POSTHOG_HOST,
-        ).apply {
-            /* turn every event into an identified one */
-            personProfiles = PersonProfiles.ALWAYS
-        }
-        PostHogAndroid.setup(this, postHogConfig)
-        com.posthog.PostHog.register("build_flavor", BuildConfig.FLAVOR)
+        if (ReleaseChannelPolicy.current().mayInitializeOfficialAnalytics) {
+            val postHogConfig = PostHogAndroidConfig(
+                apiKey = BuildConfig.POSTHOG_API_KEY,
+                host = BuildConfig.POSTHOG_HOST,
+            ).apply {
+                personProfiles = PersonProfiles.ALWAYS
+            }
+            PostHogAndroid.setup(this, postHogConfig)
+            com.posthog.PostHog.register("build_flavor", BuildConfig.FLAVOR)
 
-        if (PrefManager.usageAnalyticsEnabled) {
-            com.posthog.PostHog.capture(
-                event = "\$set",
-                properties = mapOf(
-                    "\$set" to mapOf("recommendation_enabled" to PrefManager.showRecommendations),
-                ),
-            )
+            if (PrefManager.usageAnalyticsEnabled) {
+                com.posthog.PostHog.capture(
+                    event = "\$set",
+                    properties = mapOf(
+                        "\$set" to mapOf("recommendation_enabled" to PrefManager.showRecommendations),
+                    ),
+                )
+            }
         }
 
         PlayIntegrity.warmUp(this)
