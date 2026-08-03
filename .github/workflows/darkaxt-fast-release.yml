@@ -1,0 +1,270 @@
+name: Publish Darkaxt release in parallel
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing immutable prerelease tag to publish"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
+  EXPECTED_VERSION_CODE: "28"
+  EXPECTED_VERSION_NAME: "1.1.3-rc2"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: compat
+            gradle_task: :app:bundleLegacyRelease
+            bundle_path: app/build/outputs/bundle/legacyRelease/app-legacy-release.aab
+            package_name: app.gamenative
+          - id: compat-legacy-xr
+            gradle_task: :app:bundleLegacyXrRelease
+            bundle_path: app/build/outputs/bundle/legacyXrRelease/app-legacyXr-release.aab
+            package_name: app.gamenative
+          - id: side-by-side
+            gradle_task: :app:bundleLegacyReleaseDarkaxt
+            bundle_path: app/build/outputs/bundle/legacyReleaseDarkaxt/app-legacy-releaseDarkaxt.aab
+            package_name: app.gamenative.darkaxt
+          - id: side-by-side-legacy-xr
+            gradle_task: :app:bundleLegacyXrReleaseDarkaxt
+            bundle_path: app/build/outputs/bundle/legacyXrReleaseDarkaxt/app-legacyXr-releaseDarkaxt.aab
+            package_name: app.gamenative.darkaxt
+
+    steps:
+      - name: Validate existing release tag
+        id: release-tag
+        env:
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(nightly\.[0-9]+|rc[0-9]+|prerelease)$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          tag_oid=""
+          peeled_oid=""
+          while read -r oid ref; do
+            case "$ref" in
+              "refs/tags/$RELEASE_TAG") tag_oid="$oid" ;;
+              "refs/tags/$RELEASE_TAG^{}") peeled_oid="$oid" ;;
+            esac
+          done < <(
+            git ls-remote --tags "$REPOSITORY_URL" \
+              "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}"
+          )
+          if [ -z "$tag_oid" ]; then
+            echo "Release tag does not exist: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          printf 'expected_target=%s\n' "${peeled_oid:-$tag_oid}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify checked-out tag target
+        env:
+          EXPECTED_TAG_TARGET: ${{ steps.release-tag.outputs.expected_target }}
+        run: |
+          set -euo pipefail
+          actual_target="$(git rev-parse HEAD)"
+          if [ "$actual_target" != "$EXPECTED_TAG_TARGET" ]; then
+            echo "Checked-out commit does not match release tag target" >&2
+            exit 1
+          fi
+          printf '%s\n' "$actual_target" > "tag-target-${{ matrix.id }}.txt"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure persistent fork key
+        env:
+          FORK_KEYSTORE: ${{ secrets.FORK_KEYSTORE }}
+          FORK_KEYSTORE_ALIAS: ${{ secrets.FORK_KEYSTORE_ALIAS }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEY_PASSWORD: ${{ secrets.FORK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in FORK_KEYSTORE FORK_KEYSTORE_ALIAS FORK_KEYSTORE_PASSWORD FORK_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "Required fork signing secret is not configured: $name" >&2
+              exit 1
+            fi
+          done
+          mkdir -p app/keystores
+          printf '%s' "$FORK_KEYSTORE" | base64 --decode > app/keystores/fork-release.jks
+          chmod 600 app/keystores/fork-release.jks
+          test -s app/keystores/fork-release.jks
+
+      - name: Inject optional build credentials
+        env:
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+          STEAMGRIDDB_API_KEY: ${{ secrets.STEAMGRIDDB_API_KEY }}
+          CLOUD_PROJECT_NUMBER: ${{ secrets.CLOUD_PROJECT_NUMBER }}
+        run: |
+          : > local.properties
+          for name in POSTHOG_API_KEY POSTHOG_HOST STEAMGRIDDB_API_KEY CLOUD_PROJECT_NUMBER; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              printf '%s=%s\n' "$name" "$value" >> local.properties
+            fi
+          done
+
+      - name: Install Android SDK Build Tools
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          yes | "$SDKMANAGER" --install "build-tools;34.0.0"
+
+      - name: Build one release bundle
+        run: ./gradlew "${{ matrix.gradle_task }}" --no-daemon
+
+      - name: Extract and sign universal APK
+        env:
+          FORK_KEYSTORE_ALIAS: ${{ secrets.FORK_KEYSTORE_ALIAS }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEY_PASSWORD: ${{ secrets.FORK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          apk="gamenative-${RELEASE_TAG}-${{ matrix.id }}.apk"
+          java -jar tools/bundletool-all-1.17.2.jar build-apks \
+            --bundle="${{ matrix.bundle_path }}" \
+            --output=release.apks \
+            --mode=universal
+          unzip -p release.apks universal.apk > unsigned.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
+            --ks app/keystores/fork-release.jks \
+            --ks-type JKS \
+            --ks-key-alias "$FORK_KEYSTORE_ALIAS" \
+            --ks-pass env:FORK_KEYSTORE_PASSWORD \
+            --key-pass env:FORK_KEY_PASSWORD \
+            --out "$apk" \
+            unsigned.apk
+
+      - name: Verify signed APK
+        run: |
+          set -euo pipefail
+          apk="gamenative-${RELEASE_TAG}-${{ matrix.id }}.apk"
+          apkanalyzer="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          actual_package=$("$apkanalyzer" manifest application-id "$apk")
+          actual_version_code=$("$apkanalyzer" manifest version-code "$apk")
+          actual_version_name=$("$apkanalyzer" manifest version-name "$apk")
+          [ "$actual_package" = "${{ matrix.package_name }}" ]
+          [ "$actual_version_code" = "$EXPECTED_VERSION_CODE" ]
+          [ "$actual_version_name" = "$EXPECTED_VERSION_NAME" ]
+          verify_output=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$apk")
+          [[ "$verify_output" == *"Verified using v2 scheme (APK Signature Scheme v2): true"* ]]
+          actual_digest=""
+          while IFS= read -r line; do
+            if [[ "$line" == *"certificate SHA-256 digest: "* ]]; then
+              actual_digest="${line##*: }"
+              actual_digest="${actual_digest,,}"
+              break
+            fi
+          done <<< "$verify_output"
+          [ "$actual_digest" = "$EXPECTED_FORK_CERT_SHA256" ]
+          printf 'Verified %s as %s\n' "$apk" "$actual_package"
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.id }}-${{ env.RELEASE_TAG }}
+          if-no-files-found: error
+          path: |
+            gamenative-${{ env.RELEASE_TAG }}-${{ matrix.id }}.apk
+            tag-target-${{ matrix.id }}.txt
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download signed APKs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*-${{ env.RELEASE_TAG }}
+          merge-multiple: true
+          path: ./release-assets
+
+      - name: Revalidate tag and release assets
+        env:
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          cd release-assets
+          expected_target="$(<tag-target-compat.txt)"
+          for target_file in tag-target-*.txt; do
+            [ "$(<$target_file)" = "$expected_target" ]
+          done
+          tag_oid=""
+          peeled_oid=""
+          while read -r oid ref; do
+            case "$ref" in
+              "refs/tags/$RELEASE_TAG") tag_oid="$oid" ;;
+              "refs/tags/$RELEASE_TAG^{}") peeled_oid="$oid" ;;
+            esac
+          done < <(
+            git ls-remote --tags "$REPOSITORY_URL" \
+              "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}"
+          )
+          [ "${peeled_oid:-$tag_oid}" = "$expected_target" ]
+          test -f "gamenative-${RELEASE_TAG}-compat.apk"
+          test -f "gamenative-${RELEASE_TAG}-compat-legacy-xr.apk"
+          test -f "gamenative-${RELEASE_TAG}-side-by-side.apk"
+          test -f "gamenative-${RELEASE_TAG}-side-by-side-legacy-xr.apk"
+          sha256sum gamenative-*.apk > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Dual GameNative channels — ${{ env.RELEASE_TAG }}
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+          append_body: true
+          body: |
+            ## Choose an install channel
+
+            - **Side-by-side (recommended):** installs as `app.gamenative.darkaxt` and coexists with official GameNative. Sign in and configure containers once; future Darkaxt side-by-side releases upgrade it in place when installed without uninstalling.
+            - **Compatibility:** installs as `app.gamenative` and upgrades an existing Darkaxt compatibility installation, but cannot coexist with official GameNative.
+
+            Side-by-side uses the separate `GameNative-Darkaxt` public installation root. Its official updater and official analytics integrations are disabled.
+
+            All APKs use the persistent Darkaxt fork release certificate (SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`).
+          files: |
+            release-assets/gamenative-${{ env.RELEASE_TAG }}-compat.apk
+            release-assets/gamenative-${{ env.RELEASE_TAG }}-compat-legacy-xr.apk
+            release-assets/gamenative-${{ env.RELEASE_TAG }}-side-by-side.apk
+            release-assets/gamenative-${{ env.RELEASE_TAG }}-side-by-side-legacy-xr.apk
+            release-assets/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
