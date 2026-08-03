@@ -10,6 +10,11 @@ on:
         description: "Existing immutable prerelease tag to publish"
         required: true
         type: string
+      publish_release:
+        description: "Publish the validated candidate as a GitHub prerelease"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -187,8 +192,8 @@ jobs:
         run: |
           cp app/build/outputs/bundle/legacyRelease/app-legacy-release.aab app-compat.aab
           cp app/build/outputs/bundle/legacyXrRelease/app-legacyXr-release.aab app-compat-legacy-xr.aab
-          cp app/build/outputs/bundle/legacyReleaseDarkaxt/app-legacy-release-darkaxt.aab app-side-by-side.aab
-          cp app/build/outputs/bundle/legacyXrReleaseDarkaxt/app-legacyXr-release-darkaxt.aab app-side-by-side-legacy-xr.aab
+          cp app/build/outputs/bundle/legacyReleaseDarkaxt/app-legacy-releaseDarkaxt.aab app-side-by-side.aab
+          cp app/build/outputs/bundle/legacyXrReleaseDarkaxt/app-legacyXr-releaseDarkaxt.aab app-side-by-side-legacy-xr.aab
 
       - name: Extract APKs from Bundles
         run: |
@@ -279,6 +284,14 @@ jobs:
           if [ ! -d "$BUILD_TOOLS_DIR" ]; then
             BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/34.0.0"
           fi
+          APKANALYZER="${ANDROID_HOME}/cmdline-tools/latest/bin/apkanalyzer"
+          if [ ! -x "$APKANALYZER" ]; then
+            APKANALYZER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer"
+          fi
+          if [ ! -x "$APKANALYZER" ]; then
+            echo "Android SDK apkanalyzer is not executable" >&2
+            exit 1
+          fi
           ARTIFACTS=(
             "gamenative-${RELEASE_TAG}-compat.apk|app.gamenative"
             "gamenative-${RELEASE_TAG}-compat-legacy-xr.apk|app.gamenative"
@@ -289,9 +302,9 @@ jobs:
           for artifact in "${ARTIFACTS[@]}"; do
             IFS='|' read -r apk expected_package <<< "$artifact"
             test -f "$apk"
-            actual_package=$("${BUILD_TOOLS_DIR}/apkanalyzer" manifest application-id "$apk")
-            actual_version_code=$("${BUILD_TOOLS_DIR}/apkanalyzer" manifest version-code "$apk")
-            actual_version_name=$("${BUILD_TOOLS_DIR}/apkanalyzer" manifest version-name "$apk")
+            actual_package=$("$APKANALYZER" manifest application-id "$apk")
+            actual_version_code=$("$APKANALYZER" manifest version-code "$apk")
+            actual_version_name=$("$APKANALYZER" manifest version-name "$apk")
             if [ "$actual_package" != "$expected_package" ]; then
               echo "Unexpected package for $apk" >&2
               exit 1
@@ -342,6 +355,7 @@ jobs:
             SHA256SUMS
 
   release:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
     needs: build
     runs-on: ubuntu-latest
 

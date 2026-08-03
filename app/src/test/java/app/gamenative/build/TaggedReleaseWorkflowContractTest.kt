@@ -2,6 +2,7 @@ package app.gamenative.build
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,15 +28,24 @@ class TaggedReleaseWorkflowContractTest {
         assertTrue(workflow.contains(":app:bundleLegacyXrRelease"))
         assertTrue(workflow.contains(":app:bundleLegacyReleaseDarkaxt"))
         assertTrue(workflow.contains(":app:bundleLegacyXrReleaseDarkaxt"))
+        assertTrue(workflow.contains("app/build/outputs/bundle/legacyReleaseDarkaxt/app-legacy-releaseDarkaxt.aab"))
+        assertTrue(workflow.contains("app/build/outputs/bundle/legacyXrReleaseDarkaxt/app-legacyXr-releaseDarkaxt.aab"))
         assertEquals(2, workflow.count("for apk in $universalApks; do"))
+
+        assertTrue(workflow.contains("      publish_release:\n        description: \"Publish the validated candidate as a GitHub prerelease\"\n        required: false\n        default: false\n        type: boolean"))
+        assertTrue(workflow.contains("  release:\n    if: \${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}\n    needs: build"))
 
         assertTrue(workflow.contains("gamenative-\${RELEASE_TAG}-compat.apk|app.gamenative"))
         assertTrue(workflow.contains("gamenative-\${RELEASE_TAG}-compat-legacy-xr.apk|app.gamenative"))
         assertTrue(workflow.contains("gamenative-\${RELEASE_TAG}-side-by-side.apk|app.gamenative.darkaxt"))
         assertTrue(workflow.contains("gamenative-\${RELEASE_TAG}-side-by-side-legacy-xr.apk|app.gamenative.darkaxt"))
-        assertTrue(workflow.contains("manifest application-id \"\$apk\""))
-        assertTrue(workflow.contains("manifest version-code \"\$apk\""))
-        assertTrue(workflow.contains("manifest version-name \"\$apk\""))
+        assertTrue(workflow.contains("APKANALYZER=\"\${ANDROID_HOME}/cmdline-tools/latest/bin/apkanalyzer\""))
+        assertTrue(workflow.contains("APKANALYZER=\"\${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/apkanalyzer\""))
+        assertTrue(workflow.contains("if [ ! -x \"\$APKANALYZER\" ]; then"))
+        assertTrue(workflow.contains("\"\$APKANALYZER\" manifest application-id \"\$apk\""))
+        assertTrue(workflow.contains("\"\$APKANALYZER\" manifest version-code \"\$apk\""))
+        assertTrue(workflow.contains("\"\$APKANALYZER\" manifest version-name \"\$apk\""))
+        assertFalse(workflow.contains("\${BUILD_TOOLS_DIR}/apkanalyzer"))
         assertTrue(workflow.contains("Verified using v2 scheme (APK Signature Scheme v2): true"))
         assertTrue(workflow.indexOf("Verify APK signatures, packages, versions, and generate checksums") <
             workflow.indexOf("Upload release assets for next job"),)
