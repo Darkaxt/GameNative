@@ -8,7 +8,7 @@
 
 Publish a permanent side-by-side GameNative fork that can remain installed beside the official app and upgrade indefinitely without erasing the fork user's accounts, Winlator containers, Wine prefixes, mod state, saves, preferences, or database.
 
-Retain the current same-package fork artifact long enough to preserve its existing upgrade lineage. Keep fork-only package, branding, signing, and release changes out of the future official Steam-first pull request.
+Retain the current same-package fork artifact as a supported compatibility track so its existing upgrade lineage is not abandoned. Deprecating that track requires a later explicit user decision after side-by-side adoption is proven. Keep fork-only package, branding, signing, and release changes out of the future official Steam-first pull request.
 
 ## 2. Product contract
 
