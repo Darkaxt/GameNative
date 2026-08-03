@@ -834,9 +834,11 @@ private fun QRCodeLogin(
     BoxWithConstraints(modifier = modifier) {
         val instructionTextHeight = 40.dp
         val qrPadding = 16.dp
+        val qrFrameWidth = 2.dp
         val effectiveHeight = if (availableHeight != Dp.Unspecified) availableHeight else maxHeight
         val availableForQr = effectiveHeight - instructionTextHeight - qrPadding
         val qrSize = availableForQr.coerceIn(100.dp, 200.dp)
+        val qrImageSize = qrSize - (qrFrameWidth * 2)
         val showInstructionText = effectiveHeight - qrSize - qrPadding >= instructionTextHeight
 
         var showQrFailed by remember { mutableStateOf(false) }
@@ -909,7 +911,7 @@ private fun QRCodeLogin(
                             ),
                             shape = RoundedCornerShape(16.dp),
                         )
-                        .padding(2.dp),
+                        .padding(qrFrameWidth),
                     contentAlignment = Alignment.Center,
                 ) {
                     Surface(
@@ -922,9 +924,8 @@ private fun QRCodeLogin(
                             contentAlignment = Alignment.Center,
                         ) {
                             QrCodeImage(
-                                modifier = Modifier.fillMaxSize(0.95f),
                                 content = qrCode,
-                                size = qrSize,
+                                size = qrImageSize,
                             )
                         }
                     }

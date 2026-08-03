@@ -8,21 +8,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.tooling.preview.Preview
@@ -35,7 +33,17 @@ import com.google.zxing.EncodeHintType
 import com.google.zxing.WriterException
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+internal const val QR_QUIET_ZONE_MODULES = 4
+internal const val QR_MODULE_COLOR = -0x1000000
+internal const val QR_BACKGROUND_COLOR = -0x1
+
+internal data class QrCodePixels(
+    val width: Int,
+    val height: Int,
+    val pixels: IntArray,
+)
 
 /**
  * Displays a QR code for [content] at the desired [size].
@@ -50,7 +58,6 @@ fun QrCodeImage(
     content: String,
     size: Dp,
 ) {
-    // QR Code Image
     val qrBitmap = rememberQrBitmap(content = content, size = size)
 
     Crossfade(
@@ -60,15 +67,20 @@ fun QrCodeImage(
         Box(
             modifier = modifier
                 .size(size)
-                .background(Color.Transparent),
+                .background(Color.White),
             contentAlignment = Alignment.Center,
         ) {
             if (bitmap != null) {
-                val bitmapPainter = remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
+                val bitmapPainter = remember(bitmap) {
+                    BitmapPainter(
+                        image = bitmap.asImageBitmap(),
+                        filterQuality = FilterQuality.None,
+                    )
+                }
                 Image(
                     painter = bitmapPainter,
                     contentDescription = null,
-                    contentScale = ContentScale.FillBounds,
+                    contentScale = ContentScale.None,
                     modifier = Modifier.size(size),
                 )
             } else {
@@ -78,65 +90,57 @@ fun QrCodeImage(
     }
 }
 
-/** Taken from: https://gist.github.com/dev-niiaddy/8f936062291e3d328c7d10bb644273d0 */
 @Composable
 private fun rememberQrBitmap(content: String, size: Dp): Bitmap? {
     val density = LocalDensity.current
     val sizePx = with(density) { size.roundToPx() }
 
-    var bitmap by remember(content) {
+    var bitmap by remember(content, sizePx) {
         mutableStateOf<Bitmap?>(null)
     }
 
-    val ioScope = rememberCoroutineScope { Dispatchers.IO }
-    val bgColor = MaterialTheme.colorScheme.background.toArgb()
-    val onBgColor = MaterialTheme.colorScheme.onBackground.toArgb()
-
-    LaunchedEffect(bitmap) {
-        if (bitmap != null) return@LaunchedEffect
-
-        ioScope.launch {
-            val qrCodeWriter = QRCodeWriter()
-
-            val encodeHints = mutableMapOf<EncodeHintType, Any?>().apply {
-                this[EncodeHintType.MARGIN] = 0
-            }
-
-            val bitmapMatrix = try {
-                qrCodeWriter.encode(
-                    content,
-                    BarcodeFormat.QR_CODE,
-                    sizePx,
-                    sizePx,
-                    encodeHints,
-                )
-            } catch (ex: WriterException) {
+    LaunchedEffect(content, sizePx) {
+        bitmap = withContext(Dispatchers.Default) {
+            try {
+                val qrCode = generateQrCodePixels(content, sizePx)
+                createBitmap(qrCode.width, qrCode.height).apply {
+                    setPixels(qrCode.pixels, 0, qrCode.width, 0, 0, qrCode.width, qrCode.height)
+                }
+            } catch (_: WriterException) {
+                null
+            } catch (_: IllegalArgumentException) {
                 null
             }
-
-            val matrixWidth = bitmapMatrix?.width ?: sizePx
-            val matrixHeight = bitmapMatrix?.height ?: sizePx
-
-            val newBitmap = createBitmap(bitmapMatrix?.width ?: sizePx, bitmapMatrix?.height ?: sizePx)
-
-            val pixels = IntArray(matrixWidth * matrixHeight)
-
-            for (x in 0 until matrixWidth) {
-                for (y in 0 until matrixHeight) {
-                    val shouldColorPixel = bitmapMatrix?.get(x, y) ?: false
-                    val pixelColor = if (shouldColorPixel) onBgColor else bgColor
-
-                    pixels[y * matrixWidth + x] = pixelColor
-                }
-            }
-
-            newBitmap.setPixels(pixels, 0, matrixWidth, 0, 0, matrixWidth, matrixHeight)
-
-            bitmap = newBitmap
         }
     }
 
     return bitmap
+}
+
+internal fun generateQrCodePixels(content: String, sizePx: Int): QrCodePixels {
+    require(content.isNotEmpty()) { "QR content must not be empty" }
+    require(sizePx > 0) { "QR size must be positive" }
+
+    val matrix = QRCodeWriter().encode(
+        content,
+        BarcodeFormat.QR_CODE,
+        sizePx,
+        sizePx,
+        mapOf(EncodeHintType.MARGIN to QR_QUIET_ZONE_MODULES),
+    )
+    val pixels = IntArray(matrix.width * matrix.height)
+
+    for (y in 0 until matrix.height) {
+        for (x in 0 until matrix.width) {
+            pixels[y * matrix.width + x] = if (matrix[x, y]) QR_MODULE_COLOR else QR_BACKGROUND_COLOR
+        }
+    }
+
+    return QrCodePixels(
+        width = matrix.width,
+        height = matrix.height,
+        pixels = pixels,
+    )
 }
 
 @Preview(uiMode = Configuration.UI_MODE_NIGHT_YES or Configuration.UI_MODE_TYPE_NORMAL)
