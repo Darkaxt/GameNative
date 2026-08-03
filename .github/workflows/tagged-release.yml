@@ -20,6 +20,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     outputs:
       release_tag_target: ${{ steps.release-tag.outputs.expected_target }}
 
@@ -175,25 +176,29 @@ jobs:
           yes | "$SDKMANAGER" --install "build-tools;34.0.0"
 
       - name: Build with Gradle
-        run: ./gradlew :app:bundleLegacyRelease :app:bundleLegacyXrRelease
+        run: |
+          ./gradlew \
+            :app:bundleLegacyRelease \
+            :app:bundleLegacyXrRelease \
+            :app:bundleLegacyReleaseDarkaxt \
+            :app:bundleLegacyXrReleaseDarkaxt
 
       - name: Stage bundles
         run: |
-          cp app/build/outputs/bundle/legacyRelease/app-legacy-release.aab app-release.aab
-          cp app/build/outputs/bundle/legacyXrRelease/app-legacyXr-release.aab app-legacy-xr-release.aab
+          cp app/build/outputs/bundle/legacyRelease/app-legacy-release.aab app-compat.aab
+          cp app/build/outputs/bundle/legacyXrRelease/app-legacyXr-release.aab app-compat-legacy-xr.aab
+          cp app/build/outputs/bundle/legacyReleaseDarkaxt/app-legacy-release-darkaxt.aab app-side-by-side.aab
+          cp app/build/outputs/bundle/legacyXrReleaseDarkaxt/app-legacyXr-release-darkaxt.aab app-side-by-side-legacy-xr.aab
 
       - name: Extract APKs from Bundles
         run: |
-          java -jar tools/bundletool-all-1.17.2.jar build-apks \
-            --bundle=app-release.aab \
-            --output=app-release.apks \
-            --mode=universal
-          unzip -o app-release.apks universal.apk
-          java -jar tools/bundletool-all-1.17.2.jar build-apks \
-            --bundle=app-legacy-xr-release.aab \
-            --output=app-legacy-xr-release.apks \
-            --mode=universal
-          unzip -p app-legacy-xr-release.apks universal.apk > universal-legacy-xr.apk
+          for channel in compat compat-legacy-xr side-by-side side-by-side-legacy-xr; do
+            java -jar tools/bundletool-all-1.17.2.jar build-apks \
+              --bundle="app-${channel}.aab" \
+              --output="app-${channel}.apks" \
+              --mode=universal
+            unzip -p "app-${channel}.apks" universal.apk > "universal-${channel}.apk"
+          done
 
       - name: Copy lineage file
         if: ${{ github.repository != 'Darkaxt/GameNative' }}
@@ -215,7 +220,7 @@ jobs:
           if [ ! -d "$BUILD_TOOLS_DIR" ]; then
             BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/34.0.0"
           fi
-          for apk in universal.apk universal-legacy-xr.apk; do
+          for apk in universal-compat.apk universal-compat-legacy-xr.apk universal-side-by-side.apk universal-side-by-side-legacy-xr.apk; do
             "${BUILD_TOOLS_DIR}/apksigner" sign \
               --lineage app/keystores/prod-debug.lineage \
               --ks app/keystores/keystore \
@@ -243,7 +248,7 @@ jobs:
           if [ ! -d "$BUILD_TOOLS_DIR" ]; then
             BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/34.0.0"
           fi
-          for apk in universal.apk universal-legacy-xr.apk; do
+          for apk in universal-compat.apk universal-compat-legacy-xr.apk universal-side-by-side.apk universal-side-by-side-legacy-xr.apk; do
             "${BUILD_TOOLS_DIR}/apksigner" sign \
               --ks app/keystores/fork-release.jks \
               --ks-type JKS \
@@ -258,24 +263,52 @@ jobs:
       - name: Rename signed APKs
         run: |
           TAG="${RELEASE_TAG}"
-          mv universal.apk "gamenative-$TAG.apk"
-          mv universal-legacy-xr.apk "gamenative-$TAG-legacy-xr.apk"
+          mv universal-compat.apk "gamenative-$TAG-compat.apk"
+          mv universal-compat-legacy-xr.apk "gamenative-$TAG-compat-legacy-xr.apk"
+          mv universal-side-by-side.apk "gamenative-$TAG-side-by-side.apk"
+          mv universal-side-by-side-legacy-xr.apk "gamenative-$TAG-side-by-side-legacy-xr.apk"
 
-      - name: Verify APK signatures and generate checksums
+      - name: Verify APK signatures, packages, versions, and generate checksums
         env:
           EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
+          EXPECTED_VERSION_CODE: "28"
+          EXPECTED_VERSION_NAME: "1.1.3-rc2"
         run: |
           set -euo pipefail
           BUILD_TOOLS_DIR="${ANDROID_HOME}/build-tools/34.0.0"
           if [ ! -d "$BUILD_TOOLS_DIR" ]; then
             BUILD_TOOLS_DIR="${ANDROID_SDK_ROOT}/build-tools/34.0.0"
           fi
-          APKS=(
-            "gamenative-${RELEASE_TAG}.apk"
-            "gamenative-${RELEASE_TAG}-legacy-xr.apk"
+          ARTIFACTS=(
+            "gamenative-${RELEASE_TAG}-compat.apk|app.gamenative"
+            "gamenative-${RELEASE_TAG}-compat-legacy-xr.apk|app.gamenative"
+            "gamenative-${RELEASE_TAG}-side-by-side.apk|app.gamenative.darkaxt"
+            "gamenative-${RELEASE_TAG}-side-by-side-legacy-xr.apk|app.gamenative.darkaxt"
           )
-          for apk in "${APKS[@]}"; do
+          APKS=()
+          for artifact in "${ARTIFACTS[@]}"; do
+            IFS='|' read -r apk expected_package <<< "$artifact"
+            test -f "$apk"
+            actual_package=$("${BUILD_TOOLS_DIR}/apkanalyzer" manifest application-id "$apk")
+            actual_version_code=$("${BUILD_TOOLS_DIR}/apkanalyzer" manifest version-code "$apk")
+            actual_version_name=$("${BUILD_TOOLS_DIR}/apkanalyzer" manifest version-name "$apk")
+            if [ "$actual_package" != "$expected_package" ]; then
+              echo "Unexpected package for $apk" >&2
+              exit 1
+            fi
+            if [ "$actual_version_code" != "$EXPECTED_VERSION_CODE" ]; then
+              echo "Unexpected version code for $apk" >&2
+              exit 1
+            fi
+            if [ "$actual_version_name" != "$EXPECTED_VERSION_NAME" ]; then
+              echo "Unexpected version name for $apk" >&2
+              exit 1
+            fi
             verify_output=$("${BUILD_TOOLS_DIR}/apksigner" verify --verbose --print-certs "$apk")
+            if ! grep -Fq "Verified using v2 scheme (APK Signature Scheme v2): true" <<< "$verify_output"; then
+              echo "APK Signature Scheme v2 verification failed for $apk" >&2
+              exit 1
+            fi
             if [ "$GITHUB_REPOSITORY" = "Darkaxt/GameNative" ]; then
               actual_digest=""
               while IFS= read -r line; do
@@ -286,13 +319,12 @@ jobs:
                 fi
               done <<< "$verify_output"
               if [ "$actual_digest" != "$EXPECTED_FORK_CERT_SHA256" ]; then
-                echo "Unexpected fork signer certificate SHA-256 for $apk: $actual_digest" >&2
+                echo "Unexpected fork signer certificate for $apk" >&2
                 exit 1
               fi
-              echo "$apk signer certificate SHA-256: $actual_digest"
-            else
-              printf '%s\n' "$verify_output"
             fi
+            APKS+=("$apk")
+            echo "Verified $apk"
           done
           sha256sum "${APKS[@]}" > SHA256SUMS
           sha256sum --check SHA256SUMS
@@ -303,8 +335,10 @@ jobs:
           name: release-assets-${{ env.RELEASE_TAG }}
           if-no-files-found: error
           path: |
-            gamenative-${{ env.RELEASE_TAG }}.apk
-            gamenative-${{ env.RELEASE_TAG }}-legacy-xr.apk
+            gamenative-${{ env.RELEASE_TAG }}-compat.apk
+            gamenative-${{ env.RELEASE_TAG }}-compat-legacy-xr.apk
+            gamenative-${{ env.RELEASE_TAG }}-side-by-side.apk
+            gamenative-${{ env.RELEASE_TAG }}-side-by-side-legacy-xr.apk
             SHA256SUMS
 
   release:
@@ -321,37 +355,32 @@ jobs:
       - name: Build release notes
         run: |
           : > release-body.md
+          cat <<'EOF' >> release-body.md
+          ## Choose an install channel
+
+          - **Side-by-side (recommended):** installs as `app.gamenative.darkaxt` and coexists with official GameNative. On first installation, sign in and create or import the container data you need. Every later side-by-side update installs over it; do not uninstall first.
+          - **Compatibility:** installs as `app.gamenative` and upgrades an existing compatibility installation, but cannot coexist with official GameNative.
+
+          Side-by-side uses `GameNative-Darkaxt` for new public installations. Do not copy official private tokens, Keystore data, containers, or `Android/data` content. `nxm://` may show an Android chooser when both apps are installed. The in-app updater is disabled; use verified Darkaxt GitHub releases for updates.
+
+          EOF
           if [ "$GITHUB_REPOSITORY" = "Darkaxt/GameNative" ]; then
             cat <<'EOF' >> release-body.md
-          ## Fork-only signing identity
+          ## Persistent fork signing identity
 
-          This prerelease is signed with the persistent Darkaxt fork release key (certificate SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`), not the official GameNative signing identity.
-
-          - Uninstall an official-signed GameNative build before installing this prerelease.
-          - Subsequent Darkaxt fork builds using this signing identity can upgrade this prerelease in place.
+          All four APKs are signed by the persistent Darkaxt fork release key (certificate SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`). Future Darkaxt releases signed by this key can upgrade these APKs in place.
 
           EOF
           fi
           cat <<'EOF' >> release-body.md
-          ## Canonical library cards
-
-          Canonical library cards are enabled by default.
-
-          ### Disable + restart for source-native recovery
-          1. Open **Settings → Debug**.
-          2. Disable **Canonical library cards**.
-          3. Restart GameNative.
-
-          Disabling and restarting restores exact source-native cards/actions. Missing readiness, unsupported contexts, or canonical assembly failures also fall back automatically, and the independent canonical projection kill switch remains available.
-
-          Later Steam-first detail and discovery slices are not included in this prerelease.
-
           ## Downloads
           EOF
           printf '%s\n' \
-            "- **\`gamenative-${RELEASE_TAG}.apk\`** — Standard build. Recommended for most users." \
-            "- **\`gamenative-${RELEASE_TAG}-legacy-xr.apk\`** — XR build for Quest headsets." \
-            '- **`SHA256SUMS`** — SHA-256 checksums for both APKs.' \
+            "- **\`gamenative-${RELEASE_TAG}-compat.apk\`** — Standard compatibility build." \
+            "- **\`gamenative-${RELEASE_TAG}-compat-legacy-xr.apk\`** — XR compatibility build for Quest headsets." \
+            "- **\`gamenative-${RELEASE_TAG}-side-by-side.apk\`** — Recommended standard side-by-side build." \
+            "- **\`gamenative-${RELEASE_TAG}-side-by-side-legacy-xr.apk\`** — Recommended XR side-by-side build for Quest headsets." \
+            '- **`SHA256SUMS`** — SHA-256 checksums for all four APKs.' \
             >> release-body.md
 
       - name: Verify release tag remains immutable
@@ -384,14 +413,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: Canonical library by default — ${{ env.RELEASE_TAG }}
+          name: Dual GameNative channels — ${{ env.RELEASE_TAG }}
           prerelease: true
           generate_release_notes: true
           append_body: true
           body_path: release-body.md
           files: |
-            gamenative-${{ env.RELEASE_TAG }}.apk
-            gamenative-${{ env.RELEASE_TAG }}-legacy-xr.apk
+            gamenative-${{ env.RELEASE_TAG }}-compat.apk
+            gamenative-${{ env.RELEASE_TAG }}-compat-legacy-xr.apk
+            gamenative-${{ env.RELEASE_TAG }}-side-by-side.apk
+            gamenative-${{ env.RELEASE_TAG }}-side-by-side-legacy-xr.apk
             SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
