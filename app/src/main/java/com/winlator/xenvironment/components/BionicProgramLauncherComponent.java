@@ -31,6 +31,7 @@ import com.winlator.core.envvars.EnvVars;
 import com.winlator.core.FileUtils;
 import com.winlator.core.GPUInformation;
 import com.winlator.core.ProcessHelper;
+import com.winlator.core.RuntimePaths;
 import com.winlator.core.TarCompressorUtils;
 import com.winlator.core.WineInfo;
 import com.winlator.fexcore.FEXCorePreset;
@@ -188,27 +189,22 @@ public class BionicProgramLauncherComponent extends GuestProgramLauncherComponen
     private int execGuestProgram() {
 
         final int MAX_PLAYERS = 4;
+        Context context = environment.getContext();
+        File gamepadSharedMemoryDir = RuntimePaths.gamepadSharedMemoryDir(context);
 
-        // Get the number of enabled players directly from ControllerManager.
         for (int i = 0; i < MAX_PLAYERS; i++) {
-            String memPath;
-            if (i == 0) {
-                // Player 1 uses the original, non-numbered path that is known to work.
-                memPath = "/data/data/app.gamenative/files/imagefs/tmp/gamepad.mem";
-            } else {
-                // Players 2, 3, 4 use a 1-based index.
-                memPath = "/data/data/app.gamenative/files/imagefs/tmp/gamepad" + i + ".mem";
+            String fileName = i == 0 ? "gamepad.mem" : "gamepad" + i + ".mem";
+            File memFile = new File(gamepadSharedMemoryDir, fileName);
+            if (!gamepadSharedMemoryDir.isDirectory() && !gamepadSharedMemoryDir.mkdirs()) {
+                Log.e("EVSHIM_HOST", "Failed to create gamepad shared-memory directory");
+                break;
             }
-
-            File memFile = new File(memPath);
-            memFile.getParentFile().mkdirs();
             try (RandomAccessFile raf = new RandomAccessFile(memFile, "rw")) {
                 raf.setLength(64);
             } catch (IOException e) {
                 Log.e("EVSHIM_HOST", "Failed to create mem file for player index "+i, e);
             }
         }
-        Context context = environment.getContext();
         ImageFs imageFs = ImageFs.find(context);
         File rootDir = imageFs.getRootDir();
 
@@ -333,6 +329,7 @@ public class BionicProgramLauncherComponent extends GuestProgramLauncherComponen
         if (this.envVars != null) {
             envVars.putAll(this.envVars);
         }
+        envVars.put("EVSHIM_BASE_PATH", context.getFilesDir().getAbsolutePath());
 
         if (BuildConfig.XR_BUILD) {
             String shimPath = context.getApplicationInfo().nativeLibraryDir + "/libkgslshim.so";
@@ -570,8 +567,7 @@ public class BionicProgramLauncherComponent extends GuestProgramLauncherComponen
         // HOME for libsteamclient.so points at the parent of `Steam/`; the .so
         // resolves <HOME>/Steam/config/config.vdf etc. relative to it.
         String nativeHome = imageFs.wineprefix + "/drive_c/Program Files (x86)";
-        // The Android-Steam build of libsteamclient.so ships inside our imagefs
-        // (e.g. /data/data/app.gamenative/files/imagefs/usr/lib/libsteamclient.so).
+        // The Android-Steam build of libsteamclient.so ships inside the resolved imagefs.
         String libPath = new File(imageFs.getLibDir(), "libsteamclient.so").getAbsolutePath();
 
         File libFile = new File(libPath);

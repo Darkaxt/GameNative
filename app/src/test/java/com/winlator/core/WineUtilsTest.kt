@@ -62,4 +62,34 @@ class WineUtilsTest {
         verify { FileUtils.symlink("../drive_c", "$expectedDosdevicesPath/c:") }
         verify { FileUtils.symlink(canonicalRoot, "$expectedDosdevicesPath/z:") }
     }
+
+    @Test
+    fun createDosdevicesSymlinks_rebasesLegacyPrivateEDrive() {
+        val imageFs = mockk<ImageFs>()
+        var currentDrives = "D:/storage/emulated/0/DownloadE:/data/user/0/old.package/storage"
+        val expectedStorage = "${context.dataDir.absolutePath}/storage"
+
+        RuntimePaths.storageDir(context).deleteRecursively()
+        every { container.rootDir } returns rootDir
+        every { container.drives } answers { currentDrives }
+        every { container.setDrives(any()) } answers { currentDrives = firstArg() }
+        every { container.drivesIterator() } answers { Container.drivesIterator(currentDrives).toList() }
+
+        mockkStatic(ImageFs::class)
+        every { ImageFs.find(context) } returns imageFs
+        every { imageFs.rootDir } returns File(rootDir, "imagefs")
+
+        mockkStatic(FileUtils::class)
+        every { FileUtils.symlink(any<String>(), any<String>()) } just runs
+        every { FileUtils.chmod(any<File>(), any<Int>()) } just runs
+
+        WineUtils.createDosdevicesSymlinks(context, container)
+
+        verify {
+            container.setDrives(match { drives ->
+                drives.contains("E:$expectedStorage") && !drives.contains("old.package")
+            })
+        }
+        RuntimePaths.storageDir(context).deleteRecursively()
+    }
 }

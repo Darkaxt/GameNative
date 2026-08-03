@@ -13,6 +13,7 @@ import android.view.MotionEvent;
 import android.view.View;
 
 // import com.winlator.XServerDisplayActivity;
+import com.winlator.core.RuntimePaths;
 import com.winlator.core.StringUtils;
 import com.winlator.inputcontrols.ControllerManager;
 import com.winlator.inputcontrols.ControlsProfile;
@@ -703,10 +704,7 @@ public class WinHandler {
         try {
             this.localhost = InetAddress.getLocalHost();
             Context context = activity.getApplicationContext();
-            File gamepadShmDir = new File(
-                    context.getFilesDir(),
-                    "gamepad_shm"
-            );
+            File gamepadShmDir = RuntimePaths.gamepadSharedMemoryDir(context);
 
             if (!gamepadShmDir.exists() && !gamepadShmDir.mkdirs()) {
                 throw new IOException("Failed to create directory: " + gamepadShmDir.getAbsolutePath());

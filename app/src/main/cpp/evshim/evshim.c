@@ -81,9 +81,9 @@ static void build_gamepad_dir(char *out, size_t size)
 {
     const char *base = getenv("EVSHIM_BASE_PATH");
 
-    // fallback
     if (!base || !*base) {
-        base = "/data/data/app.gamenative/files";
+        out[0] = '\0';
+        return;
     }
 
     snprintf(out, size, "%s/gamepad_shm", base);
@@ -117,6 +117,10 @@ static void setup_shm(int players)
 
     char gamepad_dir[PATH_MAX];
     build_gamepad_dir(gamepad_dir, sizeof(gamepad_dir));
+    if (!gamepad_dir[0]) {
+        LOGE("evshim: EVSHIM_BASE_PATH is required\n");
+        return;
+    }
 
     if (mkdir_gameshm(gamepad_dir) < 0) {
         LOGE("evshim: failed to create/check dir '%s': %s\n",

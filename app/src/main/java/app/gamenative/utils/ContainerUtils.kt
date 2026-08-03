@@ -16,6 +16,7 @@ import com.winlator.container.ContainerManager
 import com.winlator.core.DefaultVersion
 import com.winlator.core.FileUtils
 import com.winlator.core.KeyValueSet
+import com.winlator.core.RuntimePaths
 import com.winlator.core.GPUInformation
 import com.winlator.core.envvars.EnvVars
 import com.winlator.core.WineRegistryEditor
@@ -313,6 +314,7 @@ object ContainerUtils {
             drives = container.drives,
             execArgs = container.execArgs,
             executablePath = container.executablePath,
+            installPath = container.installPath,
             showFPS = false,
             launchRealSteam = container.isLaunchRealSteam,
             launchBionicSteam = container.isLaunchBionicSteam,
@@ -462,6 +464,10 @@ object ContainerUtils {
         val previousUnpackFiles: Boolean = container.isUnpackFiles
         val previousLaunchBionicSteam: Boolean = container.isLaunchBionicSteam
         val previousLaunchRealSteam: Boolean = container.isLaunchRealSteam
+        val normalizedDrives = RuntimePaths.resolveDrives(context, containerData.drives)
+        val normalizedEnvVars = RuntimePaths.rebasePrivatePath(context, containerData.envVars)
+        val normalizedExecutablePath = RuntimePaths.rebasePrivatePath(context, containerData.executablePath)
+        val normalizedInstallPath = RuntimePaths.rebasePrivatePath(context, containerData.installPath)
         val userRegFile = File(container.rootDir, ".wine/user.reg")
         WineRegistryEditor(userRegFile).use { registryEditor ->
             registryEditor.setStringValue("Software\\Wine\\Direct3D", "renderer", containerData.renderer)
@@ -482,7 +488,7 @@ object ContainerUtils {
 
         container.name = containerData.name
         container.screenSize = containerData.screenSize
-        container.envVars = containerData.envVars
+        container.envVars = normalizedEnvVars
         container.graphicsDriver = containerData.graphicsDriver
         // Save driver config through to container
         container.graphicsDriverConfig = containerData.graphicsDriverConfig
@@ -494,12 +500,13 @@ object ContainerUtils {
         container.audioDriver = containerData.audioDriver
         container.setPulseaudioLowLatency(containerData.pulseaudioLowLatency)
         container.winComponents = containerData.wincomponents
-        container.drives = containerData.drives
+        container.drives = normalizedDrives
         container.execArgs = containerData.execArgs
-        if (container.executablePath != containerData.executablePath && container.executablePath != "") {
+        if (container.executablePath != normalizedExecutablePath && container.executablePath != "") {
             container.setNeedsUnpacking(true)
         }
-        container.executablePath = containerData.executablePath
+        container.executablePath = normalizedExecutablePath
+        container.installPath = normalizedInstallPath
         container.isShowFPS = false
         container.isLaunchRealSteam = containerData.launchRealSteam
         container.isLaunchBionicSteam = containerData.launchBionicSteam
@@ -860,12 +867,14 @@ object ContainerUtils {
 
         // Initialize container with default/custom config or best config
         var containerData = if (customConfig != null) {
-            // Use custom config, but ensure drives are set if not specified
-            if (customConfig.drives == Container.DEFAULT_DRIVES) {
-                customConfig.copy(drives = drives)
-            } else {
-                customConfig
-            }
+            // Use custom config, but ensure drives are set if not specified.
+            customConfig.copy(
+                drives = if (customConfig.drives.isBlank()) {
+                    drives
+                } else {
+                    RuntimePaths.resolveDrives(context, customConfig.drives)
+                },
+            )
         } else {
             // Use default config with drives
             ContainerData(

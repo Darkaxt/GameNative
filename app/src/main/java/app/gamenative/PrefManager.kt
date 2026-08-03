@@ -24,6 +24,7 @@ import com.materialkolor.PaletteStyle
 import com.winlator.box86_64.Box86_64Preset
 import com.winlator.container.Container
 import com.winlator.core.DefaultVersion
+import com.winlator.core.RuntimePaths
 import com.winlator.xenvironment.components.PulseAudioComponent
 import `in`.dragonbra.javasteam.enums.EPersonaState
 import java.util.EnumSet
@@ -52,10 +53,12 @@ object PrefManager {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    private lateinit var appContext: Context
     private lateinit var dataStore: DataStore<Preferences>
 
     fun init(context: Context) {
-        dataStore = context.datastore
+        appContext = context.applicationContext
+        dataStore = appContext.datastore
 
         // Note: Should remove after a few release versions. we've moved to encrypted values.
         val oldPassword = stringPreferencesKey("password")
@@ -372,9 +375,9 @@ object PrefManager {
 
     private val DRIVES = stringPreferencesKey("drives")
     var drives: String
-        get() = getPref(DRIVES, Container.DEFAULT_DRIVES)
+        get() = RuntimePaths.resolveDrives(appContext, getPref(DRIVES, ""))
         set(value) {
-            setPref(DRIVES, value)
+            setPref(DRIVES, RuntimePaths.resolveDrives(appContext, value))
         }
 
     private val QUICK_MENU_LAST_TAB = intPreferencesKey("quick_menu_last_tab")

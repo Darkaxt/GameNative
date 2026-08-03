@@ -17,10 +17,10 @@ public class DXVKHelper {
 
     public static void setEnvVars(Context context, KeyValueSet config, EnvVars envVars) {
         ImageFs imageFs = ImageFs.find(context);
-        envVars.put("DXVK_STATE_CACHE_PATH", "/data/data/app.gamenative/files/imagefs"+ImageFs.CACHE_PATH);
+        envVars.put("DXVK_STATE_CACHE_PATH", RuntimePaths.dxvkCachePath(imageFs.getRootDir()));
         envVars.put("DXVK_LOG_LEVEL", "none");
 
-        File rootDir = ImageFs.find(context).getRootDir();
+        File rootDir = imageFs.getRootDir();
         File dxvkConfigFile = new File(imageFs.config_path+"/dxvk.conf");
 
         String content = "\"";

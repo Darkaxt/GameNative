@@ -148,6 +148,7 @@ import com.winlator.core.GPUInformation
 import com.winlator.core.KeyValueSet
 import com.winlator.core.OnExtractFileListener
 import com.winlator.core.ProcessHelper
+import com.winlator.core.RuntimePaths
 import com.winlator.core.TarCompressorUtils
 import com.winlator.core.Win32AppWorkarounds
 import com.winlator.core.WineInfo
@@ -3724,8 +3725,8 @@ private fun setupXEnvironment(
         val enableGstreamer = container.isGstreamerWorkaround()
 
         if (enableGstreamer) {
-            for (envVar in Container.MEDIACONV_ENV_VARS) {
-                val parts: Array<String?> = envVar.split("=".toRegex(), limit = 2).toTypedArray()
+            for (envVar in RuntimePaths.mediaConversionEnvVars(imageFs.rootDir)) {
+                val parts = envVar.split("=", limit = 2)
                 if (parts.size == 2) {
                     envVars.put(parts[0], parts[1])
                 }
