@@ -17,7 +17,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
 
-const val CURRENT_RESOLVER_VERSION = 1
+const val CURRENT_RESOLVER_VERSION = 2
 const val SUPPORTED_TRUSTED_MAP_VERSION = 1
 
 data class TrustedSteamMapping(
@@ -81,6 +81,19 @@ class CanonicalGameResolver @Inject constructor(
                 existingMatch.confidence == MatchConfidence.VERIFIED ||
                     existingMatch.confidence == MatchConfidence.REJECTED,
             ) { "Malformed stored user decision" }
+            return existingResolution(
+                existingMatch = existingMatch,
+                copy = copy,
+                evidence = evidence,
+                nowEpochMs = nowEpochMs,
+            )
+        }
+
+        if (
+            existingMatch?.decisionSource == MatchDecisionSource.AUTOMATIC &&
+            existingMatch.matchMethod == MatchMethod.STEAM_CATALOG &&
+            existingMatch.resolverVersion == CURRENT_RESOLVER_VERSION
+        ) {
             return existingResolution(
                 existingMatch = existingMatch,
                 copy = copy,

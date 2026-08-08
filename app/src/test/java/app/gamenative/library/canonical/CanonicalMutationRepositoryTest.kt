@@ -629,6 +629,230 @@ class CanonicalMutationRepositoryTest {
     }
 
     @Test
+    fun `guarded automatic acceptance assigns catalog identity as automatic high`() = runBlocking {
+        val canonical = canonical(index = 1, steamAppId = null, createdAt = 100)
+        val selectedKey = key(GameSource.GOG, "catalog-auto")
+        val selected = match(selectedKey, canonical.canonicalId)
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(selected)
+
+        val result = repository.guardedAcceptAutomaticSteamMatch(
+            expected = expectedState(selectedKey, selected),
+            steamAppId = 42,
+            candidateAppType = CanonicalAppType.GAME,
+            resolverVersion = CURRENT_RESOLVER_VERSION,
+            nowEpochMs = 200,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, result)
+        assertEquals(42, db.canonicalGameDao().get(canonical.canonicalId)?.steamAppId)
+        val accepted = requireNotNull(db.storeMatchDao().get(selectedKey))
+        assertEquals(canonical.canonicalId, accepted.canonicalId)
+        assertEquals(42, accepted.candidateSteamAppId)
+        assertEquals(MatchMethod.STEAM_CATALOG, accepted.matchMethod)
+        assertEquals(MatchConfidence.HIGH, accepted.confidence)
+        assertEquals(MatchDecisionSource.AUTOMATIC, accepted.decisionSource)
+        assertEquals(CURRENT_RESOLVER_VERSION, accepted.resolverVersion)
+        assertEquals(200, accepted.matchedAt)
+    }
+
+    @Test
+    fun `guarded candidate recording requires review without assigning Steam identity`() = runBlocking {
+        val canonical = canonical(index = 1, steamAppId = null, createdAt = 100)
+        val selectedKey = key(GameSource.EPIC, "catalog-review")
+        val selected = match(selectedKey, canonical.canonicalId)
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(selected)
+
+        val result = repository.guardedRecordCandidate(
+            expected = expectedState(selectedKey, selected),
+            steamAppId = 42,
+            resolverVersion = CURRENT_RESOLVER_VERSION,
+            nowEpochMs = 200,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, result)
+        assertNull(db.canonicalGameDao().get(canonical.canonicalId)?.steamAppId)
+        val review = requireNotNull(db.storeMatchDao().get(selectedKey))
+        assertEquals(42, review.candidateSteamAppId)
+        assertEquals(MatchMethod.STEAM_CATALOG, review.matchMethod)
+        assertEquals(MatchConfidence.REVIEW_REQUIRED, review.confidence)
+        assertEquals(MatchDecisionSource.AUTOMATIC, review.decisionSource)
+        assertEquals(200, review.matchedAt)
+    }
+
+    @Test
+    fun `guarded manual confirmation records verified user decision`() = runBlocking {
+        val canonical = canonical(index = 1, steamAppId = null, createdAt = 100)
+        val selectedKey = key(GameSource.AMAZON, "catalog-manual")
+        val selected = match(selectedKey, canonical.canonicalId)
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(selected)
+
+        val result = repository.guardedConfirmSteamMatch(
+            expected = expectedState(selectedKey, selected),
+            steamAppId = 42,
+            candidateAppType = CanonicalAppType.GAME,
+            nowEpochMs = 200,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, result)
+        assertEquals(42, db.canonicalGameDao().get(canonical.canonicalId)?.steamAppId)
+        assertManualDecision(
+            requireNotNull(db.storeMatchDao().get(selectedKey)),
+            canonicalId = canonical.canonicalId,
+            steamAppId = 42,
+            confidence = MatchConfidence.VERIFIED,
+            matchedAt = 200,
+        )
+    }
+
+    @Test
+    fun `guarded rejection is sticky and guarded reset makes copy eligible again`() = runBlocking {
+        val canonical = canonical(index = 1, steamAppId = 42, createdAt = 100)
+        val selectedKey = key(GameSource.GOG, "catalog-reject")
+        val accepted = match(
+            selectedKey,
+            canonical.canonicalId,
+            method = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.HIGH,
+            candidateSteamAppId = 42,
+        )
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(accepted)
+
+        val rejectedResult = repository.guardedRejectSteamMatch(
+            expected = expectedState(selectedKey, accepted),
+            steamAppId = 42,
+            nowEpochMs = 200,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, rejectedResult)
+        assertNull(db.canonicalGameDao().get(canonical.canonicalId)?.steamAppId)
+        val rejected = requireNotNull(db.storeMatchDao().get(selectedKey))
+        assertManualDecision(
+            rejected,
+            canonicalId = canonical.canonicalId,
+            steamAppId = 42,
+            confidence = MatchConfidence.REJECTED,
+            matchedAt = 200,
+        )
+
+        val resetResult = repository.guardedResetDecision(
+            expected = expectedState(selectedKey, rejected),
+            nowEpochMs = 300,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, resetResult)
+        val reset = requireNotNull(db.storeMatchDao().get(selectedKey))
+        assertEquals(MatchMethod.UNMATCHED, reset.matchMethod)
+        assertEquals(MatchConfidence.UNMATCHED, reset.confidence)
+        assertEquals(MatchDecisionSource.AUTOMATIC, reset.decisionSource)
+        assertNull(reset.candidateSteamAppId)
+        assertEquals(0, reset.resolverVersion)
+    }
+
+    @Test
+    fun `guarded catalog mutations reject stale absent direct and type-conflicting state`() = runBlocking {
+        val canonical = canonical(index = 1, steamAppId = null, createdAt = 100)
+        val selectedKey = key(GameSource.GOG, "catalog-stale")
+        val selected = match(selectedKey, canonical.canonicalId)
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(selected)
+        val expected = expectedState(selectedKey, selected)
+
+        db.storeMatchDao().upsert(selected.copy(matchedAt = selected.matchedAt + 1))
+        val staleBefore = databaseState()
+        assertEquals(
+            CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED,
+            repository.guardedRecordCandidate(expected, 42, CURRENT_RESOLVER_VERSION, 200),
+        )
+        assertEquals(staleBefore, databaseState())
+
+        val absent = selected.copy(isPresent = false)
+        db.storeMatchDao().upsert(absent)
+        val absentBefore = databaseState()
+        assertEquals(
+            CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED,
+            repository.guardedRecordCandidate(expectedState(selectedKey, absent), 42, CURRENT_RESOLVER_VERSION, 200),
+        )
+        assertEquals(absentBefore, databaseState())
+
+        db.storeMatchDao().upsert(selected)
+        val conflictBefore = databaseState()
+        assertEquals(
+            CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED,
+            repository.guardedAcceptAutomaticSteamMatch(
+                expectedState(selectedKey, selected),
+                steamAppId = 42,
+                candidateAppType = CanonicalAppType.DLC,
+                resolverVersion = CURRENT_RESOLVER_VERSION,
+                nowEpochMs = 200,
+            ),
+        )
+        assertEquals(conflictBefore, databaseState())
+
+        val steamCanonical = canonical(index = 2, steamAppId = 84, createdAt = 100)
+        val directKey = key(GameSource.STEAM, "84")
+        val direct = directMatch(directKey, steamCanonical.canonicalId, 84)
+        db.canonicalGameDao().insert(steamCanonical)
+        db.storeMatchDao().upsert(direct)
+        val directBefore = databaseState()
+        assertEquals(
+            CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED,
+            repository.guardedRecordCandidate(
+                expectedState(directKey, direct),
+                42,
+                CURRENT_RESOLVER_VERSION,
+                200,
+            ),
+        )
+        assertEquals(directBefore, databaseState())
+    }
+
+    @Test
+    fun `guarded automatic merge moves dependencies and copy keys exactly once`() = runBlocking {
+        val source = canonical(index = 1, steamAppId = null, createdAt = 100)
+        val target = canonical(index = 2, steamAppId = 42, createdAt = 200)
+        val selectedKey = key(GameSource.EPIC, "catalog-merge")
+        val directKey = key(GameSource.STEAM, "42")
+        val selected = match(selectedKey, source.canonicalId)
+        db.canonicalGameDao().insert(source)
+        db.canonicalGameDao().insert(target)
+        db.storeMatchDao().upsert(selected)
+        db.storeMatchDao().upsert(directMatch(directKey, target.canonicalId, 42))
+        seedFacets(source.canonicalId, genres = setOf("source:rpg"), tags = setOf(7))
+        seedFacets(target.canonicalId, genres = setOf("steam:action"), tags = setOf(8))
+        db.canonicalPreferenceDao().upsert(
+            preference(source.canonicalId, selectedKey, "Pinned", null, 100),
+        )
+        db.gameDetailSnapshotDao().upsert(snapshot(source.canonicalId, "en", "US", "source"))
+
+        val result = repository.guardedAcceptAutomaticSteamMatch(
+            expected = expectedState(selectedKey, selected),
+            steamAppId = 42,
+            candidateAppType = CanonicalAppType.GAME,
+            resolverVersion = CURRENT_RESOLVER_VERSION,
+            nowEpochMs = 300,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, result)
+        assertEquals(
+            listOf(target.copy(classificationState = ClassificationState.CLASSIFIED, updatedAt = 300)),
+            db.canonicalGameDao().getAll(),
+        )
+        assertEquals(target.canonicalId, db.storeMatchDao().get(selectedKey)?.canonicalId)
+        assertEquals(target.canonicalId, db.storeMatchDao().get(directKey)?.canonicalId)
+        assertEquals(
+            setOf("source:rpg", "steam:action"),
+            db.canonicalFacetDao().getGenres(target.canonicalId).map { it.genreKey }.toSet(),
+        )
+        assertEquals(setOf(7, 8), db.canonicalFacetDao().getTags(target.canonicalId).map { it.tagId }.toSet())
+        assertEquals("Pinned", db.canonicalPreferenceDao().get(target.canonicalId)?.titleOverride)
+        assertEquals(1, db.gameDetailSnapshotDao().getByCanonicalId(target.canonicalId).size)
+    }
+
+    @Test
     fun `guarded unmerge applies valid detach and preserves established preference behavior`() = runBlocking {
         val original = canonical(index = 1, steamAppId = 99, createdAt = 100)
         val selectedKey = key(GameSource.EPIC, "guarded-selected")
@@ -1084,6 +1308,20 @@ class CanonicalMutationRepositoryTest {
         assertEquals(CURRENT_RESOLVER_VERSION, match.resolverVersion)
         assertEquals(matchedAt, match.matchedAt)
     }
+
+    private fun expectedState(
+        key: OwnedCopyKey,
+        match: StoreMatchEntity,
+    ) = ExpectedMatchState(
+        key = key,
+        canonicalId = match.canonicalId,
+        matchMethod = match.matchMethod,
+        confidence = match.confidence,
+        decisionSource = match.decisionSource,
+        candidateSteamAppId = match.candidateSteamAppId,
+        resolverVersion = match.resolverVersion,
+        decisionRevision = match.matchedAt,
+    )
 
     private fun canonical(
         index: Long,

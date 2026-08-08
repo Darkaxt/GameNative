@@ -49,6 +49,22 @@ interface StoreMatchDao {
     @Query("SELECT * FROM store_match ORDER BY account_scope, source, stable_source_id")
     suspend fun getAll(): List<StoreMatchEntity>
 
+    @Query(
+        """
+        SELECT store_match.* FROM store_match
+        INNER JOIN canonical_game
+            ON canonical_game.canonical_id = store_match.canonical_id
+        WHERE store_match.is_present = 1
+          AND store_match.source != :excludedSource
+          AND canonical_game.steam_app_id IS NULL
+        ORDER BY store_match.canonical_id, store_match.account_scope,
+                 store_match.source, store_match.stable_source_id
+        """,
+    )
+    suspend fun getPresentWithoutSteamIdentity(
+        excludedSource: GameSource,
+    ): List<StoreMatchEntity>
+
     @Upsert
     suspend fun upsert(entity: StoreMatchEntity)
 

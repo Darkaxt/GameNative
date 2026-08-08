@@ -315,6 +315,68 @@ class CanonicalGameResolverTest {
     }
 
     @Test
+    fun acceptedSteamCatalogDecisionSurvivesLocalProjection() = runTest {
+        val ownedCopy = copy(displayName = "Control", developer = "Remedy", releaseYear = 2019)
+        val selected = canonical(
+            index = 1,
+            title = "Control",
+            steamAppId = 870780,
+            source = GameSource.GOG,
+            developer = "Remedy",
+            year = 2019,
+        )
+        val stored = match(
+            copy = ownedCopy,
+            canonicalId = selected.canonicalId,
+            method = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.HIGH,
+            matchedAt = 123,
+            candidateSteamAppId = 870780,
+        )
+        var providerCalls = 0
+        val resolver = resolver(
+            canonicals = listOf(selected),
+            matches = listOf(stored),
+            providers = setOf(TrustedSteamMappingProvider { providerCalls++; null }),
+        )
+
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
+
+        assertEquals(MatchMethod.STEAM_CATALOG, result.match.matchMethod)
+        assertEquals(MatchConfidence.HIGH, result.match.confidence)
+        assertEquals(870780, result.match.candidateSteamAppId)
+        assertEquals(123, result.match.matchedAt)
+        assertEquals(0, providerCalls)
+    }
+
+    @Test
+    fun reviewRequiredSteamCatalogDecisionSurvivesLocalProjection() = runTest {
+        val ownedCopy = copy(displayName = "Control Deluxe", developer = "Remedy", releaseYear = 2019)
+        val selected = canonical(
+            index = 1,
+            title = "Control Deluxe",
+            steamAppId = null,
+            source = GameSource.GOG,
+            developer = "Remedy",
+            year = 2019,
+        )
+        val stored = match(
+            copy = ownedCopy,
+            canonicalId = selected.canonicalId,
+            method = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.REVIEW_REQUIRED,
+            matchedAt = 123,
+            candidateSteamAppId = 870780,
+        )
+        val resolver = resolver(canonicals = listOf(selected), matches = listOf(stored))
+
+        val result = resolver.resolve(ownedCopy, nowEpochMs = 2_000)
+
+        assertEquals(stored, result.match)
+        assertEquals(selected, result.canonical)
+    }
+
+    @Test
     fun currentRelationRefreshesItsPrimarySourceMetadataWithoutRematching() = runTest {
         val selected = canonical(
             index = 1,
@@ -1149,6 +1211,10 @@ class CanonicalGameResolverTest {
 
         override suspend fun getAll(): List<StoreMatchEntity> =
             error("Resolver must not load every store match")
+
+        override suspend fun getPresentWithoutSteamIdentity(
+            excludedSource: GameSource,
+        ): List<StoreMatchEntity> = error("Resolver must not scan catalog candidates")
 
         override suspend fun upsert(entity: StoreMatchEntity): Unit =
             error("Resolver must not persist store matches")

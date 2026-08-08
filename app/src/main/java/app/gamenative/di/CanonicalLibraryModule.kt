@@ -23,8 +23,13 @@ import app.gamenative.library.canonical.PrefManagerCanonicalProjectionGate
 import app.gamenative.library.canonical.PrefManagerCanonicalPublicLibraryGate
 import app.gamenative.library.canonical.RoomCanonicalMutationRepository
 import app.gamenative.library.canonical.SharedPreferencesAccountLifecycleState
+import app.gamenative.library.canonical.SteamCatalogDecisionWriter
 import app.gamenative.library.canonical.SystemCanonicalProjectionClock
 import app.gamenative.library.canonical.TrustedSteamMappingProvider
+import app.gamenative.library.canonical.catalog.FeatureSteamCatalogResolutionDiagnostics
+import app.gamenative.library.canonical.catalog.SteamCatalogResolutionDiagnosticSink
+import app.gamenative.library.canonical.catalog.SteamCatalogSearchProvider
+import app.gamenative.library.canonical.catalog.SteamCatalogSearchSource
 import app.gamenative.library.canonical.runtime.AmazonOwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.runtime.CanonicalIoDispatcher
 import app.gamenative.library.canonical.runtime.CustomOwnedCopyRuntimeAdapter
@@ -48,6 +53,7 @@ import app.gamenative.library.metadata.MetadataLocaleProvider
 import app.gamenative.library.metadata.RoomGameMetadataRepository
 import app.gamenative.library.metadata.SteamCatalogDataSource
 import app.gamenative.library.metadata.SteamCatalogProvider
+import app.gamenative.library.metadata.SteamCatalogRecordSource
 import app.gamenative.library.metadata.SystemMetadataClock
 import app.gamenative.library.metadata.SystemMetadataLocaleProvider
 import dagger.Binds
@@ -121,6 +127,24 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamCatalogDataSource(
         implementation: SteamCatalogProvider,
     ): SteamCatalogDataSource
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamCatalogSearchSource(
+        implementation: SteamCatalogSearchProvider,
+    ): SteamCatalogSearchSource
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamCatalogRecordSource(
+        implementation: SteamCatalogProvider,
+    ): SteamCatalogRecordSource
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamCatalogResolutionDiagnostics(
+        implementation: FeatureSteamCatalogResolutionDiagnostics,
+    ): SteamCatalogResolutionDiagnosticSink
 
     @Binds
     @Singleton
@@ -210,6 +234,12 @@ abstract class CanonicalLibraryModule {
     abstract fun trustedSteamMappingProviders(): Set<TrustedSteamMappingProvider>
 
     companion object {
+        @Provides
+        @Singleton
+        fun provideSteamCatalogDecisionWriter(
+            repository: CanonicalMutationRepository,
+        ): SteamCatalogDecisionWriter = repository
+
         @Provides
         @Singleton
         @CanonicalIoDispatcher

@@ -2,6 +2,7 @@ package app.gamenative.library.canonical
 
 import androidx.room.withTransaction
 import app.gamenative.data.GameSource
+import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameEntity
 import app.gamenative.data.canonical.CanonicalGameFeatureCrossRef
 import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
@@ -25,7 +26,59 @@ enum class CanonicalGuardedMutationResult {
     EXPECTED_STATE_CHANGED,
 }
 
-interface CanonicalMutationRepository {
+data class ExpectedMatchState(
+    val key: OwnedCopyKey,
+    val canonicalId: String,
+    val matchMethod: MatchMethod,
+    val confidence: MatchConfidence,
+    val decisionSource: MatchDecisionSource,
+    val candidateSteamAppId: Int?,
+    val resolverVersion: Int,
+    val decisionRevision: Long,
+)
+
+interface SteamCatalogDecisionWriter {
+    suspend fun recordCandidate(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun acceptAutomatic(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun confirm(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun reject(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun reset(
+        expected: ExpectedMatchState,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun recordUnmatched(
+        expected: ExpectedMatchState,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+}
+
+interface CanonicalMutationRepository : SteamCatalogDecisionWriter {
     suspend fun confirmSteamMatch(
         key: OwnedCopyKey,
         steamAppId: Int,
@@ -38,10 +91,43 @@ interface CanonicalMutationRepository {
         nowEpochMs: Long,
     )
 
+    suspend fun guardedRecordCandidate(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun guardedAcceptAutomaticSteamMatch(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun guardedConfirmSteamMatch(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
+    suspend fun guardedRejectSteamMatch(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+
     suspend fun resetDecision(
         key: OwnedCopyKey,
         nowEpochMs: Long,
     )
+
+    suspend fun guardedResetDecision(
+        expected: ExpectedMatchState,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
 
     suspend fun guardedResetDecision(
         key: OwnedCopyKey,
@@ -89,86 +175,227 @@ class RoomCanonicalMutationRepository @Inject constructor(
     ): String = db.withTransaction {
         requireMutableMatch(key)
         require(steamAppId > 0) { "Confirmed Steam AppID must be positive" }
-        val selectedMatch = requireMatch(key)
-        val currentCanonical = requireCanonical(selectedMatch.canonicalId)
-        val requestedTarget = canonicalGameDao.findBySteamAppId(steamAppId)
-        val siblingRejectedRequestedIdentity = storeMatchDao
-            .getByCanonicalId(currentCanonical.canonicalId)
-            .any { match ->
-                !match.hasKey(key) &&
-                    match.decisionSource == MatchDecisionSource.USER &&
-                    match.confidence == MatchConfidence.REJECTED &&
-                    match.candidateSteamAppId == steamAppId
-            }
+        applySteamMatch(
+            key = key,
+            selectedMatch = requireMatch(key),
+            steamAppId = steamAppId,
+            decision = SteamMatchDecision.manual(nowEpochMs),
+            nowEpochMs = nowEpochMs,
+        )
+    }
 
-        when {
-            currentCanonical.steamAppId == steamAppId -> {
-                storeMatchDao.upsert(
-                    selectedMatch.asManualDecision(
-                        canonicalId = currentCanonical.canonicalId,
-                        steamAppId = steamAppId,
-                        confidence = MatchConfidence.VERIFIED,
-                        nowEpochMs = nowEpochMs,
-                    ),
-                )
-                currentCanonical.canonicalId
-            }
+    override suspend fun recordCandidate(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = guardedRecordCandidate(
+        expected,
+        steamAppId,
+        resolverVersion,
+        nowEpochMs,
+    )
 
-            currentCanonical.steamAppId != null -> {
-                val relationshipCount = storeMatchDao.countAllReferences(currentCanonical.canonicalId)
-                if (requestedTarget == null && relationshipCount == 1) {
-                    assignSteamIdentity(
-                        canonical = currentCanonical,
-                        selectedMatch = selectedMatch,
-                        steamAppId = steamAppId,
-                        nowEpochMs = nowEpochMs,
-                    )
-                } else {
-                    detachToSteamTarget(
-                        key = key,
-                        currentCanonical = currentCanonical,
-                        selectedMatch = selectedMatch,
-                        requestedTarget = requestedTarget,
-                        steamAppId = steamAppId,
-                        nowEpochMs = nowEpochMs,
-                    )
-                }
-            }
+    override suspend fun acceptAutomatic(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = guardedAcceptAutomaticSteamMatch(
+        expected,
+        steamAppId,
+        candidateAppType,
+        resolverVersion,
+        nowEpochMs,
+    )
 
-            siblingRejectedRequestedIdentity -> detachToSteamTarget(
-                key = key,
-                currentCanonical = currentCanonical,
-                selectedMatch = selectedMatch,
-                requestedTarget = requestedTarget,
-                steamAppId = steamAppId,
-                nowEpochMs = nowEpochMs,
-            )
+    override suspend fun confirm(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = guardedConfirmSteamMatch(
+        expected,
+        steamAppId,
+        candidateAppType,
+        nowEpochMs,
+    )
 
-            requestedTarget == null -> assignSteamIdentity(
-                canonical = currentCanonical,
-                selectedMatch = selectedMatch,
-                steamAppId = steamAppId,
-                nowEpochMs = nowEpochMs,
-            )
+    override suspend fun reject(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = guardedRejectSteamMatch(
+        expected,
+        steamAppId,
+        nowEpochMs,
+    )
 
-            else -> {
-                val survivor = mergeCanonicals(
-                    first = currentCanonical,
-                    second = requestedTarget,
-                    confirmedSteamAppId = steamAppId,
-                    nowEpochMs = nowEpochMs,
-                )
-                storeMatchDao.upsert(
-                    selectedMatch.asManualDecision(
-                        canonicalId = survivor.canonicalId,
-                        steamAppId = steamAppId,
-                        confidence = MatchConfidence.VERIFIED,
-                        nowEpochMs = nowEpochMs,
-                    ),
-                )
-                survivor.canonicalId
-            }
+    override suspend fun reset(
+        expected: ExpectedMatchState,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = guardedResetDecision(expected, nowEpochMs)
+
+    override suspend fun recordUnmatched(
+        expected: ExpectedMatchState,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        val match = expectedMatchOrNull(expected)
+        if (match == null || resolverVersion <= 0) {
+            return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
         }
+        storeMatchDao.upsert(
+            match.copy(
+                candidateSteamAppId = null,
+                matchMethod = MatchMethod.STEAM_CATALOG,
+                confidence = MatchConfidence.UNMATCHED,
+                decisionSource = MatchDecisionSource.AUTOMATIC,
+                resolverVersion = resolverVersion,
+                matchedAt = nowEpochMs,
+            ),
+        )
+        CanonicalGuardedMutationResult.APPLIED
+    }
+
+    override suspend fun guardedRecordCandidate(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        val match = expectedMatchOrNull(expected)
+        if (match == null || steamAppId <= 0 || resolverVersion <= 0) {
+            return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        }
+        storeMatchDao.upsert(
+            match.copy(
+                candidateSteamAppId = steamAppId,
+                matchMethod = MatchMethod.STEAM_CATALOG,
+                confidence = MatchConfidence.REVIEW_REQUIRED,
+                decisionSource = MatchDecisionSource.AUTOMATIC,
+                resolverVersion = resolverVersion,
+                matchedAt = nowEpochMs,
+            ),
+        )
+        CanonicalGuardedMutationResult.APPLIED
+    }
+
+    override suspend fun guardedAcceptAutomaticSteamMatch(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        val match = expectedMatchOrNull(expected)
+        val strictTypeMatch = match != null &&
+            match.evidenceAppType != CanonicalAppType.UNKNOWN &&
+            candidateAppType != CanonicalAppType.UNKNOWN &&
+            match.evidenceAppType == candidateAppType
+        val canonicalTypeCompatible = match != null &&
+            canonicalTypeIsCompatible(match.canonicalId, candidateAppType)
+        if (
+            !strictTypeMatch ||
+            !canonicalTypeCompatible ||
+            steamAppId <= 0 ||
+            resolverVersion <= 0 ||
+            !targetTypeIsCompatible(steamAppId, candidateAppType)
+        ) {
+            return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        }
+        applySteamMatch(
+            key = expected.key,
+            selectedMatch = checkNotNull(match),
+            steamAppId = steamAppId,
+            decision = SteamMatchDecision(
+                method = MatchMethod.STEAM_CATALOG,
+                confidence = MatchConfidence.HIGH,
+                source = MatchDecisionSource.AUTOMATIC,
+                resolverVersion = resolverVersion,
+                decidedAt = nowEpochMs,
+            ),
+            nowEpochMs = nowEpochMs,
+        )
+        CanonicalGuardedMutationResult.APPLIED
+    }
+
+    override suspend fun guardedConfirmSteamMatch(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        val match = expectedMatchOrNull(expected)
+        val canonicalTypeCompatible = match != null &&
+            canonicalTypeIsCompatible(match.canonicalId, candidateAppType)
+        if (
+            match == null ||
+            !canonicalTypeCompatible ||
+            steamAppId <= 0 ||
+            !knownTypesAreCompatible(match.evidenceAppType, candidateAppType) ||
+            !targetTypeIsCompatible(steamAppId, candidateAppType)
+        ) {
+            return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        }
+        applySteamMatch(
+            key = expected.key,
+            selectedMatch = match,
+            steamAppId = steamAppId,
+            decision = SteamMatchDecision.manual(nowEpochMs),
+            nowEpochMs = nowEpochMs,
+        )
+        CanonicalGuardedMutationResult.APPLIED
+    }
+
+    override suspend fun guardedRejectSteamMatch(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        val match = expectedMatchOrNull(expected)
+        val canonical = match?.let { canonicalGameDao.get(it.canonicalId) }
+        val identifiesCurrentDecision = match != null &&
+            steamAppId > 0 &&
+            (match.candidateSteamAppId == steamAppId || canonical?.steamAppId == steamAppId)
+        if (!identifiesCurrentDecision) {
+            return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        }
+        rejectSteamMatch(
+            key = expected.key,
+            selectedMatch = checkNotNull(match),
+            steamAppId = steamAppId,
+            nowEpochMs = nowEpochMs,
+        )
+        CanonicalGuardedMutationResult.APPLIED
+    }
+
+    override suspend fun guardedResetDecision(
+        expected: ExpectedMatchState,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        val match = expectedMatchOrNull(expected)
+            ?: return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        val canonical = canonicalGameDao.get(match.canonicalId)
+            ?: return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        val resetMatch = if (
+            canonical.steamAppId != null &&
+            canonical.steamAppId == match.candidateSteamAppId
+        ) {
+            match.copy(
+                canonicalId = rejectCurrentSteamIdentity(
+                    key = expected.key,
+                    currentCanonical = canonical,
+                    selectedMatch = match,
+                    nowEpochMs = nowEpochMs,
+                ),
+            )
+        } else {
+            match
+        }
+        resetDecision(resetMatch, nowEpochMs)
+        CanonicalGuardedMutationResult.APPLIED
     }
 
     override suspend fun rejectSteamCandidate(
@@ -179,25 +406,11 @@ class RoomCanonicalMutationRepository @Inject constructor(
         db.withTransaction {
             requireMutableMatch(key)
             require(steamAppId > 0) { "Rejected Steam AppID must be positive" }
-            val selectedMatch = requireMatch(key)
-            val currentCanonical = requireCanonical(selectedMatch.canonicalId)
-            val targetCanonicalId = if (currentCanonical.steamAppId == steamAppId) {
-                rejectCurrentSteamIdentity(
-                    key = key,
-                    currentCanonical = currentCanonical,
-                    selectedMatch = selectedMatch,
-                    nowEpochMs = nowEpochMs,
-                )
-            } else {
-                currentCanonical.canonicalId
-            }
-            storeMatchDao.upsert(
-                selectedMatch.asManualDecision(
-                    canonicalId = targetCanonicalId,
-                    steamAppId = steamAppId,
-                    confidence = MatchConfidence.REJECTED,
-                    nowEpochMs = nowEpochMs,
-                ),
+            rejectSteamMatch(
+                key = key,
+                selectedMatch = requireMatch(key),
+                steamAppId = steamAppId,
+                nowEpochMs = nowEpochMs,
             )
         }
     }
@@ -295,6 +508,163 @@ class RoomCanonicalMutationRepository @Inject constructor(
         }
     }
 
+    private suspend fun applySteamMatch(
+        key: OwnedCopyKey,
+        selectedMatch: StoreMatchEntity,
+        steamAppId: Int,
+        decision: SteamMatchDecision,
+        nowEpochMs: Long,
+    ): String {
+        val currentCanonical = requireCanonical(selectedMatch.canonicalId)
+        val requestedTarget = canonicalGameDao.findBySteamAppId(steamAppId)
+        val siblingRejectedRequestedIdentity = storeMatchDao
+            .getByCanonicalId(currentCanonical.canonicalId)
+            .any { match ->
+                !match.hasKey(key) &&
+                    match.decisionSource == MatchDecisionSource.USER &&
+                    match.confidence == MatchConfidence.REJECTED &&
+                    match.candidateSteamAppId == steamAppId
+            }
+
+        return when {
+            currentCanonical.steamAppId == steamAppId -> {
+                storeMatchDao.upsert(
+                    selectedMatch.asDecision(
+                        canonicalId = currentCanonical.canonicalId,
+                        steamAppId = steamAppId,
+                        decision = decision,
+                    ),
+                )
+                currentCanonical.canonicalId
+            }
+
+            currentCanonical.steamAppId != null -> {
+                val relationshipCount = storeMatchDao.countAllReferences(currentCanonical.canonicalId)
+                if (requestedTarget == null && relationshipCount == 1) {
+                    assignSteamIdentity(
+                        canonical = currentCanonical,
+                        selectedMatch = selectedMatch,
+                        steamAppId = steamAppId,
+                        decision = decision,
+                        nowEpochMs = nowEpochMs,
+                    )
+                } else {
+                    detachToSteamTarget(
+                        key = key,
+                        currentCanonical = currentCanonical,
+                        selectedMatch = selectedMatch,
+                        requestedTarget = requestedTarget,
+                        steamAppId = steamAppId,
+                        decision = decision,
+                        nowEpochMs = nowEpochMs,
+                    )
+                }
+            }
+
+            siblingRejectedRequestedIdentity -> detachToSteamTarget(
+                key = key,
+                currentCanonical = currentCanonical,
+                selectedMatch = selectedMatch,
+                requestedTarget = requestedTarget,
+                steamAppId = steamAppId,
+                decision = decision,
+                nowEpochMs = nowEpochMs,
+            )
+
+            requestedTarget == null -> assignSteamIdentity(
+                canonical = currentCanonical,
+                selectedMatch = selectedMatch,
+                steamAppId = steamAppId,
+                decision = decision,
+                nowEpochMs = nowEpochMs,
+            )
+
+            else -> {
+                val survivor = mergeCanonicals(
+                    first = currentCanonical,
+                    second = requestedTarget,
+                    confirmedSteamAppId = steamAppId,
+                    nowEpochMs = nowEpochMs,
+                )
+                storeMatchDao.upsert(
+                    selectedMatch.asDecision(
+                        canonicalId = survivor.canonicalId,
+                        steamAppId = steamAppId,
+                        decision = decision,
+                    ),
+                )
+                survivor.canonicalId
+            }
+        }
+    }
+
+    private suspend fun rejectSteamMatch(
+        key: OwnedCopyKey,
+        selectedMatch: StoreMatchEntity,
+        steamAppId: Int,
+        nowEpochMs: Long,
+    ) {
+        val currentCanonical = requireCanonical(selectedMatch.canonicalId)
+        val targetCanonicalId = if (currentCanonical.steamAppId == steamAppId) {
+            rejectCurrentSteamIdentity(
+                key = key,
+                currentCanonical = currentCanonical,
+                selectedMatch = selectedMatch,
+                nowEpochMs = nowEpochMs,
+            )
+        } else {
+            currentCanonical.canonicalId
+        }
+        storeMatchDao.upsert(
+            selectedMatch.asManualDecision(
+                canonicalId = targetCanonicalId,
+                steamAppId = steamAppId,
+                confidence = MatchConfidence.REJECTED,
+                nowEpochMs = nowEpochMs,
+            ),
+        )
+    }
+
+    private suspend fun expectedMatchOrNull(expected: ExpectedMatchState): StoreMatchEntity? {
+        if (expected.key.source == GameSource.STEAM) return null
+        val match = storeMatchDao.get(
+            accountScope = expected.key.accountScope.value,
+            source = expected.key.source,
+            stableSourceId = expected.key.stableSourceId,
+        )
+        return match?.takeIf { current ->
+            current.isPresent &&
+                current.canonicalId == expected.canonicalId &&
+                current.matchMethod == expected.matchMethod &&
+                current.confidence == expected.confidence &&
+                current.decisionSource == expected.decisionSource &&
+                current.candidateSteamAppId == expected.candidateSteamAppId &&
+                current.resolverVersion == expected.resolverVersion &&
+                current.matchedAt == expected.decisionRevision
+        }
+    }
+
+    private suspend fun canonicalTypeIsCompatible(
+        canonicalId: String,
+        candidateAppType: CanonicalAppType,
+    ): Boolean = canonicalGameDao.get(canonicalId)?.let { canonical ->
+        knownTypesAreCompatible(canonical.appType, candidateAppType)
+    } == true
+
+    private suspend fun targetTypeIsCompatible(
+        steamAppId: Int,
+        candidateAppType: CanonicalAppType,
+    ): Boolean = canonicalGameDao.findBySteamAppId(steamAppId)?.let { target ->
+        knownTypesAreCompatible(target.appType, candidateAppType)
+    } ?: true
+
+    private fun knownTypesAreCompatible(
+        source: CanonicalAppType,
+        candidate: CanonicalAppType,
+    ): Boolean = source == CanonicalAppType.UNKNOWN ||
+        candidate == CanonicalAppType.UNKNOWN ||
+        source == candidate
+
     private fun immutableUnmergeSnapshot(
         key: OwnedCopyKey,
         current: OwnedCopyProjection,
@@ -363,6 +733,7 @@ class RoomCanonicalMutationRepository @Inject constructor(
         canonical: CanonicalGameEntity,
         selectedMatch: StoreMatchEntity,
         steamAppId: Int,
+        decision: SteamMatchDecision,
         nowEpochMs: Long,
     ): String {
         canonicalGameDao.update(
@@ -372,11 +743,10 @@ class RoomCanonicalMutationRepository @Inject constructor(
             ),
         )
         storeMatchDao.upsert(
-            selectedMatch.asManualDecision(
+            selectedMatch.asDecision(
                 canonicalId = canonical.canonicalId,
                 steamAppId = steamAppId,
-                confidence = MatchConfidence.VERIFIED,
-                nowEpochMs = nowEpochMs,
+                decision = decision,
             ),
         )
         return canonical.canonicalId
@@ -388,6 +758,7 @@ class RoomCanonicalMutationRepository @Inject constructor(
         selectedMatch: StoreMatchEntity,
         requestedTarget: CanonicalGameEntity?,
         steamAppId: Int,
+        decision: SteamMatchDecision,
         nowEpochMs: Long,
     ): String {
         val target = requestedTarget ?: createCanonicalFromMatch(
@@ -396,11 +767,10 @@ class RoomCanonicalMutationRepository @Inject constructor(
             nowEpochMs = nowEpochMs,
         )
         storeMatchDao.upsert(
-            selectedMatch.asManualDecision(
+            selectedMatch.asDecision(
                 canonicalId = target.canonicalId,
                 steamAppId = steamAppId,
-                confidence = MatchConfidence.VERIFIED,
-                nowEpochMs = nowEpochMs,
+                decision = decision,
             ),
         )
         clearPreferredCopy(currentCanonical.canonicalId, key, nowEpochMs)
@@ -703,15 +1073,49 @@ class RoomCanonicalMutationRepository @Inject constructor(
         steamAppId: Int?,
         confidence: MatchConfidence,
         nowEpochMs: Long,
+    ): StoreMatchEntity = asDecision(
+        canonicalId = canonicalId,
+        steamAppId = steamAppId,
+        decision = SteamMatchDecision(
+            method = MatchMethod.MANUAL,
+            confidence = confidence,
+            source = MatchDecisionSource.USER,
+            resolverVersion = CURRENT_RESOLVER_VERSION,
+            decidedAt = nowEpochMs,
+        ),
+    )
+
+    private fun StoreMatchEntity.asDecision(
+        canonicalId: String,
+        steamAppId: Int?,
+        decision: SteamMatchDecision,
     ): StoreMatchEntity = copy(
         canonicalId = canonicalId,
         candidateSteamAppId = steamAppId,
-        matchMethod = MatchMethod.MANUAL,
-        confidence = confidence,
-        decisionSource = MatchDecisionSource.USER,
-        resolverVersion = CURRENT_RESOLVER_VERSION,
-        matchedAt = nowEpochMs,
+        matchMethod = decision.method,
+        confidence = decision.confidence,
+        decisionSource = decision.source,
+        resolverVersion = decision.resolverVersion,
+        matchedAt = decision.decidedAt,
     )
+}
+
+private data class SteamMatchDecision(
+    val method: MatchMethod,
+    val confidence: MatchConfidence,
+    val source: MatchDecisionSource,
+    val resolverVersion: Int,
+    val decidedAt: Long,
+) {
+    companion object {
+        fun manual(nowEpochMs: Long) = SteamMatchDecision(
+            method = MatchMethod.MANUAL,
+            confidence = MatchConfidence.VERIFIED,
+            source = MatchDecisionSource.USER,
+            resolverVersion = CURRENT_RESOLVER_VERSION,
+            decidedAt = nowEpochMs,
+        )
+    }
 }
 
 internal fun selectCanonicalSurvivor(

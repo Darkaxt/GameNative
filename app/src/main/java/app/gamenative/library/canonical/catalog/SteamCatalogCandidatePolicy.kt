@@ -2,9 +2,10 @@ package app.gamenative.library.canonical.catalog
 
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalNormalization
+import javax.inject.Inject
 import kotlin.math.abs
 
-class SteamCatalogCandidatePolicy {
+class SteamCatalogCandidatePolicy @Inject constructor() {
     fun evaluate(
         source: SourceCatalogEvidence,
         candidates: List<SteamCatalogCandidate>,
