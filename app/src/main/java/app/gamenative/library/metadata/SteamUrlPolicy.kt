@@ -13,6 +13,12 @@ class SteamUrlPolicy(
             url.host in apiHosts &&
             url.encodedPath == APPDETAILS_PATH
 
+    fun isAllowedStoreSearchRequest(url: HttpUrl): Boolean =
+        isSafeBase(url) &&
+            url.host in apiHosts &&
+            url.encodedPath == STORE_SEARCH_PATH &&
+            url.queryParameterNames.all(STORE_SEARCH_QUERY_PARAMETERS::contains)
+
     fun isAllowedMediaUrl(url: HttpUrl): Boolean =
         isSafeBase(url) && url.host in mediaHosts
 
@@ -28,6 +34,8 @@ class SteamUrlPolicy(
 
     companion object {
         const val APPDETAILS_PATH = "/api/appdetails"
+        const val STORE_SEARCH_PATH = "/api/storesearch/"
+        val STORE_SEARCH_QUERY_PARAMETERS = setOf("term", "cc", "l")
         val STEAM_API_HOSTS: Set<String> = setOf("store.steampowered.com")
         val STEAM_MEDIA_HOSTS: Set<String> = setOf(
             "shared.akamai.steamstatic.com",

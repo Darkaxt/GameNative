@@ -1,5 +1,7 @@
 package app.gamenative.library.metadata
 
+import app.gamenative.data.canonical.CanonicalAppType
+
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -176,6 +178,72 @@ class SteamCatalogProviderTest {
     }
 
     @Test
+    fun fetchRecordIncludesValidatedIdentityTypeYearAndMetadata() = runTest {
+        server.enqueue(
+            MockResponse().setBody(recordFixture(type = "game", releaseDate = "31 Jul, 2026")),
+        )
+
+        val record = requireNotNull(
+            provider().fetchRecord(TRUSTED_APP_ID, MetadataLocale("en-US", "US")),
+        )
+
+        assertEquals(TRUSTED_APP_ID, record.steamAppId)
+        assertEquals(CanonicalAppType.GAME, record.appType)
+        assertEquals(2026, record.releaseYear)
+        assertEquals("Fixture Game", record.metadata.title)
+    }
+
+    @Test
+    fun mapsSupportedSteamTypesWithoutGuessingUnknownValues() = runTest {
+        val expectedTypes = listOf(
+            "game" to CanonicalAppType.GAME,
+            "application" to CanonicalAppType.APPLICATION,
+            "tool" to CanonicalAppType.TOOL,
+            "demo" to CanonicalAppType.DEMO,
+            "dlc" to CanonicalAppType.DLC,
+            "music" to CanonicalAppType.SOUNDTRACK,
+            "video" to CanonicalAppType.UNKNOWN,
+        )
+        expectedTypes.forEach { (steamType, _) ->
+            server.enqueue(MockResponse().setBody(recordFixture(steamType, "Coming soon")))
+        }
+
+        expectedTypes.forEach { (_, expectedType) ->
+            val record = requireNotNull(
+                provider().fetchRecord(TRUSTED_APP_ID, MetadataLocale("en-US", "US")),
+            )
+            assertEquals(expectedType, record.appType)
+            assertNull(record.releaseYear)
+        }
+    }
+
+    @Test
+    fun existingFetchReturnsRecordMetadata() = runTest {
+        server.enqueue(MockResponse().setBody(recordFixture("game", "31 Jul, 2026")))
+        server.enqueue(MockResponse().setBody(recordFixture("game", "31 Jul, 2026")))
+        val provider = provider()
+
+        val metadata = provider.fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US"))
+        val record = provider.fetchRecord(TRUSTED_APP_ID, MetadataLocale("en-US", "US"))
+
+        assertEquals(record?.metadata, metadata)
+    }
+
+    @Test
+    fun releaseYearMustBeSupportedAndUnambiguous() = runTest {
+        listOf("1969", "Released 2020, remastered 2022", "9999").forEach { date ->
+            server.enqueue(MockResponse().setBody(recordFixture("game", date)))
+        }
+
+        repeat(3) {
+            val record = requireNotNull(
+                provider().fetchRecord(TRUSTED_APP_ID, MetadataLocale("en-US", "US")),
+            )
+            assertNull(record.releaseYear)
+        }
+    }
+
+    @Test
     fun cancellationEscapesAndCancelsTheHttpCall() = runTest {
         server.enqueue(
             MockResponse()
@@ -224,6 +292,13 @@ class SteamCatalogProviderTest {
     private fun successFixture(): String = requireNotNull(
         javaClass.getResource("/steam/appdetails-success.json"),
     ).readText()
+
+    private fun recordFixture(type: String, releaseDate: String): String = successFixture()
+        .replaceFirst(
+            "\"data\": {",
+            "\"data\": {\n      \"type\": \"$type\",",
+        )
+        .replace("\"date\": \"31 Jul, 2026\"", "\"date\": \"$releaseDate\"")
 
     private fun assertInvalidLocale(block: () -> Unit) {
         try {

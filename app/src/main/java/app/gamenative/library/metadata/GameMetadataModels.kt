@@ -1,5 +1,7 @@
 package app.gamenative.library.metadata
 
+import app.gamenative.data.canonical.CanonicalAppType
+
 import java.util.Locale
 import kotlinx.serialization.Serializable
 
@@ -23,6 +25,24 @@ data class CanonicalGameMetadata(
     val dlcCount: Int?,
     val fetchedAtEpochMs: Long,
 )
+
+data class SteamCatalogRecord(
+    val steamAppId: Int,
+    val appType: CanonicalAppType,
+    val releaseYear: Int?,
+    val metadata: CanonicalGameMetadata,
+) {
+    init {
+        require(steamAppId > 0) { "Steam AppID must be positive" }
+    }
+}
+
+fun interface SteamCatalogRecordSource {
+    suspend fun fetchRecord(
+        trustedSteamAppId: Int,
+        locale: MetadataLocale,
+    ): SteamCatalogRecord?
+}
 
 @Serializable
 data class GameMovie(

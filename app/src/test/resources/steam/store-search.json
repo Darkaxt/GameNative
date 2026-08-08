@@ -1,0 +1,17 @@
+{
+  "total": 2,
+  "items": [
+    {
+      "type": "app",
+      "name": "Example Deluxe",
+      "id": 42,
+      "tiny_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/42/capsule_sm_120.jpg"
+    },
+    {
+      "type": "app",
+      "name": "Example",
+      "id": 84,
+      "tiny_image": "https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/84/capsule_sm_120.jpg"
+    }
+  ]
+}
