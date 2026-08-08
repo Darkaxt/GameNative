@@ -9,6 +9,8 @@
 **Tech Stack:** Kotlin, Jetpack Compose, Room, DataStore Preferences, Hilt, Kotlin coroutines/Flow, kotlinx.serialization, OkHttp, Coil, Media3, Timber, JUnit 4, Robolectric, MockWebServer, Compose UI tests, GitHub Actions
 
 > **Execution update — 2026-07-31:** Remaining user-visible delivery after commit `fedf889c` follows `docs/superpowers/plans/2026-07-31-steam-first-visible-delivery.md`. Its vertical-slice process and review/test budget supersede the stage-by-stage execution rule below; the approved safety and privacy contracts remain in force.
+>
+> **Execution update — 2026-08-08:** After signed RC4, the highest-priority missing core is automatic/manual Steam catalog resolution followed by native Reviews and Discussions. Execute `docs/superpowers/plans/2026-08-08-steam-resolution-community-visible-core.md` against `docs/superpowers/specs/2026-08-08-steam-resolution-community-visible-core-design.md`; its 80/20 classification and per-deliverable cross-check gates supersede older remaining tasks.
 
 ---
 

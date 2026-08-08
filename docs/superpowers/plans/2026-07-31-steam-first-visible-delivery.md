@@ -8,6 +8,8 @@
 
 **Tech Stack:** Kotlin 2.1.21, Jetpack Compose, Material 3, Room 2.8.4, Hilt, DataStore Preferences, coroutines/Flow, kotlinx.serialization, OkHttp/MockWebServer, Coil, Media3, JUnit 4, Robolectric, Compose UI tests, GitHub Actions
 
+> **Execution update — 2026-08-08:** The five original visible slices reached signed RC4. The missing automatic/manual Steam catalog resolution and native Reviews/Discussions now follow `docs/superpowers/specs/2026-08-08-steam-resolution-community-visible-core-design.md` and `docs/superpowers/plans/2026-08-08-steam-resolution-community-visible-core.md`. Their three-deliverable 80/20 gates supersede unfinished final-gate work in this plan.
+
 ---
 
 ## 1. Current checkpoint and supersession
