@@ -15,6 +15,8 @@ import app.gamenative.library.discovery.GameFacet
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.enums.SortOption
+import app.gamenative.ui.model.SteamMatchUiState
+import app.gamenative.ui.model.SteamResolutionCoverage
 import app.gamenative.ui.screen.library.components.LibraryOptionsPanel
 import app.gamenative.ui.theme.PluviaTheme
 import java.util.EnumSet
@@ -64,11 +66,15 @@ class CanonicalDiscoveryScreenTest {
                             }
                         },
                         onClearGenres = { selected = emptySet() },
+                        steamMatchState = SteamMatchUiState(
+                            coverage = SteamResolutionCoverage(resolved = 7, eligible = 10),
+                        ),
                     )
                 }
             }
         }
 
+        composeRule.onNodeWithText("7 / 10 matched").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("genre-search").performScrollTo().performTextInput("strat")
         composeRule.onNodeWithText("Action").assertDoesNotExist()
         composeRule.onNodeWithText("Strategy").performScrollTo().assertIsDisplayed().performClick()

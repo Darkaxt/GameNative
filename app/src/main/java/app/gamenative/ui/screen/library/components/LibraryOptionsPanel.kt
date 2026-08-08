@@ -94,6 +94,7 @@ import app.gamenative.ui.component.OptionSectionHeader
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.enums.SortOption
+import app.gamenative.ui.model.SteamMatchUiState
 import app.gamenative.ui.theme.PluviaTheme
 import app.gamenative.ui.util.adaptivePanelWidth
 import java.util.EnumSet
@@ -137,6 +138,9 @@ fun LibraryOptionsPanel(
     steamPopularityProgress: SteamPopularityEnrichmentProgress = SteamPopularityEnrichmentProgress(),
     onSteamReviewMinimumChanged: (Int?) -> Unit = {},
     onRetrySteamPopularity: () -> Unit = {},
+    steamMatchState: SteamMatchUiState = SteamMatchUiState(),
+    onReviewSteamMatches: () -> Unit = {},
+    onRetrySteamResolution: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
@@ -271,6 +275,14 @@ fun LibraryOptionsPanel(
                                 )
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        SteamResolutionStatus(
+                            state = steamMatchState,
+                            onReviewMatches = onReviewSteamMatches,
+                            onRetry = onRetrySteamResolution,
+                        )
 
                         Spacer(modifier = Modifier.height(20.dp))
 

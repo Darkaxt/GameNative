@@ -163,6 +163,7 @@ class CanonicalLibraryScreenTest {
         val operations = mutableListOf<Triple<GameSource, OwnedCopyOperation, Boolean>>()
         var automaticSelections = 0
         var separateSelections = 0
+        var fixSelections = 0
 
         composeRule.setContent {
             PluviaTheme {
@@ -176,6 +177,7 @@ class CanonicalLibraryScreenTest {
                     onUseAutomaticSelection = { automaticSelections += 1 },
                     onSeparateCopy = { separateSelections += 1 },
                     onResetDecision = {},
+                    onFixSteamMatch = { fixSelections += 1 },
                 )
             }
         }
@@ -187,6 +189,9 @@ class CanonicalLibraryScreenTest {
         composeRule.onNodeWithTag("copy-operation:STEAM:PLAY").assertIsEnabled()
         composeRule.onNodeWithTag("copy-operation:STEAM:INSTALL").assertDoesNotExist()
         composeRule.onNodeWithTag("copy-operation:GOG:PLAY", useUnmergedTree = true).assertIsNotEnabled()
+        composeRule.onNodeWithTag("fix-steam-match:STEAM").assertDoesNotExist()
+        composeRule.onNodeWithTag("fix-steam-match:GOG").assertHasClickAction().performClick()
+        composeRule.onNodeWithText("Steam-owned match").assertIsDisplayed()
         composeRule.onNodeWithTag("separate-copy").assertDoesNotExist()
 
         val rememberToggle = composeRule.onNode(
@@ -207,6 +212,7 @@ class CanonicalLibraryScreenTest {
         assertFalse(sheetSemantics.contains(candidateMarker.toString()))
         assertFalse(sheetSemantics.contains(resolverMarker.toString()))
         assertEquals(0, separateSelections)
+        assertEquals(1, fixSelections)
     }
 
     @OptIn(ExperimentalMaterial3Api::class)

@@ -54,6 +54,7 @@ import app.gamenative.data.GameSource
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GamePlatform
+import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.screen.library.components.GameMediaItem
 import app.gamenative.ui.screen.library.components.GameMediaPager
 import app.gamenative.ui.screen.library.components.OwnedSourceBadges
@@ -66,7 +67,6 @@ private enum class CanonicalDetailTab {
     REVIEWS,
     DISCUSSIONS,
     DETAILS,
-    RESOURCES,
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -84,6 +84,8 @@ internal fun CanonicalGameDetailScreen(
     onCopies: () -> Unit,
     onSourceDetails: () -> Unit,
     onRetry: () -> Unit,
+    steamMatchStatus: SteamMatchStatus? = null,
+    onFixSteamMatch: (() -> Unit)? = null,
 ) {
     val metadata = when (state) {
         is GameDetailState.Content -> state.metadata
@@ -179,8 +181,10 @@ internal fun CanonicalGameDetailScreen(
                                 { uriHandler.openUri(steamDiscussionUrl(appId)) }
                             },
                         )
-                        CanonicalDetailTab.DETAILS -> DetailFields(metadata)
-                        CanonicalDetailTab.RESOURCES -> DetailResources(
+                        CanonicalDetailTab.DETAILS -> DetailFields(
+                            metadata = metadata,
+                            steamMatchStatus = steamMatchStatus,
+                            onFixSteamMatch = onFixSteamMatch,
                             links = remember(steamAppId) { steamResourceLinks(steamAppId) },
                             onOpen = uriHandler::openUri,
                         )
@@ -412,7 +416,13 @@ private fun DetailPlaceholder(
 }
 
 @Composable
-private fun DetailFields(metadata: CanonicalGameMetadata?) {
+private fun DetailFields(
+    metadata: CanonicalGameMetadata?,
+    steamMatchStatus: SteamMatchStatus?,
+    onFixSteamMatch: (() -> Unit)?,
+    links: List<SteamResourceLink>,
+    onOpen: (String) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -423,59 +433,78 @@ private fun DetailFields(metadata: CanonicalGameMetadata?) {
     ) {
         if (metadata == null) {
             Text(stringResource(R.string.canonical_detail_unavailable))
-            return@Column
+        } else {
+            DetailField(R.string.canonical_detail_developer, metadata.developers.joinToString(", "))
+            DetailField(R.string.canonical_detail_publisher, metadata.publishers.joinToString(", "))
+            DetailField(R.string.canonical_detail_release, metadata.releaseDate)
+            DetailField(
+                R.string.canonical_detail_platforms,
+                GamePlatform.entries
+                    .filter(metadata.platforms::contains)
+                    .joinToString(", ") { platform -> platform.label() },
+            )
+            DetailField(R.string.canonical_detail_languages, metadata.languages.joinToString(", "))
+            metadata.requirements?.minimum?.let { minimum ->
+                DetailField(R.string.canonical_detail_requirements, minimum)
+            }
+            metadata.requirements?.recommended?.let { recommended ->
+                DetailField(R.string.canonical_detail_requirements, recommended)
+            }
+            DetailField(R.string.canonical_detail_achievements, metadata.achievementCount?.toString())
+            DetailField(R.string.canonical_detail_dlc, metadata.dlcCount?.toString())
         }
-        DetailField(R.string.canonical_detail_developer, metadata.developers.joinToString(", "))
-        DetailField(R.string.canonical_detail_publisher, metadata.publishers.joinToString(", "))
-        DetailField(R.string.canonical_detail_release, metadata.releaseDate)
-        DetailField(
-            R.string.canonical_detail_platforms,
-            GamePlatform.entries
-                .filter(metadata.platforms::contains)
-                .joinToString(", ") { platform -> platform.label() },
-        )
-        DetailField(R.string.canonical_detail_languages, metadata.languages.joinToString(", "))
-        metadata.requirements?.minimum?.let { minimum ->
-            DetailField(R.string.canonical_detail_requirements, minimum)
+        steamMatchStatus?.let { status ->
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            Text(
+                text = stringResource(R.string.steam_match_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = stringResource(status.labelResId()),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            onFixSteamMatch?.let { onFix ->
+                OutlinedButton(
+                    onClick = onFix,
+                    modifier = Modifier.testTag("canonical-detail-fix-steam-match"),
+                ) {
+                    Text(stringResource(R.string.steam_match_fix))
+                }
+            }
         }
-        metadata.requirements?.recommended?.let { recommended ->
-            DetailField(R.string.canonical_detail_requirements, recommended)
-        }
-        DetailField(R.string.canonical_detail_achievements, metadata.achievementCount?.toString())
-        DetailField(R.string.canonical_detail_dlc, metadata.dlcCount?.toString())
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+        DetailResourcesSection(links = links, onOpen = onOpen)
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DetailResources(
+private fun DetailResourcesSection(
     links: List<SteamResourceLink>,
     onOpen: (String) -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            text = stringResource(R.string.canonical_detail_resources_description),
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        if (links.isEmpty()) {
-            Text(stringResource(R.string.canonical_detail_resources_unavailable))
-        } else {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                links.forEach { link ->
-                    OutlinedButton(onClick = { onOpen(link.url) }) {
-                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(link.labelResId))
-                    }
+    Text(
+        text = stringResource(R.string.canonical_detail_resources),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Text(
+        text = stringResource(R.string.canonical_detail_resources_description),
+        style = MaterialTheme.typography.bodyLarge,
+    )
+    if (links.isEmpty()) {
+        Text(stringResource(R.string.canonical_detail_resources_unavailable))
+    } else {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            links.forEach { link ->
+                OutlinedButton(onClick = { onOpen(link.url) }) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(link.labelResId))
                 }
             }
         }
@@ -552,7 +581,16 @@ private fun CanonicalDetailTab.labelResId(): Int = when (this) {
     CanonicalDetailTab.REVIEWS -> R.string.canonical_detail_reviews
     CanonicalDetailTab.DISCUSSIONS -> R.string.canonical_detail_discussions
     CanonicalDetailTab.DETAILS -> R.string.canonical_detail_details
-    CanonicalDetailTab.RESOURCES -> R.string.canonical_detail_resources
+}
+
+private fun SteamMatchStatus.labelResId(): Int = when (this) {
+    SteamMatchStatus.AUTOMATIC -> R.string.steam_match_status_automatic
+    SteamMatchStatus.USER_CONFIRMED -> R.string.steam_match_status_user_confirmed
+    SteamMatchStatus.NEEDS_REVIEW -> R.string.steam_match_status_needs_review
+    SteamMatchStatus.KEPT_SEPARATE -> R.string.steam_match_status_kept_separate
+    SteamMatchStatus.UNMATCHED -> R.string.steam_match_status_unmatched
+    SteamMatchStatus.CHECKING -> R.string.steam_match_status_checking
+    SteamMatchStatus.IMMUTABLE_STEAM -> R.string.steam_match_status_immutable
 }
 
 private fun GameCompatibilityStatus.labelResId(): Int = when (this) {

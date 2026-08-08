@@ -50,6 +50,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
@@ -105,6 +106,11 @@ import app.gamenative.ui.internal.fakeAppInfo
 import app.gamenative.ui.model.CanonicalCopyChangeResult
 import app.gamenative.ui.model.GameDetailViewModel
 import app.gamenative.ui.model.LibraryViewModel
+import app.gamenative.ui.model.SteamMatchEffect
+import app.gamenative.ui.model.SteamMatchPickerState
+import app.gamenative.ui.model.SteamMatchUiState
+import app.gamenative.ui.model.SteamMatchViewModel
+import app.gamenative.ui.model.steamMatchStatus
 import app.gamenative.service.SteamService
 import app.gamenative.ui.screen.library.components.CanonicalCopiesFeedback
 import app.gamenative.ui.screen.library.components.CanonicalCopiesSheet
@@ -114,6 +120,7 @@ import app.gamenative.ui.screen.library.components.LibraryListPane
 import app.gamenative.ui.screen.library.components.RecommendationDisclosureDialog
 import app.gamenative.ui.screen.library.components.LibraryOptionsPanel
 import app.gamenative.ui.screen.library.components.LibrarySearchBar
+import app.gamenative.ui.screen.library.components.SteamMatchPicker
 import app.gamenative.ui.screen.library.components.LibrarySourceNotLoggedInSplash
 import app.gamenative.ui.screen.library.components.LibraryTabBar
 import app.gamenative.ui.screen.auth.AmazonOAuthActivity
@@ -139,6 +146,7 @@ import android.os.SystemClock
 fun HomeLibraryScreen(
     viewModel: LibraryViewModel = hiltViewModel(),
     detailViewModel: GameDetailViewModel = hiltViewModel(),
+    steamMatchViewModel: SteamMatchViewModel = hiltViewModel(),
     onClickPlay: (String, Boolean) -> Unit,
     onTestGraphics: (String) -> Unit,
     onPlayWithDiagnostics: (String) -> Unit,
@@ -151,7 +159,21 @@ fun HomeLibraryScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val gameDetailState by detailViewModel.state.collectAsStateWithLifecycle()
+    val steamMatchState by steamMatchViewModel.state.collectAsStateWithLifecycle()
+    val steamMatchQuery by steamMatchViewModel.query.collectAsStateWithLifecycle()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    val context = LocalContext.current
+    LaunchedEffect(steamMatchViewModel) {
+        steamMatchViewModel.effects.collect { effect ->
+            when (effect) {
+                SteamMatchEffect.RefreshRequired -> {
+                    SnackbarManager.show(context.getString(R.string.canonical_copy_state_changed))
+                    viewModel.onRefresh()
+                }
+            }
+        }
+    }
 
     LibraryScreenContent(
         state = state,
@@ -194,6 +216,18 @@ fun HomeLibraryScreen(
         gameDetailState = gameDetailState,
         onOpenCanonicalDetail = detailViewModel::load,
         onRetryCanonicalDetail = detailViewModel::retry,
+        steamMatchState = steamMatchState,
+        steamMatchQuery = steamMatchQuery,
+        onOpenSteamMatch = steamMatchViewModel::openMatch,
+        onReviewSteamMatches = steamMatchViewModel::openReviewMatches,
+        onRetrySteamResolution = steamMatchViewModel::retryAutomatically,
+        onSteamMatchQueryChange = steamMatchViewModel::updateQuery,
+        onSearchSteamMatches = steamMatchViewModel::search,
+        onSelectSteamMatch = steamMatchViewModel::selectCandidate,
+        onConfirmSteamMatch = steamMatchViewModel::confirmSelected,
+        onKeepSteamMatchSeparate = steamMatchViewModel::keepSeparate,
+        onResetSteamMatch = steamMatchViewModel::resetDecision,
+        onCloseSteamMatch = steamMatchViewModel::close,
         isOffline = isOffline,
         isSteamConnected = isSteamConnected,
     )
@@ -255,6 +289,18 @@ internal fun LibraryScreenContent(
     gameDetailState: GameDetailState = GameDetailState.Loading,
     onOpenCanonicalDetail: (CanonicalGameId) -> Unit = {},
     onRetryCanonicalDetail: () -> Unit = {},
+    steamMatchState: SteamMatchUiState = SteamMatchUiState(),
+    steamMatchQuery: String = "",
+    onOpenSteamMatch: (OwnedCopyKey) -> Unit = {},
+    onReviewSteamMatches: () -> Unit = {},
+    onRetrySteamResolution: () -> Unit = {},
+    onSteamMatchQueryChange: (String) -> Unit = {},
+    onSearchSteamMatches: () -> Unit = {},
+    onSelectSteamMatch: (Int) -> Unit = {},
+    onConfirmSteamMatch: () -> Unit = {},
+    onKeepSteamMatchSeparate: () -> Unit = {},
+    onResetSteamMatch: () -> Unit = {},
+    onCloseSteamMatch: () -> Unit = {},
     isOffline: Boolean = false,
     isSteamConnected: Boolean = false,
 ) {
@@ -382,6 +428,7 @@ internal fun LibraryScreenContent(
     var routeRequestJob by remember { mutableStateOf<Job?>(null) }
     var routeRequestIdentity by remember { mutableStateOf<LibraryCardIdentity.Canonical?>(null) }
     var routeRequestEpoch by remember { mutableLongStateOf(0L) }
+    val isSteamMatchPickerOpen = steamMatchState.picker != SteamMatchPickerState.Closed
     val carouselListState = rememberLazyListState()
     val isViewWide = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var currentPaneType by remember { mutableStateOf(PrefManager.libraryLayout) }
@@ -753,24 +800,24 @@ internal fun LibraryScreenContent(
         }
     }
 
-    BackHandler(enabled = isSystemMenuOpen) {
+    BackHandler(enabled = isSystemMenuOpen && !isSteamMatchPickerOpen) {
         isSystemMenuOpen = false
     }
 
-    BackHandler(enabled = state.isOptionsPanelOpen) {
+    BackHandler(enabled = state.isOptionsPanelOpen && !isSteamMatchPickerOpen) {
         onOptionsPanelToggle(false)
     }
 
-    BackHandler(enabled = state.isSearching && selectedCardIdentity == null) {
+    BackHandler(enabled = state.isSearching && selectedCardIdentity == null && !isSteamMatchPickerOpen) {
         onIsSearching(false)
         onSearchQuery("")
     }
 
-    BackHandler(enabled = selectedCardIdentity != null) {
+    BackHandler(enabled = selectedCardIdentity != null && !isSteamMatchPickerOpen) {
         clearSelectedSource()
     }
 
-    BackHandler(enabled = copiesSheetCardKey != null) {
+    BackHandler(enabled = copiesSheetCardKey != null && !isSteamMatchPickerOpen) {
         dismissCopiesSheet()
     }
 
@@ -833,12 +880,19 @@ internal fun LibraryScreenContent(
     }
 
     // Restore focus after tab change - handles both empty and populated tabs
-    LaunchedEffect(state.currentTab) {
+    LaunchedEffect(state.currentTab, isSteamMatchPickerOpen) {
         // Brief delay to let list populate after tab change
         kotlinx.coroutines.delay(150)
 
         // The user may have moved focus up into the tab bar during the delay; don't yank it back.
-        if (copiesSheetCardKey != null || tabBarHasFocus) return@LaunchedEffect
+        if (
+            selectedCardIdentity != null ||
+            copiesSheetCardKey != null ||
+            isSteamMatchPickerOpen ||
+            tabBarHasFocus
+        ) {
+            return@LaunchedEffect
+        }
 
         if (isListFocusable()) {
             // Empty tab - focus root so bumpers still work
@@ -858,9 +912,10 @@ internal fun LibraryScreenContent(
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
         state.isSearching,
+        isSteamMatchPickerOpen,
     ) {
         if (pendingGridFocusRequest && isListFocusable()) {
-            if (copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching) {
+            if (copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !isSteamMatchPickerOpen) {
                 var retries = 0
                 while (pendingGridFocusRequest && retries < 8) {
                     try {
@@ -885,9 +940,10 @@ internal fun LibraryScreenContent(
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
         state.isSearching,
+        isSteamMatchPickerOpen,
     ) {
         if (pendingCarouselFocusRequest && isListFocusable()) {
-            if (copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching) {
+            if (copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !isSteamMatchPickerOpen) {
                 val targetIndex = currentCarouselFocusTargetIndex()
                 if (carouselListState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }) {
                     carouselListState.scrollToItem(targetIndex)
@@ -914,15 +970,16 @@ internal fun LibraryScreenContent(
         isSystemMenuOpen,
         state.isOptionsPanelOpen,
         state.isSearching,
+        isSteamMatchPickerOpen,
     ) {
         val currentCount = state.cards.size
         val listBecameNonEmpty = previousAppCount == 0 && currentCount > 0
         val listBecameEmpty = previousAppCount > 0 && currentCount == 0
 
-        if (listBecameNonEmpty && copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !tabBarHasFocus) {
+        if (listBecameNonEmpty && copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !isSteamMatchPickerOpen && !tabBarHasFocus) {
             requestContentFocusOrDefer()
         }
-        if (listBecameEmpty && copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !tabBarHasFocus) {
+        if (listBecameEmpty && copiesSheetCardKey == null && selectedCardIdentity == null && !isSystemMenuOpen && !state.isOptionsPanelOpen && !state.isSearching && !isSteamMatchPickerOpen && !tabBarHasFocus) {
             // Empty tabs can drop focused children; re-anchor focus at the root so bumper nav keeps working.
             requestRootFocusSafe()
         }
@@ -931,11 +988,16 @@ internal fun LibraryScreenContent(
     }
 
     // Restore focus when System Menu or Options Panel closes
-    LaunchedEffect(isSystemMenuOpen, state.isOptionsPanelOpen, copiesSheetCardKey) {
+    LaunchedEffect(
+        isSystemMenuOpen,
+        state.isOptionsPanelOpen,
+        copiesSheetCardKey,
+        isSteamMatchPickerOpen,
+    ) {
         val systemMenuJustClosed = wasSystemMenuOpen && !isSystemMenuOpen
         val optionsPanelJustClosed = wasOptionsPanelOpen && !state.isOptionsPanelOpen
 
-        if ((systemMenuJustClosed || optionsPanelJustClosed) && copiesSheetCardKey == null && !state.isSearching) {
+        if ((systemMenuJustClosed || optionsPanelJustClosed) && copiesSheetCardKey == null && !state.isSearching && !isSteamMatchPickerOpen) {
             // Give a brief moment for the overlay to animate out
             kotlinx.coroutines.delay(50)
             // Restore focus to the active content layout
@@ -962,6 +1024,7 @@ internal fun LibraryScreenContent(
             !isSystemMenuOpen &&
             !state.isOptionsPanelOpen &&
             !state.isSearching &&
+            !isSteamMatchPickerOpen &&
             isListFocusable() &&
             controllerBootstrapNeeded &&
             !rootHasFocus &&
@@ -974,8 +1037,11 @@ internal fun LibraryScreenContent(
             !isSystemMenuOpen &&
             !state.isOptionsPanelOpen &&
             !state.isSearching &&
+            !isSteamMatchPickerOpen &&
             !rootHasFocus
     }
+    val currentCanBootstrapContentFocus by rememberUpdatedState(canBootstrapContentFocus)
+    val currentCanNavigateTabsWithoutFocus by rememberUpdatedState(canNavigateTabsWithoutFocus)
 
     DisposableEffect(Unit) {
         val onGlobalKeyEvent: (AndroidEvent.KeyEvent) -> Boolean = { androidEvent ->
@@ -985,7 +1051,7 @@ internal fun LibraryScreenContent(
             } else {
                 when (event.keyCode) {
                     KeyEvent.KEYCODE_BUTTON_L1 -> {
-                        if (canNavigateTabsWithoutFocus()) {
+                        if (currentCanNavigateTabsWithoutFocus()) {
                             onPreviousTab()
                             requestRootFocusSafe()
                             true
@@ -995,7 +1061,7 @@ internal fun LibraryScreenContent(
                     }
 
                     KeyEvent.KEYCODE_BUTTON_R1 -> {
-                        if (canNavigateTabsWithoutFocus()) {
+                        if (currentCanNavigateTabsWithoutFocus()) {
                             onNextTab()
                             requestRootFocusSafe()
                             true
@@ -1013,7 +1079,7 @@ internal fun LibraryScreenContent(
                     KeyEvent.KEYCODE_BUTTON_THUMBL,
                     KeyEvent.KEYCODE_BUTTON_THUMBR,
                     -> {
-                        if (canBootstrapContentFocus()) {
+                        if (currentCanBootstrapContentFocus()) {
                             requestContentFocusOrDefer()
                             // Do not consume: let normal key routing continue after bootstrap.
                             false
@@ -1029,7 +1095,7 @@ internal fun LibraryScreenContent(
 
         val onGlobalMotionEvent: (AndroidEvent.MotionEvent) -> Boolean = { androidEvent ->
             val event = androidEvent.event
-            if (event == null || !canBootstrapContentFocus()) {
+            if (event == null || !currentCanBootstrapContentFocus()) {
                 false
             } else {
                 val isMoveLike = event.actionMasked == MotionEvent.ACTION_MOVE
@@ -1080,7 +1146,7 @@ internal fun LibraryScreenContent(
             .onPreviewKeyEvent { keyEvent ->
                 // TODO: consider abstracting this
                 // Handle gamepad buttons
-                if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN) {
+                if (keyEvent.nativeKeyEvent.action == KeyEvent.ACTION_DOWN && !isSteamMatchPickerOpen) {
                     val keyCode = keyEvent.nativeKeyEvent.keyCode
                     val canBootstrapContentFocus = selectedCardIdentity == null &&
                         copiesSheetCardKey == null &&
@@ -1402,6 +1468,13 @@ internal fun LibraryScreenContent(
                 selectedCanonicalCard != null &&
                 presentationCard != null
             ) {
+                val mutableSteamMatchCopies = selectedCanonicalCard.copies.filter { copy ->
+                    copy.source != GameSource.STEAM
+                }
+                val detailSteamMatchCopy = mutableSteamMatchCopies.firstOrNull()
+                    ?: selectedCanonicalCard.copies.firstOrNull { copy -> copy.source == GameSource.STEAM }
+                val detailSteamMatchStatus =
+                    detailSteamMatchCopy?.steamMatchStatus(steamMatchState.isScanning)
                 CanonicalGameDetailScreen(
                     state = gameDetailState,
                     fallbackTitle = selectedCanonicalCard.displayName,
@@ -1411,6 +1484,16 @@ internal fun LibraryScreenContent(
                     compatibilityStatus = presentationCard.compatibilityStatus,
                     hltbStats = HltbCache.get(selectedCanonicalCard.displayName),
                     isOffline = isOffline,
+                    steamMatchStatus = detailSteamMatchStatus,
+                    onFixSteamMatch = mutableSteamMatchCopies.takeIf { it.isNotEmpty() }?.let { copies ->
+                        {
+                            if (copies.size == 1) {
+                                onOpenSteamMatch(copies.single().key)
+                            } else {
+                                openCopiesSheet(selectedCanonicalIdentity.key, selectedCanonicalIdentity)
+                            }
+                        }
+                    },
                     onBack = ::clearSelectedSource,
                     onCopies = {
                         openCopiesSheet(selectedCanonicalIdentity.key, selectedCanonicalIdentity)
@@ -1460,7 +1543,7 @@ internal fun LibraryScreenContent(
         }
 
         // Bottom action bar
-        if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
+        if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isOptionsPanelOpen && !isSystemMenuOpen && !isSteamMatchPickerOpen) {
             val libraryActions = if (state.isSearching) {
                 listOf(
                     LibraryActions.select,
@@ -1559,6 +1642,12 @@ internal fun LibraryScreenContent(
                 steamPopularityProgress = state.steamPopularityProgress,
                 onSteamReviewMinimumChanged = onSteamReviewMinimumChanged,
                 onRetrySteamPopularity = onRetrySteamPopularity,
+                steamMatchState = steamMatchState,
+                onReviewSteamMatches = {
+                    onOptionsPanelToggle(false)
+                    onReviewSteamMatches()
+                },
+                onRetrySteamResolution = onRetrySteamResolution,
             )
 
             // System menu (START) - renders on top of everything
@@ -1692,6 +1781,11 @@ internal fun LibraryScreenContent(
                         }
                     }
                 },
+                onFixSteamMatch = { copy ->
+                    dismissCopiesSheet(restoreCardFocus = false)
+                    onOpenSteamMatch(copy.key)
+                },
+                isSteamMatchScanning = steamMatchState.isScanning,
                 feedback = copiesSheetFeedback,
                 actionInProgress = copiesActionInProgress,
             )
@@ -1774,6 +1868,18 @@ internal fun LibraryScreenContent(
                 },
             )
         }
+
+        SteamMatchPicker(
+            state = steamMatchState.picker,
+            query = steamMatchQuery,
+            onQueryChange = onSteamMatchQueryChange,
+            onSearch = onSearchSteamMatches,
+            onSelectCandidate = onSelectSteamMatch,
+            onConfirm = onConfirmSteamMatch,
+            onKeepSeparate = onKeepSteamMatchSeparate,
+            onResetToAutomatic = onResetSteamMatch,
+            onCancel = onCloseSteamMatch,
+        )
     }
 }
 

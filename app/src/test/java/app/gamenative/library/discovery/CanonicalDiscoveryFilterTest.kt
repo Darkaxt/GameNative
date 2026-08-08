@@ -345,6 +345,29 @@ class CanonicalDiscoveryFilterTest {
     }
 
     @Test
+    fun gogOnlyTrustedSteamPopularityPassesAllAndGogButNotSteamOwnershipTab() {
+        val cards = listOf(
+            card(
+                number = 1,
+                name = "GOG only",
+                copySources = listOf(GameSource.GOG),
+                steamAppId = 42,
+                steamReviewCount = 100,
+            ),
+        )
+
+        assertEquals(1, project(cards, state(minimumReviews = 100)).totalCount)
+        assertEquals(
+            1,
+            project(cards, state(tab = LibraryTab.GOG, minimumReviews = 100)).totalCount,
+        )
+        assertEquals(
+            0,
+            project(cards, state(tab = LibraryTab.STEAM, minimumReviews = 100)).totalCount,
+        )
+    }
+
+    @Test
     fun popularitySortUsesDescendingKnownCountsNullLastAndExistingNameTieBreak() {
         val cards = listOf(
             card(1, "Unknown alpha", steamReviewCount = null),

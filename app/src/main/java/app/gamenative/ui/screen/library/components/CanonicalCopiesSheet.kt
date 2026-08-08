@@ -52,6 +52,8 @@ import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
+import app.gamenative.ui.model.SteamMatchStatus
+import app.gamenative.ui.model.steamMatchStatus
 
 internal enum class CanonicalCopiesFeedback {
     COPY_STATE_CHANGED,
@@ -70,6 +72,8 @@ internal fun CanonicalCopiesSheet(
     onUseAutomaticSelection: () -> Unit,
     onSeparateCopy: (OwnedCopySummary) -> Unit,
     onResetDecision: (OwnedCopySummary) -> Unit,
+    onFixSteamMatch: (OwnedCopySummary) -> Unit = {},
+    isSteamMatchScanning: Boolean = false,
     modifier: Modifier = Modifier,
     feedback: CanonicalCopiesFeedback? = null,
     actionInProgress: Boolean = false,
@@ -126,6 +130,8 @@ internal fun CanonicalCopiesSheet(
                         onOperation = onOperation,
                         onSeparate = { pendingSeparation = copy },
                         onResetDecision = { onResetDecision(copy) },
+                        onFixSteamMatch = { onFixSteamMatch(copy) },
+                        isSteamMatchScanning = isSteamMatchScanning,
                     )
                 }
             }
@@ -175,6 +181,8 @@ private fun CanonicalCopyRow(
     onOperation: (OwnedCopySummary, OwnedCopyOperation, Boolean) -> Unit,
     onSeparate: () -> Unit,
     onResetDecision: () -> Unit,
+    onFixSteamMatch: () -> Unit,
+    isSteamMatchScanning: Boolean,
 ) {
     val source = sourceLabel(copy.source)
     val unavailable = copy.unavailableReason != null
@@ -237,6 +245,20 @@ private fun CanonicalCopyRow(
             }
 
             CopyRuntimeDetails(copy = copy, stateLabel = stateLabel)
+
+            DetailLine(
+                stringResource(R.string.steam_match_title),
+                stringResource(copy.steamMatchStatus(isSteamMatchScanning).labelResId()),
+            )
+            if (copy.source != GameSource.STEAM) {
+                TextButton(
+                    onClick = onFixSteamMatch,
+                    enabled = !actionInProgress,
+                    modifier = Modifier.testTag("fix-steam-match:${copy.source.name}"),
+                ) {
+                    Text(stringResource(R.string.steam_match_fix))
+                }
+            }
 
             if (copy.capabilities.isNotEmpty()) {
                 HorizontalDivider()
@@ -389,6 +411,16 @@ private fun operationRank(operation: OwnedCopyOperation): Int = when (operation)
     OwnedCopyOperation.EXPORT_SAVES -> 6
     OwnedCopyOperation.IMPORT_SAVES -> 7
     OwnedCopyOperation.OPEN_SOURCE_DETAILS -> 8
+}
+
+private fun SteamMatchStatus.labelResId(): Int = when (this) {
+    SteamMatchStatus.AUTOMATIC -> R.string.steam_match_status_automatic
+    SteamMatchStatus.USER_CONFIRMED -> R.string.steam_match_status_user_confirmed
+    SteamMatchStatus.NEEDS_REVIEW -> R.string.steam_match_status_needs_review
+    SteamMatchStatus.KEPT_SEPARATE -> R.string.steam_match_status_kept_separate
+    SteamMatchStatus.UNMATCHED -> R.string.steam_match_status_unmatched
+    SteamMatchStatus.CHECKING -> R.string.steam_match_status_checking
+    SteamMatchStatus.IMMUTABLE_STEAM -> R.string.steam_match_status_immutable
 }
 
 private fun CanonicalCopiesFeedback.messageResource(): Int = when (this) {

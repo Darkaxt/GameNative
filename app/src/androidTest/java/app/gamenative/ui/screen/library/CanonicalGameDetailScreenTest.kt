@@ -14,6 +14,7 @@ import app.gamenative.library.metadata.GameMovie
 import app.gamenative.library.metadata.GamePlatform
 import app.gamenative.library.metadata.GameRequirements
 import app.gamenative.library.metadata.MetadataFacet
+import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.theme.PluviaTheme
 import app.gamenative.utils.HltbService
 import org.junit.Assert.assertEquals
@@ -28,6 +29,7 @@ class CanonicalGameDetailScreenTest {
     fun tabsShowHonestContentActionsResourcesAndOfflineStaleSemantics() {
         var copiesClicks = 0
         var sourceDetailsClicks = 0
+        var fixMatchClicks = 0
         composeRule.setContent {
             PluviaTheme {
                 CanonicalGameDetailScreen(
@@ -47,6 +49,8 @@ class CanonicalGameDetailScreenTest {
                     onCopies = { copiesClicks += 1 },
                     onSourceDetails = { sourceDetailsClicks += 1 },
                     onRetry = {},
+                    steamMatchStatus = SteamMatchStatus.NEEDS_REVIEW,
+                    onFixSteamMatch = { fixMatchClicks += 1 },
                 )
             }
         }
@@ -56,7 +60,7 @@ class CanonicalGameDetailScreenTest {
         composeRule.onNodeWithText("Reviews").assertIsDisplayed()
         composeRule.onNodeWithText("Discussions").assertIsDisplayed()
         composeRule.onNodeWithText("Details").assertIsDisplayed()
-        composeRule.onNodeWithText("Resources").assertIsDisplayed()
+        composeRule.onNodeWithTag("canonical-detail-tab:RESOURCES").assertDoesNotExist()
         composeRule.onNodeWithText("Showing saved details offline").assertIsDisplayed()
         composeRule.onNodeWithText("Saved details may be out of date").assertIsDisplayed()
         composeRule.onNodeWithText("Plain short description").assertIsDisplayed()
@@ -86,9 +90,13 @@ class CanonicalGameDetailScreenTest {
         composeRule.onNodeWithText("Minimum: 8 GB RAM").assertIsDisplayed()
         composeRule.onNodeWithText("12").assertIsDisplayed()
         composeRule.onNodeWithText("2").assertIsDisplayed()
-        composeRule.onNodeWithText("Resources").performClick()
+        composeRule.onNodeWithText("Steam match").assertIsDisplayed()
+        composeRule.onNodeWithText("Needs review").assertIsDisplayed()
+        composeRule.onNodeWithTag("canonical-detail-fix-steam-match").performClick()
+        composeRule.onNodeWithText("Resources").assertIsDisplayed()
         composeRule.onNodeWithText("Steam store").assertIsDisplayed()
         composeRule.onNodeWithText("Community hub").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(1, fixMatchClicks) }
     }
 
     @Test
