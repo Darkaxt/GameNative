@@ -38,6 +38,7 @@ class GameMetadataRepositoryTest {
         val provider = FakeProvider(
             metadata("Network title", NOW).copy(
                 genres = listOf(MetadataFacet(1, "<b>Action</b>"), MetadataFacet(null, "Ignored")),
+                features = listOf(MetadataFacet(2, "Single-player")),
             ),
         )
         val repository = repository(gameDao, snapshotDao, provider, facetRepository)
@@ -54,6 +55,48 @@ class GameMetadataRepositoryTest {
         assertTrue(stored.provenanceJson.contains("STEAM_APPDETAILS"))
         assertFalse(stored.payloadJson.contains(TRUSTED_APP_ID.toString()))
         assertEquals(listOf(MetadataFacet(1, "Action")), facetRepository.lastGenres)
+        assertEquals(listOf(MetadataFacet(2, "Single-player")), facetRepository.lastFeatures)
+        assertEquals(1, facetRepository.writeCount)
+    }
+
+    @Test
+    fun persistsValidatedRecordWithoutRefetchAndPromotesSteamPresentation() = runTest {
+        val canonicalId = canonicalId()
+        val gameDao = FakeCanonicalGameDao(
+            canonical(TRUSTED_APP_ID).copy(primaryMetadataSource = GameSource.GOG),
+        )
+        val snapshotDao = FakeSnapshotDao()
+        val facetRepository = FakeGameFacetRepository(snapshotDao)
+        val provider = FakeProvider(failure = AssertionError("validated persistence must not refetch"))
+        val repository = repository(gameDao, snapshotDao, provider, facetRepository)
+        val validated = SteamCatalogRecord(
+            steamAppId = TRUSTED_APP_ID,
+            appType = CanonicalAppType.GAME,
+            releaseYear = 2020,
+            metadata = metadata("Validated title", NOW - 100).copy(
+                developers = listOf("Validated Studio"),
+                genres = listOf(MetadataFacet(1, "Action")),
+                features = listOf(MetadataFacet(2, "Single-player")),
+            ),
+        )
+
+        val result = repository.persistValidatedSteamRecord(
+            canonicalId = canonicalId,
+            trustedSteamAppId = TRUSTED_APP_ID,
+            locale = MetadataLocale("en-US", "US"),
+            record = validated,
+        )
+
+        assertEquals(MetadataPersistenceResult.Persisted, result)
+        assertTrue(provider.requestedIds.isEmpty())
+        val updated = requireNotNull(gameDao.get(canonicalId.value))
+        assertEquals(GameSource.STEAM, updated.primaryMetadataSource)
+        assertEquals("Validated title", updated.displayName)
+        assertEquals(2020, updated.releaseYear)
+        assertEquals("validated studio", updated.developerKey)
+        assertEquals(listOf(MetadataFacet(1, "Action")), facetRepository.lastGenres)
+        assertEquals(listOf(MetadataFacet(2, "Single-player")), facetRepository.lastFeatures)
+        assertEquals(NOW, decode(snapshotDao.current.value).fetchedAtEpochMs)
         assertEquals(1, facetRepository.writeCount)
     }
 
@@ -261,7 +304,22 @@ class GameMetadataRepositoryTest {
         private val snapshotDao: GameDetailSnapshotDao,
     ) : GameFacetRepository {
         var lastGenres: List<MetadataFacet> = emptyList()
+        var lastFeatures: List<MetadataFacet> = emptyList()
         var writeCount: Int = 0
+
+        override suspend fun upsertValidatedSteamMetadata(
+            canonicalId: CanonicalGameId,
+            trustedSteamAppId: Int,
+            genres: List<MetadataFacet>,
+            features: List<MetadataFacet>,
+            snapshot: GameDetailSnapshotEntity,
+        ): Boolean {
+            writeCount += 1
+            lastGenres = genres
+            lastFeatures = features
+            snapshotDao.upsert(snapshot)
+            return true
+        }
 
         override suspend fun upsertSteamGenresAndSnapshot(
             canonicalId: CanonicalGameId,

@@ -57,6 +57,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val decisionWriter: SteamCatalogDecisionWriter,
     private val localeProvider: MetadataLocaleProvider,
     private val diagnostics: SteamCatalogResolutionDiagnosticSink,
+    private val acceptedIdentityEnrichment: SteamAcceptedIdentityEnrichmentSink,
     private val clock: MetadataClock,
 ) {
     private val scanMutex = Mutex()
@@ -64,7 +65,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val mutableProgress = MutableStateFlow(SteamResolutionProgress())
     private val mutableIsScanning = MutableStateFlow(false)
     private val candidateLists = ConcurrentHashMap<OwnedCopyKey, List<SteamCatalogCandidate>>()
-    private val candidateRecords = ConcurrentHashMap<Int, SteamCatalogRecord>()
+    private val candidateRecords = ConcurrentHashMap<Int, ValidatedSteamCatalogRecord>()
     private var automaticScanCompleted = false
 
     val progress: StateFlow<SteamResolutionProgress> = mutableProgress.asStateFlow()
@@ -109,7 +110,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     fun candidatesFor(key: OwnedCopyKey): List<SteamCatalogCandidate> =
         candidateLists[key].orEmpty()
 
-    fun validatedRecordFor(steamAppId: Int): SteamCatalogRecord? = candidateRecords[steamAppId]
+    fun validatedRecordFor(steamAppId: Int): SteamCatalogRecord? = candidateRecords[steamAppId]?.record
 
     suspend fun confirmCandidate(
         expected: ExpectedMatchState,
@@ -118,12 +119,16 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         val candidate = candidateLists[expected.key]
             ?.firstOrNull { it.steamAppId == steamAppId }
             ?: return CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
-        return decisionWriter.confirm(
+        val result = decisionWriter.confirm(
             expected = expected,
             steamAppId = steamAppId,
             candidateAppType = candidate.appType,
             nowEpochMs = clock.nowEpochMs(),
         )
+        if (result == CanonicalGuardedMutationResult.APPLIED) {
+            enrichAcceptedIdentity(steamAppId)
+        }
+        return result
     }
 
     suspend fun rejectCandidate(
@@ -199,18 +204,23 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
 
     private suspend fun resolve(match: StoreMatchEntity): ItemResolution {
         val expected = match.expectedState()
-        val candidates = fetchCandidates(match.evidenceDisplayName, localeProvider.current())
+        val locale = localeProvider.current()
+        val candidates = fetchCandidates(match.evidenceDisplayName, locale)
         candidateLists[expected.key] = candidates
         return when (val decision = candidatePolicy.evaluate(match.sourceEvidence(), candidates)) {
             is CatalogDecision.AutoAccept -> {
                 val selected = candidates.first { it.steamAppId == decision.steamAppId }
-                decisionWriter.acceptAutomatic(
+                val mutation = decisionWriter.acceptAutomatic(
                     expected = expected,
                     steamAppId = selected.steamAppId,
                     candidateAppType = selected.appType,
                     resolverVersion = CURRENT_RESOLVER_VERSION,
                     nowEpochMs = clock.nowEpochMs(),
-                ).asItemResolution(SteamResolutionItemResult.AutoAccepted)
+                )
+                if (mutation == CanonicalGuardedMutationResult.APPLIED) {
+                    enrichAcceptedIdentity(selected.steamAppId)
+                }
+                mutation.asItemResolution(SteamResolutionItemResult.AutoAccepted)
             }
 
             is CatalogDecision.ReviewRequired -> {
@@ -251,7 +261,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 }
                 record
                     ?.takeIf { it.steamAppId == hit.steamAppId }
-                    ?.toCandidate(hit)
+                    ?.toCandidate(hit, locale)
             }
         if (failedFetches > 0) {
             throw SteamCatalogCandidateFetchException()
@@ -272,11 +282,15 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 title = record.metadata.title,
                 headerImageUrl = record.metadata.headerImageUrl,
             ),
+            locale,
         )
     }
 
-    private fun SteamCatalogRecord.toCandidate(hit: SteamStoreSearchHit): SteamCatalogCandidate {
-        candidateRecords[steamAppId] = this
+    private fun SteamCatalogRecord.toCandidate(
+        hit: SteamStoreSearchHit,
+        locale: MetadataLocale,
+    ): SteamCatalogCandidate {
+        candidateRecords[steamAppId] = ValidatedSteamCatalogRecord(this, locale)
         return SteamCatalogCandidate(
             steamAppId = steamAppId,
             title = metadata.title,
@@ -285,6 +299,21 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             appType = appType,
             headerImageUrl = metadata.headerImageUrl ?: hit.headerImageUrl,
         )
+    }
+
+    private suspend fun enrichAcceptedIdentity(steamAppId: Int) {
+        val validated = candidateRecords[steamAppId] ?: return
+        try {
+            acceptedIdentityEnrichment.enrich(
+                trustedSteamAppId = steamAppId,
+                locale = validated.locale,
+                record = validated.record,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // The accepted identity remains valid when optional enrichment fails.
+        }
     }
 
     private suspend fun updateProgress(
@@ -379,6 +408,11 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             // Diagnostics are best effort and never affect resolution.
         }
     }
+
+    private data class ValidatedSteamCatalogRecord(
+        val record: SteamCatalogRecord,
+        val locale: MetadataLocale,
+    )
 
     private data class ItemResolution(
         val result: SteamResolutionItemResult,

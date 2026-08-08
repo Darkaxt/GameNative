@@ -54,6 +54,8 @@ import app.gamenative.enums.SyncResult
 import app.gamenative.events.AndroidEvent
 import app.gamenative.events.SteamEvent
 import app.gamenative.library.canonical.SteamOwnershipReadiness
+import app.gamenative.library.canonical.catalog.SteamPublicPicsFacets
+import app.gamenative.library.canonical.catalog.parseSteamPublicPicsFacets
 import app.gamenative.utils.CaseInsensitiveFileSystem
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.FileUtils
@@ -3217,6 +3219,23 @@ class SteamService : Service(), IChallengeUrlChanged {
             hasSteamUnlockedBranch: Boolean,
         ) = manifests[branch] ?: encryptedManifests[branch].takeIf {
             hasSteamUnlockedBranch
+        }
+
+        internal suspend fun fetchPublicPicsFacets(
+            trustedSteamAppId: Int,
+        ): SteamPublicPicsFacets? = withContext(Dispatchers.IO) {
+            if (trustedSteamAppId <= 0 || !isConnected || !isLoggedIn) {
+                return@withContext null
+            }
+            val steamApps = instance?._steamApps ?: return@withContext null
+            val response = steamApps.picsGetProductInfo(
+                apps = listOf(PICSRequest(id = trustedSteamAppId)),
+                packages = emptyList(),
+            ).await()
+            val appInfo = response.results.firstNotNullOfOrNull { result ->
+                result.apps[trustedSteamAppId]
+            } ?: return@withContext null
+            parseSteamPublicPicsFacets(appInfo.keyValues)
         }
 
         internal suspend fun getUpdatePendingBatch(

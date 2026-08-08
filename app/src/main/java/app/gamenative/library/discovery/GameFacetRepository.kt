@@ -1,12 +1,17 @@
 package app.gamenative.library.discovery
 
 import androidx.room.withTransaction
+import app.gamenative.data.canonical.CanonicalGameFeatureCrossRef
+import app.gamenative.data.canonical.CanonicalGameEntity
 import app.gamenative.data.canonical.CanonicalGameGenreCrossRef
 import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.CanonicalGameTagCrossRef
+import app.gamenative.data.canonical.ClassificationState
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.db.dao.CanonicalFacetDao
 import app.gamenative.db.dao.GameDetailSnapshotDao
+import app.gamenative.library.canonical.catalog.SteamPublicPicsFacets
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.MetadataFacet
 import app.gamenative.library.metadata.MetadataLocale
@@ -27,6 +32,23 @@ interface GameFacetRepository {
         genres: List<MetadataFacet>,
         snapshot: GameDetailSnapshotEntity,
     )
+
+    suspend fun upsertValidatedSteamMetadata(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        genres: List<MetadataFacet>,
+        features: List<MetadataFacet>,
+        snapshot: GameDetailSnapshotEntity,
+    ): Boolean {
+        upsertSteamGenresAndSnapshot(canonicalId, genres, snapshot)
+        return true
+    }
+
+    suspend fun upsertSteamPicsFacets(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        facets: SteamPublicPicsFacets,
+    ): Boolean = false
 
     fun observeSteamTags(): Flow<List<SteamTagFacet>> = emptyFlow()
 
@@ -87,11 +109,74 @@ class RoomGameFacetRepository private constructor(
             if (sanitized.isNotEmpty()) {
                 facetDao.upsertGenres(
                     sanitized.map { facet ->
-                        CanonicalGameGenreCrossRef(canonicalId.value, steamGenreKey(requireNotNull(facet.id)))
+                        CanonicalGameGenreCrossRef(canonicalId.value, steamFacetKey(requireNotNull(facet.id)))
                     },
                 )
             }
             snapshotDao.upsert(snapshot)
+        }
+    }
+
+    override suspend fun upsertValidatedSteamMetadata(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        genres: List<MetadataFacet>,
+        features: List<MetadataFacet>,
+        snapshot: GameDetailSnapshotEntity,
+    ): Boolean {
+        require(trustedSteamAppId > 0)
+        require(snapshot.canonicalId == canonicalId.value)
+        val sanitizedGenres = sanitizeGenres(genres)
+        val sanitizedFeatures = sanitizeFeatures(features)
+        return database.withTransaction {
+            val canonical = database.canonicalGameDao().get(canonicalId.value)
+            if (canonical?.steamAppId != trustedSteamAppId) {
+                return@withTransaction false
+            }
+            facetDao.upsertGenres(
+                sanitizedGenres.map { facet ->
+                    CanonicalGameGenreCrossRef(canonicalId.value, steamFacetKey(requireNotNull(facet.id)))
+                },
+            )
+            facetDao.upsertFeatures(
+                sanitizedFeatures.map { facet ->
+                    CanonicalGameFeatureCrossRef(canonicalId.value, steamFacetKey(requireNotNull(facet.id)))
+                },
+            )
+            snapshotDao.upsert(snapshot)
+            updateClassification(canonical)
+            true
+        }
+    }
+
+    override suspend fun upsertSteamPicsFacets(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        facets: SteamPublicPicsFacets,
+    ): Boolean {
+        require(trustedSteamAppId > 0)
+        return database.withTransaction {
+            val canonical = database.canonicalGameDao().get(canonicalId.value)
+            if (canonical?.steamAppId != trustedSteamAppId) {
+                return@withTransaction false
+            }
+            facetDao.upsertGenres(
+                facets.genreIds.sorted().map { genreId ->
+                    CanonicalGameGenreCrossRef(canonicalId.value, steamFacetKey(genreId))
+                },
+            )
+            facetDao.upsertFeatures(
+                facets.categoryIds.sorted().map { categoryId ->
+                    CanonicalGameFeatureCrossRef(canonicalId.value, steamFacetKey(categoryId))
+                },
+            )
+            facetDao.upsertTags(
+                facets.storeTagIds.sorted().map { tagId ->
+                    CanonicalGameTagCrossRef(canonicalId.value, tagId)
+                },
+            )
+            updateClassification(canonical)
+            true
         }
     }
 
@@ -144,6 +229,20 @@ class RoomGameFacetRepository private constructor(
                 label = labelsById[id] ?: STEAM_GENRE_LABELS[id] ?: "Genre $id",
             )
         }.sortedWith(compareBy<GameFacet> { it.label.lowercase() }.thenBy(GameFacet::label).thenBy(GameFacet::key))
+    }
+
+    private suspend fun updateClassification(canonical: CanonicalGameEntity) {
+        val hasGenres = facetDao.getGenres(canonical.canonicalId).isNotEmpty()
+        val hasTagsOrFeatures = facetDao.getTags(canonical.canonicalId).isNotEmpty() ||
+            facetDao.getFeatures(canonical.canonicalId).isNotEmpty()
+        val classification = when {
+            hasGenres && hasTagsOrFeatures -> ClassificationState.CLASSIFIED
+            hasGenres || hasTagsOrFeatures -> ClassificationState.PARTIALLY_CLASSIFIED
+            else -> ClassificationState.UNCLASSIFIED
+        }
+        if (canonical.classificationState != classification) {
+            database.canonicalGameDao().update(canonical.copy(classificationState = classification))
+        }
     }
 
     private fun decodeMetadata(snapshot: GameDetailSnapshotEntity): CanonicalGameMetadata? {
@@ -199,7 +298,14 @@ private fun sanitizeGenres(genres: List<MetadataFacet>): List<MetadataFacet> = g
     MetadataFacet(id, label)
 }.distinctBy { facet -> facet.id }
 
-private fun steamGenreKey(id: Int): String = "steam:$id"
+private fun sanitizeFeatures(features: List<MetadataFacet>): List<MetadataFacet> = features.mapNotNull { facet ->
+    val id = facet.id?.takeIf { it > 0 } ?: return@mapNotNull null
+    val label = sanitizeSteamText(facet.label)?.take(MAX_FEATURE_LABEL_LENGTH)?.takeIf(String::isNotBlank)
+        ?: return@mapNotNull null
+    MetadataFacet(id, label)
+}.distinctBy { facet -> facet.id }
+
+private fun steamFacetKey(id: Int): String = "steam:$id"
 
 private fun parseSteamGenreId(key: String): Int? = STEAM_GENRE_KEY.matchEntire(key)
     ?.groupValues
@@ -208,5 +314,6 @@ private fun parseSteamGenreId(key: String): Int? = STEAM_GENRE_KEY.matchEntire(k
     ?.takeIf { it > 0 }
 
 private const val MAX_GENRE_LABEL_LENGTH = 80
+private const val MAX_FEATURE_LABEL_LENGTH = 80
 private const val MAX_TAG_LABEL_LENGTH = 80
 private val STEAM_GENRE_KEY = Regex("steam:([1-9][0-9]*)")

@@ -27,9 +27,13 @@ import app.gamenative.library.canonical.SteamCatalogDecisionWriter
 import app.gamenative.library.canonical.SystemCanonicalProjectionClock
 import app.gamenative.library.canonical.TrustedSteamMappingProvider
 import app.gamenative.library.canonical.catalog.FeatureSteamCatalogResolutionDiagnostics
+import app.gamenative.library.canonical.catalog.SteamAcceptedIdentityEnricher
+import app.gamenative.library.canonical.catalog.SteamAcceptedIdentityEnrichmentSink
 import app.gamenative.library.canonical.catalog.SteamCatalogResolutionDiagnosticSink
 import app.gamenative.library.canonical.catalog.SteamCatalogSearchProvider
 import app.gamenative.library.canonical.catalog.SteamCatalogSearchSource
+import app.gamenative.library.canonical.catalog.SteamPublicPicsFacetSource
+import app.gamenative.library.canonical.catalog.SteamSessionPublicPicsFacetSource
 import app.gamenative.library.canonical.runtime.AmazonOwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.runtime.CanonicalIoDispatcher
 import app.gamenative.library.canonical.runtime.CustomOwnedCopyRuntimeAdapter
@@ -139,6 +143,18 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamCatalogRecordSource(
         implementation: SteamCatalogProvider,
     ): SteamCatalogRecordSource
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamAcceptedIdentityEnrichment(
+        implementation: SteamAcceptedIdentityEnricher,
+    ): SteamAcceptedIdentityEnrichmentSink
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamPublicPicsFacetSource(
+        implementation: SteamSessionPublicPicsFacetSource,
+    ): SteamPublicPicsFacetSource
 
     @Binds
     @Singleton

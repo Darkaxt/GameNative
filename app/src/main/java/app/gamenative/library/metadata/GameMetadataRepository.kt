@@ -1,6 +1,9 @@
 package app.gamenative.library.metadata
 
+import app.gamenative.data.GameSource
+import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.db.dao.CanonicalGameDao
 import app.gamenative.db.dao.GameDetailSnapshotDao
@@ -40,9 +43,22 @@ sealed interface MetadataRefreshResult {
     data object Failed : MetadataRefreshResult
 }
 
+sealed interface MetadataPersistenceResult {
+    data object Persisted : MetadataPersistenceResult
+    data object StaleIdentity : MetadataPersistenceResult
+    data object Failed : MetadataPersistenceResult
+}
+
 interface GameMetadataRepository {
     fun observe(canonicalId: CanonicalGameId): Flow<GameDetailState>
     suspend fun refresh(canonicalId: CanonicalGameId): MetadataRefreshResult
+
+    suspend fun persistValidatedSteamRecord(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        locale: MetadataLocale,
+        record: SteamCatalogRecord,
+    ): MetadataPersistenceResult = MetadataPersistenceResult.Failed
 
     companion object {
         const val CACHE_MAX_AGE_MS: Long = 7L * 24L * 60L * 60L * 1_000L
@@ -127,9 +143,11 @@ class RoomGameMetadataRepository @Inject constructor(
                 .copy(fetchedAtEpochMs = clock.nowEpochMs())
                 .sanitizedForPersistence()
             if (metadata.title.isBlank()) return MetadataRefreshResult.Failed
-            gameFacetRepository.upsertSteamGenresAndSnapshot(
+            val persisted = gameFacetRepository.upsertValidatedSteamMetadata(
                 canonicalId = canonicalId,
+                trustedSteamAppId = trustedSteamId,
                 genres = metadata.genres,
+                features = metadata.features,
                 snapshot = GameDetailSnapshotEntity(
                     canonicalId = canonicalId.value,
                     locale = locale.normalizedLocale,
@@ -140,11 +158,71 @@ class RoomGameMetadataRepository @Inject constructor(
                     sourceRevision = SOURCE_REVISION,
                 ),
             )
+            if (!persisted) return MetadataRefreshResult.NoTrustedSteamId
             MetadataRefreshResult.Refreshed
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
             MetadataRefreshResult.Failed
+        }
+    }
+
+    override suspend fun persistValidatedSteamRecord(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        locale: MetadataLocale,
+        record: SteamCatalogRecord,
+    ): MetadataPersistenceResult {
+        if (trustedSteamAppId <= 0 || record.steamAppId != trustedSteamAppId) {
+            return MetadataPersistenceResult.StaleIdentity
+        }
+        return try {
+            val canonical = canonicalGameDao.get(canonicalId.value)
+                ?.takeIf { it.steamAppId == trustedSteamAppId }
+                ?: return MetadataPersistenceResult.StaleIdentity
+            val metadata = record.metadata
+                .copy(fetchedAtEpochMs = clock.nowEpochMs())
+                .sanitizedForPersistence()
+            if (metadata.title.isBlank()) return MetadataPersistenceResult.Failed
+            val developerKey = metadata.developers.firstOrNull()
+                ?.let(CanonicalNormalization::developerKey)
+                .orEmpty()
+            canonicalGameDao.update(
+                canonical.copy(
+                    displayName = metadata.title,
+                    matchTitleKey = CanonicalNormalization.titleKey(metadata.title),
+                    primaryMetadataSource = GameSource.STEAM,
+                    appType = record.appType.takeUnless { it == CanonicalAppType.UNKNOWN }
+                        ?: canonical.appType,
+                    releaseYear = record.releaseYear ?: canonical.releaseYear,
+                    developerKey = developerKey.ifBlank { canonical.developerKey },
+                    updatedAt = metadata.fetchedAtEpochMs,
+                ),
+            )
+            val persisted = gameFacetRepository.upsertValidatedSteamMetadata(
+                canonicalId = canonicalId,
+                trustedSteamAppId = trustedSteamAppId,
+                genres = metadata.genres,
+                features = metadata.features,
+                snapshot = GameDetailSnapshotEntity(
+                    canonicalId = canonicalId.value,
+                    locale = locale.normalizedLocale,
+                    country = locale.normalizedCountry,
+                    payloadJson = JSON.encodeToString(metadata),
+                    provenanceJson = JSON.encodeToString(metadata.provenance()),
+                    fetchedAt = metadata.fetchedAtEpochMs,
+                    sourceRevision = SOURCE_REVISION,
+                ),
+            )
+            if (persisted) {
+                MetadataPersistenceResult.Persisted
+            } else {
+                MetadataPersistenceResult.StaleIdentity
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            MetadataPersistenceResult.Failed
         }
     }
 

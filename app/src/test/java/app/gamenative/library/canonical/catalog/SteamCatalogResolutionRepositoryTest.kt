@@ -47,6 +47,7 @@ class SteamCatalogResolutionRepositoryTest {
     private lateinit var db: PluviaDatabase
     private lateinit var writer: FakeDecisionWriter
     private lateinit var diagnostics: FakeDiagnostics
+    private lateinit var enrichment: FakeAcceptedIdentityEnrichment
     private val scope = AccountScope("2".repeat(64))
 
     @Before
@@ -57,6 +58,7 @@ class SteamCatalogResolutionRepositoryTest {
             .build()
         writer = FakeDecisionWriter()
         diagnostics = FakeDiagnostics()
+        enrichment = FakeAcceptedIdentityEnrichment()
     }
 
     @After
@@ -203,6 +205,7 @@ class SteamCatalogResolutionRepositoryTest {
         val accepted = writer.operations.single() as DecisionOperation.Accepted
         assertEquals(1, accepted.steamAppId)
         assertEquals(CanonicalAppType.GAME, accepted.appType)
+        assertEquals(listOf(EnrichmentCall(1, MetadataLocale("en-US", "US"))), enrichment.calls)
     }
 
     @Test
@@ -283,6 +286,29 @@ class SteamCatalogResolutionRepositoryTest {
         assertEquals(0, retried.failed)
         assertEquals(1, retried.unmatched)
         assertEquals(1, writer.operations.filterIsInstance<DecisionOperation.Unmatched>().size)
+    }
+
+    @Test
+    fun `manual confirmation enriches the validated selected identity`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        val selected = match(key(GameSource.GOG, "manual-confirm"), canonical.canonicalId, title = "Manual Marker")
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(selected)
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ ->
+                listOf(SteamStoreSearchHit(42, "Manual Marker", null))
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(steamAppId, "Manual Marker", "Studio", 2020)
+            },
+        )
+
+        repository.searchManually(expected(selected), "Manual Marker")
+        val result = repository.confirmCandidate(expected(selected), 42)
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, result)
+        assertEquals(listOf(EnrichmentCall(42, MetadataLocale("en-US", "US"))), enrichment.calls)
+        assertTrue(writer.operations.single() is DecisionOperation.Confirmed)
     }
 
     @Test
@@ -370,6 +396,7 @@ class SteamCatalogResolutionRepositoryTest {
         decisionWriter = writer,
         localeProvider = MetadataLocaleProvider { MetadataLocale("en-US", "US") },
         diagnostics = diagnostics,
+        acceptedIdentityEnrichment = enrichment,
         clock = MetadataClock { 1_000L },
     )
 
@@ -516,6 +543,19 @@ class SteamCatalogResolutionRepositoryTest {
         }
     }
 
+    private class FakeAcceptedIdentityEnrichment : SteamAcceptedIdentityEnrichmentSink {
+        val calls = mutableListOf<EnrichmentCall>()
+
+        override suspend fun enrich(
+            trustedSteamAppId: Int,
+            locale: MetadataLocale,
+            record: SteamCatalogRecord,
+        ): SteamAcceptedIdentityEnrichmentResult {
+            calls += EnrichmentCall(trustedSteamAppId, locale)
+            return SteamAcceptedIdentityEnrichmentResult.Enriched
+        }
+    }
+
     private class FakeDiagnostics : SteamCatalogResolutionDiagnosticSink {
         val events = mutableListOf<SteamResolutionDiagnosticEvent>()
 
@@ -523,6 +563,11 @@ class SteamCatalogResolutionRepositoryTest {
             events += event
         }
     }
+
+    private data class EnrichmentCall(
+        val steamAppId: Int,
+        val locale: MetadataLocale,
+    )
 
     private sealed interface DecisionOperation {
         val key: OwnedCopyKey

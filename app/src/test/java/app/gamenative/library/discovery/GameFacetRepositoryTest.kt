@@ -13,6 +13,7 @@ import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.data.canonical.SteamTagDictionaryEntity
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.db.dao.GameDetailSnapshotDao
+import app.gamenative.library.canonical.catalog.SteamPublicPicsFacets
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameMetadataProvenance
 import app.gamenative.library.metadata.MetadataFacet
@@ -110,6 +111,36 @@ class GameFacetRepositoryTest {
                 snapshots = listOf(snapshot),
             ),
         )
+    }
+
+    @Test
+    fun publicPicsFacetsUpdateOnlyTrustedCanonicalWithoutCreatingSteamOwnership() = runTest {
+        database.canonicalGameDao().insert(canonical().copy(classificationState = ClassificationState.UNCLASSIFIED))
+        val repository = RoomGameFacetRepository(
+            database = database,
+            facetDao = database.canonicalFacetDao(),
+            snapshotDao = database.gameDetailSnapshotDao(),
+        )
+
+        val persisted = repository.upsertSteamPicsFacets(
+            canonicalId = CANONICAL_ID,
+            trustedSteamAppId = 42,
+            facets = SteamPublicPicsFacets(
+                genreIds = setOf(1),
+                categoryIds = setOf(2),
+                storeTagIds = setOf(19),
+            ),
+        )
+
+        assertEquals(true, persisted)
+        assertEquals(listOf("steam:1"), database.canonicalFacetDao().getGenres(CANONICAL_ID.value).map { it.genreKey })
+        assertEquals(listOf("steam:2"), database.canonicalFacetDao().getFeatures(CANONICAL_ID.value).map { it.featureKey })
+        assertEquals(listOf(19), database.canonicalFacetDao().getTags(CANONICAL_ID.value).map { it.tagId })
+        assertEquals(
+            ClassificationState.CLASSIFIED,
+            database.canonicalGameDao().get(CANONICAL_ID.value)?.classificationState,
+        )
+        assertEquals(null, database.steamAppDao().findApp(42))
     }
 
     @Test
