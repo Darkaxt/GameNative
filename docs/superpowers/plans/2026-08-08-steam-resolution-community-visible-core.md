@@ -14,7 +14,7 @@
 
 ## 1. Delivery discipline
 
-The implementation produces three visible signed RCs:
+The implementation first produces three highest-priority visible signed RCs:
 
 | Core deliverable | Initial reserved release |
 |---|---|
@@ -35,7 +35,9 @@ For each deliverable:
 7. publish one signed fork RC;
 8. stop the deliverable and report the visible acceptance path.
 
-A second surviving Critical/High blocker stops delivery. Medium/Low findings are recorded for the final core correction unless they prevent the visible path.
+A second surviving Critical/High blocker stops delivery. Every Medium/Low finding receives a design-ledger ID, target task/stage, and acceptance condition before the cross-check closes.
+
+RC5–RC7 do not end the plan. Tasks 15–19 execute the design ledger's resolver/detail completion, community completion, external-storage hardening, LSFG decision, and aggregate upstream handoff. An item may leave the plan only with implementation evidence or an explicit user-approved permanent-boundary decision.
 
 ## 2. File structure
 
@@ -997,7 +999,7 @@ git commit -m "chore: prepare native Discussions RC" -m "Co-Authored-By: Claude 
 
 ---
 
-### Task 14: Run one aggregate core correction and hand off follow-up work
+### Task 14: Reconcile the completion ledger after the three core RCs
 
 **Files:**
 - Create: `docs/superpowers/reviews/2026-08-08-steam-visible-core-final-cross-check.md`
@@ -1021,9 +1023,9 @@ Run the owning test classes from Tasks 2–13 in Legacy and Modern, migration/sc
 
 Compare exact failures with the recorded inherited baseline. Do not loop broad commands. New attributable Critical/High failures block the final core RC; inherited failures are reported without weakening invariants.
 
-- [ ] **Step 4: Make one final core correction decision**
+- [ ] **Step 4: Make one final core correction and ledger decision**
 
-Fix only:
+Fix current Critical/High defects involving:
 
 - active visible-path failures;
 - false identity merges or stale mutation;
@@ -1033,7 +1035,7 @@ Fix only:
 - unbounded memory/network behavior;
 - Reviews/Discussions failure coupling.
 
-Defer storage mover, LSFG, broad detail parity, community authentication, persistent UGC, global catalog indexing, and unrelated cleanup into separately approved designs.
+Then update every row in design Section 15 with observed status, target task, owner, and completion evidence. Tasks 15–19 own resolver durability/global coverage, detail parity, community completion, storage hardening, LSFG disposition, aggregate release, and upstream handoff. No row may be removed or left with a generic deferred status.
 
 - [ ] **Step 5: Commit and push the final evidence**
 
@@ -1043,7 +1045,276 @@ git commit -m "docs: cross-check Steam visible core" -m "Co-Authored-By: Claude 
 git push fork HEAD:codex/steam-normalized-game-details-spec
 ```
 
-Prepare an additional signed RC only when this gate changes production code. Official upstream PR construction begins only after the user tests the resolver, Reviews, and Discussions releases. Exclude fork-only package IDs, signing, branding, versioning, and release workflow commits from the upstream PR.
+Prepare an additional signed RC when this gate changes production code, then continue to Task 15. Official upstream PR construction starts only after Tasks 15–19 reach their recorded closure state. Exclude fork-only package IDs, signing, branding, versioning, and release workflow commits from the upstream PR.
+
+---
+
+### Task 15: Complete resolver durability and native detail parity
+
+**Ledger:** R4–R6, P2, D2–D4, A1
+
+**Files:**
+- Create: `app/src/main/java/app/gamenative/data/canonical/SteamCatalogResolutionAttemptEntity.kt`
+- Create: `app/src/main/java/app/gamenative/data/canonical/RejectedSteamCandidateEntity.kt`
+- Modify: `gradle/libs.versions.toml`
+- Modify: `app/build.gradle.kts`
+- Modify: `app/src/main/java/app/gamenative/db/PluviaDatabase.kt`
+- Modify: `app/src/main/java/app/gamenative/db/migration/RoomMigration.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogResolutionRepository.kt`
+- Modify: `app/src/main/java/app/gamenative/ui/model/SteamMatchViewModel.kt`
+- Create: `app/src/main/java/app/gamenative/db/dao/SteamCatalogResolutionDao.kt`
+- Modify: `app/src/main/java/app/gamenative/db/dao/StoreMatchDao.kt`
+- Test: `app/src/androidTest/java/app/gamenative/db/CanonicalMigrationTest.kt`
+- Test: `app/src/test/java/app/gamenative/db/migration/RoomMigrationTest.kt`
+- Modify: `app/src/main/java/app/gamenative/library/canonical/CanonicalLibraryRepository.kt`
+- Modify: `app/src/main/java/app/gamenative/ui/screen/library/CanonicalGameDetailScreen.kt`
+- Modify: `app/src/main/java/app/gamenative/ui/screen/library/LibraryScreen.kt`
+- Modify: `app/src/main/java/app/gamenative/ui/model/GameDetailViewModel.kt`
+- Test: `app/src/test/java/app/gamenative/library/canonical/CanonicalLibraryRepositoryTest.kt`
+- Test: `app/src/test/java/app/gamenative/ui/model/GameDetailViewModelTest.kt`
+- Test: `app/src/androidTest/java/app/gamenative/ui/screen/library/CanonicalGameDetailScreenTest.kt`
+- Create: `docs/superpowers/reviews/2026-08-08-resolver-detail-completion-cross-check.md`
+
+- [ ] **Step 1: Measure aggregate resolver coverage**
+
+Add a 900-canonical fixture with representative exact, edition, duplicate-name, missing-developer, missing-year, and no-result cases. Record only aggregate categories. The completion threshold is:
+
+```kotlin
+data class ResolverCoverage(
+    val eligible: Int,
+    val autoAccepted: Int,
+    val reviewRequired: Int,
+    val unmatched: Int,
+) {
+    val usefulCoveragePercent: Int
+        get() = if (eligible == 0) 100 else
+            ((autoAccepted + reviewRequired) * 100) / eligible
+}
+```
+
+`usefulCoveragePercent >= 80` closes the global-index expansion trigger. A lower result requires the local global-AppList candidate index in Step 3; it cannot be silently accepted.
+
+- [ ] **Step 2: Add durable attempt and rejection history**
+
+Migrate schema 27→28 with immutable exports and upgrade tests. Store only canonical/candidate IDs, evidence hash, fixed status, resolver version, and timestamps—never titles or queries:
+
+```kotlin
+enum class SteamCatalogResolutionStatus {
+    PENDING,
+    AUTO_ACCEPTED,
+    REVIEW_REQUIRED,
+    UNMATCHED,
+    FAILED,
+}
+
+@Entity(tableName = "steam_catalog_resolution_attempt")
+data class SteamCatalogResolutionAttemptEntity(
+    @PrimaryKey @ColumnInfo("canonical_id") val canonicalId: String,
+    @ColumnInfo("evidence_hash") val evidenceHash: String,
+    @ColumnInfo("resolver_version") val resolverVersion: Int,
+    @ColumnInfo("status") val status: SteamCatalogResolutionStatus,
+    @ColumnInfo("attempted_at") val attemptedAt: Long,
+)
+
+@Entity(
+    tableName = "rejected_steam_candidate",
+    primaryKeys = ["account_scope", "source", "stable_source_id", "steam_app_id"],
+)
+data class RejectedSteamCandidateEntity(
+    @ColumnInfo("account_scope") val accountScope: String,
+    @ColumnInfo("source") val source: GameSource,
+    @ColumnInfo("stable_source_id") val stableSourceId: String,
+    @ColumnInfo("steam_app_id") val steamAppId: Int,
+    @ColumnInfo("rejected_at") val rejectedAt: Long,
+)
+```
+
+Add `androidx.work:work-runtime-ktx:2.10.5` through `gradle/libs.versions.toml` and `app/build.gradle.kts`.
+
+Add unique WorkManager work constrained to network availability. It reads only IDs/hashes from persisted input, reconstructs current evidence from Room, revalidates presence/current decision, and resumes unresolved attempts. Search text never enters WorkManager data.
+
+- [ ] **Step 3: Apply the coverage-triggered catalog expansion**
+
+If Step 1 is below 80%, add a bounded keyless Steam AppList download and app-private local title-key index. The index stores public AppID/title keys only, validates candidates through `appdetails`, and never becomes action authority. If Step 1 is at least 80%, record the measured closure in the cross-check and do not add the index.
+
+Evaluate the existing GOG map only as a candidate hint. It remains review-required unless a map source satisfies the validated one-to-one contract.
+
+- [ ] **Step 4: Finish Steam-first card/detail parity**
+
+Use accepted cached Steam metadata for card title/artwork with source fallback. Restore the integrated guarded install/play action bar. Complete the original design's Overview/Details field/provenance matrix, move all resource links into Details, and finish canonical-detail gamepad B/focus/semantics/translations.
+
+- [ ] **Step 5: Verify, cross-check, correct once, and publish**
+
+Run resolver scale, schema migration, card repository, detail ViewModel/Compose, action-routing, privacy, and release-contract tests in Legacy and Modern. Cross-check every assigned ledger ID, apply one blocker correction pass, update the ledger with evidence, sync upstream, and publish the next signed RC using Task 7's immutable-tag/four-APK/signature procedure.
+
+---
+
+### Task 16: Complete public community browsing
+
+**Ledger:** V2, C2, A1; permanent-boundary verification for V3 and C3
+
+**Files:**
+- Modify: `app/src/main/java/app/gamenative/library/community/SteamCommunityModels.kt`
+- Modify: `app/src/main/java/app/gamenative/library/community/SteamCommunityUrlPolicy.kt`
+- Modify: `app/src/main/java/app/gamenative/library/community/SteamCommunityTransport.kt`
+- Modify: `app/src/main/java/app/gamenative/library/community/SteamReviewPageProvider.kt`
+- Modify: `app/src/main/java/app/gamenative/library/community/SteamDiscussionProvider.kt`
+- Modify: `app/src/main/java/app/gamenative/library/community/SteamDiscussionParser.kt`
+- Modify: `app/src/main/java/app/gamenative/library/community/InMemorySteamCommunityRepository.kt`
+- Modify: `app/src/main/java/app/gamenative/ui/screen/library/components/SteamReviewsTab.kt`
+- Modify: `app/src/main/java/app/gamenative/ui/screen/library/components/SteamDiscussionsTab.kt`
+- Modify: `app/src/main/java/app/gamenative/ui/model/GameDetailViewModel.kt`
+- Test: `app/src/test/java/app/gamenative/library/community/SteamReviewPageProviderTest.kt`
+- Test: `app/src/test/java/app/gamenative/library/community/SteamDiscussionProviderTest.kt`
+- Test: `app/src/test/java/app/gamenative/library/community/SteamDiscussionParserTest.kt`
+- Test: `app/src/test/java/app/gamenative/library/community/InMemorySteamCommunityRepositoryTest.kt`
+- Test: `app/src/test/java/app/gamenative/ui/model/GameDetailViewModelTest.kt`
+- Create fixtures: `app/src/test/resources/steam/community/review-comments.html`, `discussion-search.html`, `discussion-category.html`, and `discussion-thread-page-2.html`
+- Create: `docs/superpowers/reviews/2026-08-08-community-completion-cross-check.md`
+
+- [ ] **Step 1: Capture safe public fixtures and write failing parsers**
+
+Use synthetic or publicly reproducible sanitized fixtures for review-comment pages, additional review filters, discussion search, categories, and pagination. Remove usernames, SteamIDs, titles, URLs, and bodies that are not necessary to prove selectors. Tests must fail closed when a layout cannot bind every route to the trusted AppID.
+
+- [ ] **Step 2: Implement safe public review-comment reading where available**
+
+Add native read-only comments only when an unauthenticated, no-cookie, endpoint-bound route is fixture-proven. Comment bodies follow the same active-session-only limits as reviews. Posting/replying remains an explicit external action. If no safe public route exists, present the evidence and obtain user approval before closing V2 as an external permanent boundary.
+
+- [ ] **Step 3: Expand discussion coverage**
+
+Add fixture-supported categories, in-memory search, and validated multipage listing/thread navigation. Search text remains ViewModel memory only. Unsupported layouts retain Open Community/Open Thread and a fixed explanation.
+
+- [ ] **Step 4: Complete community UX coverage**
+
+Finish focus order, gamepad Back, accessibility state announcements, and translations for every Reviews/Discussions state and action. Verify review/discussion failures remain independent.
+
+- [ ] **Step 5: Verify, cross-check, correct once, and publish**
+
+Run community transport/parser/repository/ViewModel/Compose/privacy tests in Legacy and Modern plus Android-test compilation. Resolve every assigned ledger row with implementation evidence or explicit user-approved boundary, sync upstream, and publish the next signed community-completion RC.
+
+---
+
+### Task 17: Harden external-storage movement and recovery
+
+**Ledger:** S1–S3
+
+**Files:**
+- Modify: `app/src/main/java/app/gamenative/utils/ContainerStorageManager.kt`
+- Modify: `app/src/main/java/app/gamenative/utils/StorageUtils.kt`
+- Modify: `app/src/main/java/app/gamenative/service/DownloadService.kt`
+- Modify: `app/src/main/java/app/gamenative/db/dao/GOGGameDao.kt`
+- Modify: `app/src/main/java/app/gamenative/db/dao/EpicGameDao.kt`
+- Modify: `app/src/main/java/app/gamenative/db/dao/AmazonGameDao.kt`
+- Create: `app/src/main/java/app/gamenative/storage/GameMoveJournal.kt`
+- Create: `app/src/test/java/app/gamenative/storage/GameMoveCoordinatorTest.kt`
+- Create: `docs/superpowers/reviews/2026-08-08-external-storage-hardening-cross-check.md`
+
+- [ ] **Step 1: Write failing move-safety tests**
+
+Cover same-volume rename, cross-volume copy, insufficient capacity, short writes, checksum mismatch, cancellation, destination collision, metadata-update failure, active download/update/run exclusion, source unmount, destination unmount, read-only media, retry, rollback, and recovery after interruption.
+
+- [ ] **Step 2: Add a durable move journal**
+
+```kotlin
+enum class GameMovePhase { PLANNED, COPYING, VERIFIED, PROMOTED, METADATA_UPDATED, SOURCE_REMOVED }
+
+data class GameMoveJournal(
+    val operationId: String,
+    val sourceKind: GameSource,
+    val sourceRootHash: String,
+    val destinationRootHash: String,
+    val phase: GameMovePhase,
+    val copiedBytes: Long,
+    val expectedBytes: Long,
+)
+```
+
+Persist only fixed source kind, hashed roots, counts, and phase in app-private storage. Never place install paths in diagnostics.
+
+- [ ] **Step 3: Implement copy-verify-promote-delete**
+
+Preflight free space and state guards. Copy into a destination staging directory without deleting source files, drain every write, verify the completed manifest/checksums, promote, update source metadata, then remove the source. The journal makes every interrupted phase recoverable or safely retryable.
+
+- [ ] **Step 4: Validate storage/device behavior**
+
+Run unit/integration tests first. Then claim explicit thread-scoped ownership of physical SD/USB devices or a separate AVD serial. Test fresh/full/read-only/removed/reinserted media, legacy and modern flavors, compatibility and side-by-side roots, Steam/GOG/Epic/Amazon move/update/launch/uninstall, and interruption recovery. Never touch an occupied device.
+
+- [ ] **Step 5: Cross-check, correct once, and publish**
+
+Resolve S1–S3 with exact evidence, sync upstream, and publish a signed storage-hardening RC.
+
+---
+
+### Task 18: Decide and, if approved, implement safe per-container LSFG import
+
+**Ledger:** L1
+
+**Files if approved:**
+- Modify: `app/src/main/java/app/gamenative/ui/component/dialog/GraphicsTab.kt`
+- Modify: `app/src/main/java/app/gamenative/utils/LsfgVkManager.kt`
+- Modify: `app/src/main/java/app/gamenative/utils/ContainerUtils.kt`
+- Modify: `app/src/main/java/com/winlator/container/ContainerData.kt`
+- Create: `app/src/main/java/app/gamenative/utils/ManagedLsfgImporter.kt`
+- Create: `app/src/test/java/app/gamenative/utils/ManagedLsfgImporterTest.kt`
+- Create: `docs/superpowers/reviews/2026-08-08-lsfg-decision-and-cross-check.md`
+
+- [ ] **Step 1: Present a concrete user decision**
+
+Show the benefit, Wine execution risk, validation limits, per-container behavior, and storage model. L1 cannot close through assistant inference. Record either explicit rejection or approval.
+
+- [ ] **Step 2: If approved, write failing importer tests**
+
+Cover valid bounded PE/DLL input, invalid/empty/oversized input, interrupted copy, existing valid asset preservation, atomic replacement, remove, stale reference, multiple containers with different assets, and Steam-installed-versus-manual priority.
+
+- [ ] **Step 3: Implement managed import**
+
+```kotlin
+data class ManagedLsfgAsset(
+    val relativePath: String,
+    val sha256: String,
+    val sizeBytes: Long,
+)
+```
+
+Copy a content URI to a temporary app-private file, enforce a 64 MiB limit, validate DOS/PE headers and DLL characteristics, hash, fsync, atomically promote, and store a relative managed identity per container. Provide explicit Replace, Remove, missing-file, and import-error UI. Never share one mutable global absolute path across containers.
+
+- [ ] **Step 4: Verify and close L1**
+
+If implemented, run focused tests, one safety cross-check/correction, upstream sync, and a signed LSFG RC. If rejected, commit the explicit user decision and rationale; no release is required.
+
+---
+
+### Task 19: Close the ledger and prepare the final upstream handoff
+
+**Ledger:** F1 and every row not closed by Tasks 1–18
+
+**Files:**
+- Create: `docs/superpowers/reviews/2026-08-08-steam-first-completion-ledger.md`
+- Modify if assigned by the ledger: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogResolutionRepository.kt`
+- Modify if assigned by the ledger: `app/src/main/java/app/gamenative/ui/model/GameDetailViewModel.kt`
+- Modify if assigned by the ledger: `app/src/main/java/app/gamenative/utils/ContainerStorageManager.kt`
+- Modify if L1 was approved: `app/src/main/java/app/gamenative/utils/ManagedLsfgImporter.kt`
+- Modify the exact owning tests named in the unresolved ledger rows.
+
+- [ ] **Step 1: Prove every ledger row has closure evidence**
+
+The final ledger lists implementation commit/tests/release for implemented rows and explicit user approval for permanent boundaries. Any row with a generic deferred, optional, later, or unassigned state blocks completion.
+
+- [ ] **Step 2: Run the aggregate gates once**
+
+Run full Legacy/Modern unit suites with `--continue`, Legacy lint, schema migration/export tests, all four release-workflow contracts, release assembly, and the explicitly authorized device matrix. Record inherited failures separately; do not loop broad commands.
+
+- [ ] **Step 3: Apply one final attributable correction**
+
+Fix final Critical/High defects and ledger-assigned final corrections only. Rerun their owning tests and the release sentinels.
+
+- [ ] **Step 4: Publish the final signed fork RC**
+
+Sync current official upstream, fast-forward fork master, create one immutable increasing tag, publish four signed APKs, and verify checksums/version/packages/v2 signature/persistent fork certificate.
+
+- [ ] **Step 5: Prepare the official PR series**
+
+Rebase or merge from then-current official master, retain upstream-compatible feature commits, and exclude fork-only application IDs, signing, branding, version bumps, release notes, tags, and publication workflow commits. Do not push to official origin; open the PR only after the user's signed-build testing.
 
 ---
 
@@ -1063,5 +1334,11 @@ Prepare an additional signed RC only when this gate changes production code. Off
 | Reviews cross-check/release | 10 |
 | Safe native Discussions | 11–12 |
 | Discussions cross-check/release | 13 |
-| 80/20 rewrite/defer and final correction | 7, 10, 13, 14 |
-| Official sync and persistent signing | 1, 7, 10, 13 |
+| Per-deliverable 80/20 classification/correction | 7, 10, 13–14 |
+| Resolver durability, coverage, and detail parity | 15 |
+| Review comments and broader community coverage | 16 |
+| External-storage safety and recovery | 17 |
+| Explicit LSFG decision and safe implementation | 18 |
+| No-forgotten completion ledger | 14–19 |
+| Aggregate final gate and official handoff | 19 |
+| Official sync and persistent signing | 1, 7, 10, 13, 15–19 |

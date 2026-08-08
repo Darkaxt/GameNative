@@ -12,7 +12,7 @@ GameNative will complete the missing visible core in this strict order:
 1. Resolve non-Steam-owned games to authoritative Steam catalog entries automatically as a best effort, then provide a visible **Fix Steam match** flow for ambiguous or incorrect results.
 2. Replace the Reviews placeholder with native, cursor-paginated Steam review browsing.
 3. Replace the Discussions placeholder with native public discussion listings and readable threads.
-4. Only after those three features ship, address external-storage hardening and consider a safe manual LSFG import.
+4. Execute the named resolver/detail completion, community completion, external-storage hardening, LSFG decision, and aggregate upstream-handoff stages without dropping ledger items.
 
 The resolver must not turn a roughly 500-game non-Steam collection into 500 manual chores. Automatic catalog search and conservative multi-field validation do the common work. Manual selection is the correction path, not the indexing strategy.
 
@@ -44,18 +44,27 @@ The design succeeds when the user can:
 - One focused design cross-check and at most one consolidated blocker correction after each core deliverable.
 - One signed fork RC after each core deliverable.
 
-### 3.2 Deferred
+### 3.2 Scheduled after the first three RCs
 
-- A full local index of the global Steam AppList or Room FTS catalog.
-- WorkManager/process-death catalog resolution.
-- Automatic fuzzy or edition-ambiguous merging.
-- Treating unsigned GOG maps, indirect Epic→GOG→Steam joins, SteamGridDB, autocomplete order, or first search result as authoritative.
-- Persistent review bodies, discussion bodies, usernames, profiles, avatars, SteamIDs, account IDs, or community HTML.
-- Authenticated review/discussion posting, comments, voting, reporting, moderation, or copied Steam cookies.
-- WebView-based community browsing.
-- Full community search and every Steam forum category/layout.
-- External-storage changes and LSFG work until the three visible core deliverables ship.
-- A broad redesign of the library/detail architecture.
+These items are not removed from the project. Section 15 assigns each one a named stage, acceptance condition, and closure rule:
+
+- resolver durability, candidate history, broader catalog indexing, fuzzy candidate quality, and indirect mapping hints;
+- Steam-first card artwork/title precedence and remaining native detail/action-bar parity;
+- review-comment reading, broader review identity presentation, community search/categories, and additional thread layouts where a safe public path exists;
+- global accessibility, gamepad, and translation completion for the shipped paths;
+- transactional external-storage movement and device/mount recovery;
+- a safe per-container LSFG import decision and, if accepted, implementation;
+- aggregate hardening, signed final RC, and official upstream PR preparation.
+
+### 3.3 Permanent safety and product boundaries
+
+These are explicit rejected designs rather than forgotten features. Reconsidering one requires a new user-approved design that changes the named invariant:
+
+- Persisting review bodies, discussion bodies, usernames, profiles, avatars, SteamIDs, account IDs, or community HTML is rejected by the mandatory privacy contract.
+- Copying Steam cookies, embedding authenticated WebViews, or silently performing authenticated posting/voting/moderation is rejected by the credential and source-authority boundaries. Unsupported authenticated actions remain explicit external Steam actions.
+- Treating unsigned GOG maps, indirect Epic→GOG→Steam joins, SteamGridDB, autocomplete order, or the first search result as automatic identity authority is rejected by the false-merge boundary. They may be separately validated candidate hints.
+- Automatic merging of fuzzy or edition-ambiguous candidates is rejected; those candidates remain user-reviewable.
+- A broad rewrite of the canonical library or detail shell is rejected unless a later deterministic blocker proves the current boundary structurally unusable.
 
 ## 4. The 80/20 and rewrite rule
 
@@ -66,7 +75,7 @@ Every touched subsystem is classified before implementation and again during tha
 | **Reuse** | The current boundary already preserves the required semantics and has owning evidence. Use it unchanged or through a thin adapter. |
 | **Narrow repair now** | The active feature touches the seam and a bounded correction is required for visible behavior, identity safety, URL/content safety, diagnostics privacy, source-action safety, or reliable recovery. |
 | **Rewrite now** | The existing boundary structurally violates the active contract and wrapping it would retain the defect. Rewrite only that boundary. |
-| **Defer** | The issue belongs to a later named deliverable or final hardening, and it neither blocks the current visible path nor creates a Critical/High safety or privacy defect. Record it once and move forward. |
+| **Defer to named stage** | The issue does not block the active visible path or create a current Critical/High safety/privacy defect. Assign a ledger ID, target stage, acceptance condition, and closure evidence before moving forward. An unassigned deferred item blocks the cross-check. |
 
 A rewrite is not justified by style, test difficulty, age, file size alone, or an opportunity to make the architecture ideal. A rewrite is justified when the old implementation cannot safely implement the current feature.
 
@@ -79,7 +88,7 @@ A rewrite is not justified by style, test difficulty, age, file size alone, or a
 | `CanonicalProjectionCoordinator` | Reuse | Keep local projection network-free and transactional. |
 | `RoomCanonicalMutationRepository` | Narrow repair | Add guarded automatic/manual confirm, reject, candidate, and reset operations. |
 | `GogRecommendationsRepository.searchSteamAppId` | Rewrite if reused | It is recommendation-specific, first-result-oriented, hard-coded, and may log forbidden context. New catalog transport is required. |
-| `GogMapRepository` as authority | Defer | It may provide a review-only hint after separate validation, never an automatic identity. |
+| `GogMapRepository` as authority | Named-stage candidate hint | Stage 4 may validate it as a review-only hint; it can never become automatic authority without satisfying the direct-map contract. |
 | Steam `appdetails` metadata provider | Narrow repair | Reuse parsing/security; expose candidate app type/year evidence and persist accepted metadata. |
 | PICS association parsing | Narrow repair | Add a session-bound public facet façade for trusted non-owned AppIDs; do not insert false ownership. |
 | Popularity threshold and sort | Reuse | They are already source-agnostic once a canonical has a Steam AppID/count. |
@@ -87,8 +96,8 @@ A rewrite is not justified by style, test difficulty, age, file size alone, or a
 | Aggregate review-count provider | Reuse | Keep it separate from full review browsing. |
 | Review browsing | New boundary | No production implementation exists. |
 | Discussion browsing | New boundary | No production implementation exists. |
-| Community persistence | Do not implement | It conflicts with the mandatory privacy contract. |
-| External-storage mover | Defer | Important risks exist, but it does not block the three visible core features. |
+| Community body persistence | Permanent boundary | Rejected by Section 3.3 privacy invariants; active-session memory and external fallback provide the supported behavior. |
+| External-storage mover | Named Stage 5 | Harden transactionality, recovery, and device behavior after visible-core completion. |
 
 ## 5. Shared invariants
 
@@ -217,7 +226,7 @@ Every transaction revalidates:
 9. Publish progress and continue after per-game failures.
 10. Stop promptly when the owning scope is cancelled. Accepted decisions already committed remain valid; a later run naturally resumes unresolved games.
 
-The 80/20 release uses no new Room table. Automatic scanning runs once per process session and may use only a fixed global last-success timestamp/resolver version in DataStore to avoid immediate repeat scans. Candidate lists and search strings remain memory-only. A later WorkManager/schema design is justified only if live evidence shows foreground resume is inadequate.
+The 80/20 first release uses no new Room table. Automatic scanning runs once per process session and may use only a fixed global last-success timestamp/resolver version in DataStore to avoid immediate repeat scans. Candidate lists and search strings remain memory-only. Stage 4 then adds schema-28 durable attempt/rejection history and WorkManager resume, and applies the measured 80% coverage trigger for a broader local catalog index.
 
 ### 6.3 Automatic acceptance policy
 
@@ -357,7 +366,7 @@ The Reviews tab provides:
 - native plain-text cards;
 - an explicit **Open Steam Reviews** fallback for authenticated or unsupported actions.
 
-Writing, commenting, voting, reporting, profile navigation, and nested review-comment browsing remain external/deferred.
+Writing, commenting, voting, reporting, profile navigation, and nested review-comment browsing use explicit Steam actions in Deliverable 2. Stage 5 implements every safe fixture-backed public read-only path and requires user approval to close any remainder as a permanent external boundary.
 
 A Reviews failure cannot blank Overview, Discussions, Details, Copies, or source actions.
 
@@ -432,11 +441,10 @@ Before Reviews ships:
 
 ## 10. Storage and schema
 
-- Schema remains 27 for all three deliverables.
+- Deliverables 1–3 remain on schema 27; Stage 4 migrates to schema 28 for durable attempt and multi-candidate rejection history with immutable schema export and upgrade tests.
 - Accepted/rejected/reset match decisions use existing canonical/store-match storage.
 - Sanitized Steam detail snapshots and facet cross-references remain the only persisted catalog content.
 - Review/discussion content receives no Room entity, DataStore key, serialization annotation, WorkManager payload, or disk cache.
-- A schema 28 candidate/history table is deferred unless real testing proves that rerun search and the existing sticky-decision model are insufficient.
 
 ## 11. Diagnostics
 
@@ -455,12 +463,12 @@ Each core deliverable follows exactly:
 1. One implementation pass.
 2. Owning tests only.
 3. One focused diff-to-design cross-check.
-4. Classification of every confirmed discrepancy as Reuse, Narrow repair now, Rewrite now, or Defer.
+4. Classification of every confirmed discrepancy as Reuse, Narrow repair now, Rewrite now, Named-stage work, or Permanent boundary.
 5. One consolidated correction commit for all confirmed Critical/High blockers.
 6. Rerun only affected owning tests plus privacy/action/release sentinels.
 7. Sync official upstream, publish one signed fork RC, and run the visible acceptance path.
 
-A finding is confirmed only by a deterministic test, reproduction, or direct violated invariant. Medium/Low findings are recorded and deferred unless they prevent the visible acceptance path. If a second Critical/High blocker survives the single correction pass, stop and report instead of starting another review loop or the next feature.
+A finding is confirmed only by a deterministic test, reproduction, or direct violated invariant. Every Medium/Low finding receives a completion-ledger ID and named target stage unless the user explicitly accepts it as a permanent boundary. If a second Critical/High blocker survives the single correction pass, stop and report instead of starting another review loop or the next feature.
 
 Cross-check documents:
 
@@ -468,7 +476,7 @@ Cross-check documents:
 - `docs/superpowers/reviews/2026-08-08-native-reviews-cross-check.md`
 - `docs/superpowers/reviews/2026-08-08-native-discussions-cross-check.md`
 
-Each document records verified requirements, immediate correction, deferred items with owner, diagnostics/privacy evidence, exact tests, release commit/tag, and visible acceptance result.
+Each document records verified requirements, immediate correction, every new ledger item with owner/target/acceptance condition, diagnostics/privacy evidence, exact tests, release commit/tag, and visible acceptance result. A cross-check with an unassigned item is incomplete.
 
 ## 13. Release sequence
 
@@ -493,18 +501,82 @@ Before every release:
 - never expose signing-secret values;
 - never touch an occupied device. Instrumentation requires an explicitly claimed separate AVD and serial.
 
-## 14. Final hardening after all three core features
+## 14. Completion stages after the three visible-core RCs
 
-Only after the resolver, Reviews, and Discussions have each shipped:
+The first three RCs establish the highest-value paths; they do not close the project. The following named stages are part of this specification and remain visible in the plan until completed or explicitly rejected by the user.
 
-- run one aggregate broad test/lint/design gate;
-- fix remaining core-attributable Critical/High issues and the highest-value deferred Medium issues;
-- validate the signed side-by-side upgrade path;
-- prepare the official upstream PR while excluding fork-only signing, package, branding, version, and publication commits;
-- create a separate design/plan for transactional external-storage moves;
-- decide separately whether a safe per-container LSFG import is worth implementing.
+### Stage 4 — resolver and detail completion
 
-## 15. Acceptance criteria
+- Run the aggregate resolver coverage fixture and record only counts.
+- If strict targeted search resolves or surfaces credible candidates for less than 80% of eligible non-Steam canonicals, add the next bounded candidate source: global AppList/local index, validated GOG hints, alternate normalization, or durable candidate history according to measured failure categories.
+- Decide WorkManager/process-death resume with evidence from the 900-game fixture and live scan completion. Implement it if foreground scanning cannot complete/resume acceptably; otherwise close it with recorded evidence rather than silence.
+- Finish Steam-first card title/artwork precedence for accepted matches.
+- Restore the integrated detail action bar and remaining approved Overview/Details fields.
+- Complete gamepad, accessibility, and translation coverage for the resolver/detail path.
+- Publish a signed resolver/detail completion RC.
+
+### Stage 5 — community completion
+
+- Evaluate public read-only review-comment access, broader review identity presentation, additional review filters, discussion search, categories, pagination, and additional public layouts.
+- Implement every safe, fixture-backed public path that materially improves browsing.
+- For any item without a safe public unauthenticated path, retain an explicit external action and obtain user approval before classifying it as a permanent boundary.
+- Complete gamepad, accessibility, and translation coverage for Reviews and Discussions.
+- Publish a signed community completion RC.
+
+### Stage 6 — external-storage hardening
+
+- Add capacity preflight, copy verification, journaled/atomic promotion, rollback/recovery, cancellation, and safe retry.
+- Prevent movement while a game is running, downloading, updating, or otherwise mutating.
+- Make file movement and source metadata updates recoverable as one operation.
+- Validate unmounted/read-only/full/reinserted SD and USB states, modern scoped-storage fallback, package-channel roots, launch mapping, update, and uninstall behavior.
+- Publish a signed storage-hardening RC after focused unit tests and an explicitly owned physical/device matrix.
+
+### Stage 7 — LSFG decision and safe implementation
+
+- Present the user with the candidate feature's exact benefit and remaining safety trade-offs; it may not disappear as an unnamed optional item.
+- If approved, implement atomic managed import, bounded PE/DLL validation, per-container identity, explicit replace/remove/error UI, existence checks, and Steam-installed-versus-manual priority.
+- Reject shared mutable global DLL paths, silently swallowed copy errors, arbitrary unvalidated files, and public test-key signing.
+- Publish a signed LSFG RC when implemented. A no-implementation closure requires explicit user rejection recorded in the ledger.
+
+### Stage 8 — aggregate correction and upstream handoff
+
+- Run one aggregate broad test/lint/design gate after Stages 4–7 reach their recorded closure state.
+- Fix remaining attributable Critical/High issues and every ledger item assigned to final correction.
+- Validate signed side-by-side and compatibility upgrade paths.
+- Prepare the official upstream PR while excluding fork-only signing, package, branding, version, and publication commits.
+
+## 15. Feature completion ledger
+
+This ledger is authoritative. Cross-checks may add rows but may not delete unresolved rows. Closing a row requires implementation evidence or an explicit user-approved permanent-boundary decision.
+
+| ID | Missing or misimplemented feature | Current disposition | Target | Completion evidence |
+|---|---|---|---|---|
+| R1 | Non-Steam-only games cannot discover Steam identities | Implement now | Deliverable 1 | Automatic search/validation tests and signed acceptance path |
+| R2 | No visible provenance or Fix Steam match flow | Implement now | Deliverable 1 | Search/select/reject/reset UI and sticky-decision tests |
+| R3 | Non-owned accepted AppIDs lack PICS tags/categories | Implement now | Deliverable 1 | Logged-in best-effort PICS test without false ownership |
+| R4 | Resolver scan lacks process-death/durable resume | Named decision | Stage 4 | Implement durable resume or record fixture/live evidence that foreground resume meets acceptance |
+| R5 | Global catalog/FTS, fuzzy candidate quality, indirect mapping hints | Coverage-triggered expansion | Stage 4 | Aggregate coverage ≥80%, or implement the next source and remeasure |
+| R6 | Rejection history stores only one candidate | Evidence-triggered repair | Stage 4 | Rejected candidates do not recur incorrectly, or schema/history repair ships |
+| P1 | Accepted Steam metadata can be overwritten by non-Steam projection | Repair now | Deliverable 1 | Provider-precedence regression test |
+| P2 | Steam-first card artwork/title remains incomplete | Named work | Stage 4 | Accepted non-Steam cards use cached Steam presentation with fallback |
+| D1 | Detail has a fifth Resources tab | Repair now | Deliverable 1 | Exactly four tabs; Resources rendered inside Details |
+| D2 | Integrated install/play action bar is incomplete | Named work | Stage 4 | Guarded action matrix reachable from canonical detail |
+| D3 | Approved Overview/Details fields remain incomplete | Named work | Stage 4 | Field/provenance matrix against the original design |
+| D4 | Canonical detail gamepad B/focus and accessibility are incomplete | Partial now, complete in named stage | Deliverables 2–3 and Stage 4 | Focus/Back/semantics tests and device acceptance |
+| V1 | Reviews tab is a placeholder | Implement now | Deliverable 2 | Native paginated Reviews signed acceptance |
+| V2 | Public review comments and broader identity presentation are absent | Named evaluation/work | Stage 5 | Safe native path ships or user approves explicit external boundary |
+| V3 | Persistent review/discussion body cache | Permanent privacy boundary | Section 3.3 | No body persistence; active-session cache tests |
+| C1 | Discussions tab is a placeholder | Implement now | Deliverable 3 | Native listing/thread signed acceptance |
+| C2 | Discussion search/categories/layout coverage is incomplete | Named work | Stage 5 | Fixture-backed supported matrix and explicit fallback for remainder |
+| C3 | Authenticated posting/voting/moderation is absent | Permanent credential boundary | Section 3.3 | Explicit external actions; no copied credentials/cookies |
+| A1 | New-path translations and broad accessibility are incomplete | Named work | Stages 4–5 | Resource/semantics/gamepad completion matrix |
+| S1 | External moves are non-transactional and can split data | Named work | Stage 6 | Journaled verified move/rollback tests |
+| S2 | Storage movement lacks active-game/download guards | Named work | Stage 6 | State exclusion and cancellation tests |
+| S3 | Mount/scoped-storage/device recovery is incomplete | Named work | Stage 6 | Explicit SD/USB/device matrix |
+| L1 | Candidate fork's LSFG picker is unsafe and not integrated | User decision plus implementation | Stage 7 | User-approved closure or safe per-container signed RC |
+| F1 | Aggregate broad baseline and official PR remain open | Named final work | Stage 8 | Final cross-check, signed RC, and upstream-ready commit series |
+
+## 16. Acceptance criteria
 
 ### Steam resolution
 
@@ -536,4 +608,5 @@ Only after the resolver, Reviews, and Discussions have each shipped:
 ### Delivery discipline
 
 19. Each deliverable has one focused cross-check, at most one blocker correction pass, owning tests, and one signed fork RC.
-20. Rewrites occur only at structurally invalid active boundaries; unrelated improvements remain deferred until the three visible core features ship.
+20. Rewrites occur only at structurally invalid active boundaries; every non-blocking issue remains in the completion ledger with a named target or explicit user-approved permanent boundary.
+21. Stages 4–8 remain part of the delivery sequence; completing RC5–RC7 does not silently close their ledger items.
