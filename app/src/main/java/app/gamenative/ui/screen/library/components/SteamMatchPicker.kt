@@ -250,6 +250,7 @@ private fun SteamMatchCandidateCard(
                     contentDescription = candidate.title,
                     modifier = Modifier.size(width = 112.dp, height = 52.dp),
                     contentScale = ContentScale.Crop,
+                    sessionOnly = true,
                 )
             }
             Column(modifier = Modifier.weight(1f)) {

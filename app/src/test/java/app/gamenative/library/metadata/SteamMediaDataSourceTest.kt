@@ -53,6 +53,17 @@ class SteamMediaDataSourceTest {
     }
 
     @Test
+    fun sessionOnlyMediaRequestsAreNoStoreAcrossRedirects() = runTest {
+        server.enqueue(redirectTo("/final.jpg"))
+        server.enqueue(MockResponse().setBody("image bytes"))
+
+        source(noStore = true).open(server.url("/start.jpg").toString()).close()
+
+        assertEquals("no-store", server.takeRequest().getHeader("Cache-Control"))
+        assertEquals("no-store", server.takeRequest().getHeader("Cache-Control"))
+    }
+
+    @Test
     fun rejectsRelativeAndMalformedRedirectsWithoutAnotherRequest() = runTest {
         listOf("/relative.jpg", ":// malformed").forEach { location ->
             server.enqueue(
@@ -164,6 +175,7 @@ class SteamMediaDataSourceTest {
     private fun source(
         client: OkHttpClient = OkHttpClient(),
         maxRedirects: Int = 3,
+        noStore: Boolean = false,
     ): SteamMediaDataSource = SteamMediaDataSource(
         baseClient = client,
         urlPolicy = SteamUrlPolicy(
@@ -173,6 +185,7 @@ class SteamMediaDataSourceTest {
             allowedPorts = setOf(server.port),
         ),
         maxRedirects = maxRedirects,
+        noStore = noStore,
     )
 
     private fun redirectTo(path: String): MockResponse = MockResponse()

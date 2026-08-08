@@ -28,6 +28,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -111,6 +112,38 @@ class GameFacetRepositoryTest {
                 snapshots = listOf(snapshot),
             ),
         )
+    }
+
+    @Test
+    fun staleSteamPresentationIsRejectedWithoutPartialWrites() = runTest {
+        val original = canonical()
+        val corrected = original.copy(
+            steamAppId = 84,
+            displayName = "Corrected title",
+            matchTitleKey = "corrected title",
+            updatedAt = 20L,
+        )
+        database.canonicalGameDao().insert(corrected)
+        val repository = RoomGameFacetRepository(
+            database = database,
+            facetDao = database.canonicalFacetDao(),
+            snapshotDao = database.gameDetailSnapshotDao(),
+        )
+        val staleMetadata = metadata(listOf(MetadataFacet(2, "Strategy")))
+
+        val persisted = repository.upsertValidatedSteamPresentation(
+            canonicalId = CANONICAL_ID,
+            trustedSteamAppId = 42,
+            presentation = original.copy(displayName = "Stale title", updatedAt = 30L),
+            genres = staleMetadata.genres,
+            features = staleMetadata.features,
+            snapshot = snapshot(staleMetadata),
+        )
+
+        assertFalse(persisted)
+        assertEquals(corrected, database.canonicalGameDao().get(CANONICAL_ID.value))
+        assertEquals(emptyList<String>(), database.canonicalFacetDao().getGenres(CANONICAL_ID.value).map { it.genreKey })
+        assertEquals(null, database.gameDetailSnapshotDao().get(CANONICAL_ID.value, "en-US", "US"))
     }
 
     @Test

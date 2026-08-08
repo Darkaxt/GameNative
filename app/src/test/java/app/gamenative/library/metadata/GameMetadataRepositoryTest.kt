@@ -66,7 +66,10 @@ class GameMetadataRepositoryTest {
             canonical(TRUSTED_APP_ID).copy(primaryMetadataSource = GameSource.GOG),
         )
         val snapshotDao = FakeSnapshotDao()
-        val facetRepository = FakeGameFacetRepository(snapshotDao)
+        val facetRepository = FakeGameFacetRepository(
+            snapshotDao = snapshotDao,
+            presentationWriter = gameDao::update,
+        )
         val provider = FakeProvider(failure = AssertionError("validated persistence must not refetch"))
         val repository = repository(gameDao, snapshotDao, provider, facetRepository)
         val validated = SteamCatalogRecord(
@@ -98,6 +101,47 @@ class GameMetadataRepositoryTest {
         assertEquals(listOf(MetadataFacet(2, "Single-player")), facetRepository.lastFeatures)
         assertEquals(NOW, decode(snapshotDao.current.value).fetchedAtEpochMs)
         assertEquals(1, facetRepository.writeCount)
+    }
+
+    @Test
+    fun staleValidatedRecordDoesNotOverwriteNewerIdentityPresentation() = runTest {
+        val canonicalId = canonicalId()
+        val gameDao = FakeCanonicalGameDao(canonical(TRUSTED_APP_ID))
+        val snapshotDao = FakeSnapshotDao()
+        val facetRepository = FakeGameFacetRepository(
+            snapshotDao = snapshotDao,
+            validatedResult = false,
+            beforeValidatedWrite = {
+                val current = requireNotNull(gameDao.get(canonicalId.value))
+                gameDao.update(current.copy(steamAppId = OTHER_APP_ID))
+            },
+        )
+        val repository = repository(
+            gameDao = gameDao,
+            snapshotDao = snapshotDao,
+            provider = FakeProvider(failure = AssertionError("validated persistence must not refetch")),
+            facetRepository = facetRepository,
+        )
+        val validated = SteamCatalogRecord(
+            steamAppId = TRUSTED_APP_ID,
+            appType = CanonicalAppType.GAME,
+            releaseYear = 2020,
+            metadata = metadata("Stale validated title", NOW),
+        )
+
+        val result = repository.persistValidatedSteamRecord(
+            canonicalId = canonicalId,
+            trustedSteamAppId = TRUSTED_APP_ID,
+            locale = MetadataLocale("en-US", "US"),
+            record = validated,
+        )
+
+        assertEquals(MetadataPersistenceResult.StaleIdentity, result)
+        val corrected = requireNotNull(gameDao.get(canonicalId.value))
+        assertEquals(OTHER_APP_ID, corrected.steamAppId)
+        assertEquals("Canonical title", corrected.displayName)
+        assertEquals(1L, corrected.updatedAt)
+        assertEquals(null, snapshotDao.current.value)
     }
 
     @Test
@@ -302,10 +346,31 @@ class GameMetadataRepositoryTest {
 
     private class FakeGameFacetRepository(
         private val snapshotDao: GameDetailSnapshotDao,
+        private val validatedResult: Boolean = true,
+        private val beforeValidatedWrite: suspend () -> Unit = {},
+        private val presentationWriter: suspend (CanonicalGameEntity) -> Unit = {},
     ) : GameFacetRepository {
         var lastGenres: List<MetadataFacet> = emptyList()
         var lastFeatures: List<MetadataFacet> = emptyList()
         var writeCount: Int = 0
+
+        override suspend fun upsertValidatedSteamPresentation(
+            canonicalId: CanonicalGameId,
+            trustedSteamAppId: Int,
+            presentation: CanonicalGameEntity,
+            genres: List<MetadataFacet>,
+            features: List<MetadataFacet>,
+            snapshot: GameDetailSnapshotEntity,
+        ): Boolean {
+            beforeValidatedWrite()
+            writeCount += 1
+            if (!validatedResult) return false
+            presentationWriter(presentation)
+            lastGenres = genres
+            lastFeatures = features
+            snapshotDao.upsert(snapshot)
+            return true
+        }
 
         override suspend fun upsertValidatedSteamMetadata(
             canonicalId: CanonicalGameId,
@@ -418,6 +483,7 @@ class GameMetadataRepositoryTest {
     private companion object {
         const val NOW = 2_000_000_000L
         const val TRUSTED_APP_ID = 424242
+        const val OTHER_APP_ID = 848484
         val JSON = Json { encodeDefaults = true }
 
         fun canonicalId(): CanonicalGameId =

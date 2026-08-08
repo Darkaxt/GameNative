@@ -44,6 +44,21 @@ interface GameFacetRepository {
         return true
     }
 
+    suspend fun upsertValidatedSteamPresentation(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        presentation: CanonicalGameEntity,
+        genres: List<MetadataFacet>,
+        features: List<MetadataFacet>,
+        snapshot: GameDetailSnapshotEntity,
+    ): Boolean = upsertValidatedSteamMetadata(
+        canonicalId = canonicalId,
+        trustedSteamAppId = trustedSteamAppId,
+        genres = genres,
+        features = features,
+        snapshot = snapshot,
+    )
+
     suspend fun upsertSteamPicsFacets(
         canonicalId: CanonicalGameId,
         trustedSteamAppId: Int,
@@ -145,6 +160,51 @@ class RoomGameFacetRepository private constructor(
             )
             snapshotDao.upsert(snapshot)
             updateClassification(canonical)
+            true
+        }
+    }
+
+    override suspend fun upsertValidatedSteamPresentation(
+        canonicalId: CanonicalGameId,
+        trustedSteamAppId: Int,
+        presentation: CanonicalGameEntity,
+        genres: List<MetadataFacet>,
+        features: List<MetadataFacet>,
+        snapshot: GameDetailSnapshotEntity,
+    ): Boolean {
+        require(trustedSteamAppId > 0)
+        require(presentation.canonicalId == canonicalId.value)
+        require(presentation.steamAppId == trustedSteamAppId)
+        require(snapshot.canonicalId == canonicalId.value)
+        val sanitizedGenres = sanitizeGenres(genres)
+        val sanitizedFeatures = sanitizeFeatures(features)
+        return database.withTransaction {
+            val canonical = database.canonicalGameDao().get(canonicalId.value)
+            if (canonical?.steamAppId != trustedSteamAppId) {
+                return@withTransaction false
+            }
+            val updated = canonical.copy(
+                displayName = presentation.displayName,
+                matchTitleKey = presentation.matchTitleKey,
+                primaryMetadataSource = presentation.primaryMetadataSource,
+                appType = presentation.appType,
+                releaseYear = presentation.releaseYear,
+                developerKey = presentation.developerKey,
+                updatedAt = presentation.updatedAt,
+            )
+            database.canonicalGameDao().update(updated)
+            facetDao.upsertGenres(
+                sanitizedGenres.map { facet ->
+                    CanonicalGameGenreCrossRef(canonicalId.value, steamFacetKey(requireNotNull(facet.id)))
+                },
+            )
+            facetDao.upsertFeatures(
+                sanitizedFeatures.map { facet ->
+                    CanonicalGameFeatureCrossRef(canonicalId.value, steamFacetKey(requireNotNull(facet.id)))
+                },
+            )
+            snapshotDao.upsert(snapshot)
+            updateClassification(updated)
             true
         }
     }

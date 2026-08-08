@@ -61,6 +61,7 @@ class SteamCatalogSearchProviderTest {
         assertEquals("A&B + Deluxe", request.requestUrl?.queryParameter("term"))
         assertEquals("BR", request.requestUrl?.queryParameter("cc"))
         assertEquals("brazilian", request.requestUrl?.queryParameter("l"))
+        assertEquals("no-store", request.getHeader("Cache-Control"))
         assertNull(request.getHeader("Cookie"))
     }
 
@@ -123,6 +124,8 @@ class SteamCatalogSearchProviderTest {
 
         assertEquals(listOf(42, 84), results.map(SteamStoreSearchHit::steamAppId))
         assertEquals(2, server.requestCount)
+        assertEquals("no-store", server.takeRequest().getHeader("Cache-Control"))
+        assertEquals("no-store", server.takeRequest().getHeader("Cache-Control"))
     }
 
     @Test

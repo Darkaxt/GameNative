@@ -4,6 +4,7 @@ import app.gamenative.utils.Net
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.CacheControl
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -17,19 +18,26 @@ internal class SteamMediaDataSource(
     baseClient: OkHttpClient,
     private val urlPolicy: SteamUrlPolicy,
     private val maxRedirects: Int = DEFAULT_MAX_REDIRECTS,
+    private val noStore: Boolean = false,
 ) {
     private val client = baseClient.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
+        .apply {
+            if (noStore) cache(null)
+        }
         .build()
 
     init {
         require(maxRedirects >= 0) { "Redirect bound must not be negative" }
     }
 
-    constructor() : this(
+    constructor() : this(noStore = false)
+
+    internal constructor(noStore: Boolean) : this(
         baseClient = Net.http,
         urlPolicy = SteamUrlPolicy(),
+        noStore = noStore,
     )
 
     suspend fun open(rawUrl: String): Response = try {
@@ -49,9 +57,10 @@ internal class SteamMediaDataSource(
 
         while (true) {
             if (!urlPolicy.isAllowedMediaUrl(currentUrl)) throw SteamMediaException()
-            val response = client.newCall(
-                Request.Builder().url(currentUrl).get().build(),
-            ).awaitSteamMediaResponse()
+            val request = Request.Builder().url(currentUrl).get().apply {
+                if (noStore) cacheControl(NO_STORE_CACHE_CONTROL)
+            }.build()
+            val response = client.newCall(request).awaitSteamMediaResponse()
             val responseUrl = response.request.url
             if (responseUrl != currentUrl || !urlPolicy.isAllowedMediaUrl(responseUrl)) {
                 response.close()
@@ -85,6 +94,7 @@ internal class SteamMediaDataSource(
     private companion object {
         const val DEFAULT_MAX_REDIRECTS = 3
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
+        val NO_STORE_CACHE_CONTROL: CacheControl = CacheControl.Builder().noStore().build()
     }
 }
 

@@ -14,6 +14,7 @@ import coil.decode.ImageSource
 import coil.fetch.FetchResult
 import coil.fetch.Fetcher
 import coil.fetch.SourceResult
+import coil.request.CachePolicy
 import coil.request.Options
 import com.skydoves.landscapist.ImageOptions
 import com.skydoves.landscapist.coil.CoilImage
@@ -24,9 +25,10 @@ internal fun SteamMediaImage(
     contentDescription: String?,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
+    sessionOnly: Boolean = false,
 ) {
     val safeUrl = imageUrl?.takeIf(String::isNotBlank) ?: return
-    val imageLoader = rememberSteamMediaImageLoader()
+    val imageLoader = rememberSteamMediaImageLoader(sessionOnly)
     val model = remember(safeUrl) { SteamMediaImageModel(safeUrl) }
     CoilImage(
         imageModel = { model },
@@ -40,11 +42,17 @@ internal fun SteamMediaImage(
 }
 
 @Composable
-private fun rememberSteamMediaImageLoader(): ImageLoader {
+private fun rememberSteamMediaImageLoader(sessionOnly: Boolean): ImageLoader {
     val context = LocalContext.current.applicationContext
-    val imageLoader = remember(context) {
-        val dataSource = SteamMediaDataSource()
+    val imageLoader = remember(context, sessionOnly) {
+        val dataSource = SteamMediaDataSource(noStore = sessionOnly)
         ImageLoader.Builder(context)
+            .apply {
+                if (sessionOnly) {
+                    diskCachePolicy(CachePolicy.DISABLED)
+                    diskCache(null)
+                }
+            }
             .components {
                 add(SteamMediaFetcher.Factory(dataSource))
             }

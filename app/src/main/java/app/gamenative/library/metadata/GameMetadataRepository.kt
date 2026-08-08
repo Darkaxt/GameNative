@@ -187,21 +187,20 @@ class RoomGameMetadataRepository @Inject constructor(
             val developerKey = metadata.developers.firstOrNull()
                 ?.let(CanonicalNormalization::developerKey)
                 .orEmpty()
-            canonicalGameDao.update(
-                canonical.copy(
-                    displayName = metadata.title,
-                    matchTitleKey = CanonicalNormalization.titleKey(metadata.title),
-                    primaryMetadataSource = GameSource.STEAM,
-                    appType = record.appType.takeUnless { it == CanonicalAppType.UNKNOWN }
-                        ?: canonical.appType,
-                    releaseYear = record.releaseYear ?: canonical.releaseYear,
-                    developerKey = developerKey.ifBlank { canonical.developerKey },
-                    updatedAt = metadata.fetchedAtEpochMs,
-                ),
+            val presentation = canonical.copy(
+                displayName = metadata.title,
+                matchTitleKey = CanonicalNormalization.titleKey(metadata.title),
+                primaryMetadataSource = GameSource.STEAM,
+                appType = record.appType.takeUnless { it == CanonicalAppType.UNKNOWN }
+                    ?: canonical.appType,
+                releaseYear = record.releaseYear ?: canonical.releaseYear,
+                developerKey = developerKey.ifBlank { canonical.developerKey },
+                updatedAt = metadata.fetchedAtEpochMs,
             )
-            val persisted = gameFacetRepository.upsertValidatedSteamMetadata(
+            val persisted = gameFacetRepository.upsertValidatedSteamPresentation(
                 canonicalId = canonicalId,
                 trustedSteamAppId = trustedSteamAppId,
+                presentation = presentation,
                 genres = metadata.genres,
                 features = metadata.features,
                 snapshot = GameDetailSnapshotEntity(

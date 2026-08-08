@@ -104,7 +104,7 @@ class SteamCatalogSearchProvider internal constructor(
             .build()
         val request = Request.Builder()
             .url(requestUrl)
-            .cacheControl(CacheControl.FORCE_NETWORK)
+            .cacheControl(NO_STORE_CACHE_CONTROL)
             .get()
             .build()
         return parse(executeValidated(request))
@@ -129,7 +129,7 @@ class SteamCatalogSearchProvider internal constructor(
                 }
                 request = Request.Builder()
                     .url(next)
-                    .cacheControl(CacheControl.FORCE_NETWORK)
+                    .cacheControl(NO_STORE_CACHE_CONTROL)
                     .get()
                     .build()
             } else {
@@ -178,6 +178,7 @@ class SteamCatalogSearchProvider internal constructor(
         const val MAX_NETWORK_HOPS = 4
         const val MAX_RESPONSE_BYTES = 1_000_000L
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
+        val NO_STORE_CACHE_CONTROL: CacheControl = CacheControl.Builder().noStore().build()
         val JSON = Json { ignoreUnknownKeys = true }
     }
 }

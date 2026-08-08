@@ -708,6 +708,54 @@ class CanonicalMutationRepositoryTest {
     }
 
     @Test
+    fun `guarded manual correction invalidates prior Steam presentation and facets`() = runBlocking {
+        val canonical = canonical(
+            index = 1,
+            steamAppId = 41,
+            createdAt = 100,
+            displayName = "Prior Steam title",
+            primarySource = GameSource.STEAM,
+            reviewCount = 500,
+        ).copy(classificationState = ClassificationState.CLASSIFIED)
+        val selectedKey = key(GameSource.GOG, "catalog-correction")
+        val selected = match(
+            selectedKey,
+            canonical.canonicalId,
+            method = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.HIGH,
+            candidateSteamAppId = 41,
+        )
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(selected)
+        seedFacets(
+            canonical.canonicalId,
+            genres = setOf("steam:action"),
+            tags = setOf(10),
+            features = setOf("steam:controller"),
+        )
+        db.gameDetailSnapshotDao().upsert(snapshot(canonical.canonicalId, "en", "US", "prior"))
+
+        val result = repository.guardedConfirmSteamMatch(
+            expected = expectedState(selectedKey, selected),
+            steamAppId = 42,
+            candidateAppType = CanonicalAppType.GAME,
+            nowEpochMs = 200,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, result)
+        val corrected = requireNotNull(db.canonicalGameDao().get(canonical.canonicalId))
+        assertEquals(42, corrected.steamAppId)
+        assertEquals("Standalone Game", corrected.displayName)
+        assertEquals(GameSource.GOG, corrected.primaryMetadataSource)
+        assertEquals(ClassificationState.UNCLASSIFIED, corrected.classificationState)
+        assertNull(corrected.steamReviewCount)
+        assertTrue(db.canonicalFacetDao().getGenres(canonical.canonicalId).isEmpty())
+        assertTrue(db.canonicalFacetDao().getTags(canonical.canonicalId).isEmpty())
+        assertTrue(db.canonicalFacetDao().getFeatures(canonical.canonicalId).isEmpty())
+        assertTrue(db.gameDetailSnapshotDao().getByCanonicalId(canonical.canonicalId).isEmpty())
+    }
+
+    @Test
     fun `guarded rejection is sticky and guarded reset makes copy eligible again`() = runBlocking {
         val canonical = canonical(index = 1, steamAppId = 42, createdAt = 100)
         val selectedKey = key(GameSource.GOG, "catalog-reject")

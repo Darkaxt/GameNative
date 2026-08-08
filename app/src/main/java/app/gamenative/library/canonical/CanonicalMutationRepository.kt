@@ -736,9 +736,52 @@ class RoomCanonicalMutationRepository @Inject constructor(
         decision: SteamMatchDecision,
         nowEpochMs: Long,
     ): String {
+        val replacesSteamIdentity = canonical.steamAppId != null && canonical.steamAppId != steamAppId
+        if (replacesSteamIdentity) {
+            facetDao.deleteGenres(canonical.canonicalId)
+            facetDao.deleteTags(canonical.canonicalId)
+            facetDao.deleteFeatures(canonical.canonicalId)
+            snapshotDao.deleteByCanonicalId(canonical.canonicalId)
+        }
         canonicalGameDao.update(
             canonical.copy(
                 steamAppId = steamAppId,
+                displayName = if (replacesSteamIdentity) {
+                    selectedMatch.evidenceDisplayName
+                } else {
+                    canonical.displayName
+                },
+                matchTitleKey = if (replacesSteamIdentity) {
+                    selectedMatch.evidenceTitleKey
+                } else {
+                    canonical.matchTitleKey
+                },
+                primaryMetadataSource = if (replacesSteamIdentity) {
+                    selectedMatch.source
+                } else {
+                    canonical.primaryMetadataSource
+                },
+                appType = if (replacesSteamIdentity) {
+                    selectedMatch.evidenceAppType
+                } else {
+                    canonical.appType
+                },
+                releaseYear = if (replacesSteamIdentity) {
+                    selectedMatch.evidenceReleaseYear
+                } else {
+                    canonical.releaseYear
+                },
+                developerKey = if (replacesSteamIdentity) {
+                    selectedMatch.evidenceDeveloperKey
+                } else {
+                    canonical.developerKey
+                },
+                classificationState = if (replacesSteamIdentity) {
+                    ClassificationState.UNCLASSIFIED
+                } else {
+                    canonical.classificationState
+                },
+                steamReviewCount = if (replacesSteamIdentity) null else canonical.steamReviewCount,
                 updatedAt = nowEpochMs,
             ),
         )
