@@ -23,10 +23,12 @@ class TaggedReleaseWorkflowContractTest {
             "universal-compat.apk universal-compat-legacy-xr.apk" +
                 " universal-side-by-side.apk universal-side-by-side-legacy-xr.apk"
 
-        assertTrue(appGradle.contains("versionCode = 34"))
-        assertTrue(appGradle.contains("versionName = \"1.1.3-rc8\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"34\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.1.3-rc8\""))
+        assertTrue(appGradle.contains("versionCode = 35"))
+        assertTrue(appGradle.contains("versionName = \"1.1.3-rc9\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"35\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.1.3-rc9\""))
+        assertEquals(1, workflow.lines().count { it.trimStart().startsWith("EXPECTED_VERSION_CODE:") })
+        assertEquals(1, workflow.lines().count { it.trimStart().startsWith("EXPECTED_VERSION_NAME:") })
         assertTrue(workflow.contains("[[ \"\$RELEASE_TAG\" != \"v\$EXPECTED_VERSION_NAME\" ]]"))
         assertTrue(workflow.contains("timeout-minutes: 75"))
         assertTrue(workflow.contains(":app:bundleLegacyRelease"))
