@@ -571,7 +571,7 @@ This ledger is authoritative. Cross-checks may add rows but may not delete unres
 | D2 | Integrated install/play action bar is incomplete | Named work | Stage 4 | Guarded action matrix reachable from canonical detail |
 | D3 | Approved Overview/Details fields remain incomplete | Named work | Stage 4 | Field/provenance matrix against the original design |
 | D4 | Canonical detail gamepad B/focus and accessibility are incomplete | Partial now, complete in named stage | Deliverables 2–3 and Stage 4 | Focus/Back/semantics tests and device acceptance |
-| D5 | Current Steam movie payloads use direct HLS/DASH fields, so trailers were omitted when only legacy WebM/MP4 objects were parsed | Corrected implementation; signed live acceptance pending | Deliverable 1 next corrected RC | Live-shaped current-HLS and legacy parser tests, movie-before-screenshot boundary test, and signed-device playback acceptance |
+| D5 | Current Steam movie payloads use direct HLS/DASH fields, so trailers were omitted when only legacy WebM/MP4 objects were parsed | Corrected implementation; signed live acceptance pending | Deliverable 1 next corrected RC | Live-shaped current-HLS and legacy parser tests, movie-before-screenshot boundary test, metadata source-revision cache invalidation, and signed-device playback acceptance |
 | V1 | Reviews tab is a placeholder | Implement now | Deliverable 2 | Native paginated Reviews signed acceptance |
 | V2 | Public review comments and broader identity presentation are absent | Named evaluation/work | Stage 5 | Safe native path ships or user approves explicit external boundary |
 | V3 | Persistent review/discussion body cache | Permanent privacy boundary | Section 3.3 | No body persistence; active-session cache tests |

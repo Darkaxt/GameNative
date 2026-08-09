@@ -51,7 +51,7 @@ class GameMetadataRepositoryTest {
         assertEquals(canonicalId.value, stored.canonicalId)
         assertEquals("en-US", stored.locale)
         assertEquals("US", stored.country)
-        assertEquals("steam_appdetails_v1", stored.sourceRevision)
+        assertEquals("steam_appdetails_v2", stored.sourceRevision)
         assertTrue(stored.provenanceJson.contains("STEAM_APPDETAILS"))
         assertFalse(stored.payloadJson.contains(TRUSTED_APP_ID.toString()))
         assertEquals(listOf(MetadataFacet(1, "Action")), facetRepository.lastGenres)
@@ -162,6 +162,27 @@ class GameMetadataRepositoryTest {
         assertFalse(content.stale)
         assertFalse(content.refreshFailed)
         assertTrue(provider.requestedIds.isEmpty())
+    }
+
+    @Test
+    fun legacyMovieSchemaCacheIsRefetchedBeforeSevenDays() = runTest {
+        val cached = metadata("Cached without current movies", NOW - 1_000L)
+        val snapshotDao = FakeSnapshotDao(
+            snapshot(cached).copy(sourceRevision = "steam_appdetails_v1"),
+        )
+        val provider = FakeProvider(metadata("Fresh with current movies", NOW))
+        val repository = repository(
+            FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)),
+            snapshotDao,
+            provider,
+        )
+
+        val content = repository.observe(canonicalId())
+            .filterIsInstance<GameDetailState.Content>()
+            .first()
+
+        assertEquals("Fresh with current movies", content.metadata.title)
+        assertEquals(listOf(TRUSTED_APP_ID), provider.requestedIds)
     }
 
     @Test
@@ -338,7 +359,7 @@ class GameMetadataRepositoryTest {
                 ),
             ),
             fetchedAt = metadata.fetchedAtEpochMs,
-            sourceRevision = "steam_appdetails_v1",
+            sourceRevision = "steam_appdetails_v2",
         )
 
     private fun decode(entity: GameDetailSnapshotEntity?): CanonicalGameMetadata =

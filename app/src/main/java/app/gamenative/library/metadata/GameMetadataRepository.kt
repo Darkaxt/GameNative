@@ -268,7 +268,7 @@ class RoomGameMetadataRepository @Inject constructor(
     }
 
     private companion object {
-        const val SOURCE_REVISION = "steam_appdetails_v1"
+        const val SOURCE_REVISION = "steam_appdetails_v2"
         val JSON = Json {
             encodeDefaults = true
             ignoreUnknownKeys = true
