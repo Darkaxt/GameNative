@@ -34,6 +34,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,9 @@ import androidx.compose.ui.unit.dp
 import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
+import app.gamenative.library.community.DiscussionSectionState
+import app.gamenative.library.community.ReviewSectionState
+import app.gamenative.library.community.SteamReviewQuery
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GamePlatform
@@ -58,8 +62,10 @@ import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.screen.library.components.GameMediaItem
 import app.gamenative.ui.screen.library.components.GameMediaPager
 import app.gamenative.ui.screen.library.components.OwnedSourceBadges
+import app.gamenative.ui.screen.library.components.SteamDiscussionsTab
 import app.gamenative.ui.screen.library.components.SteamMediaGallery
 import app.gamenative.ui.screen.library.components.SteamMediaImage
+import app.gamenative.ui.screen.library.components.SteamReviewsTab
 import app.gamenative.utils.HltbService
 
 private enum class CanonicalDetailTab {
@@ -84,6 +90,18 @@ internal fun CanonicalGameDetailScreen(
     onCopies: () -> Unit,
     onSourceDetails: () -> Unit,
     onRetry: () -> Unit,
+    reviewState: ReviewSectionState = ReviewSectionState.Idle,
+    reviewQuery: SteamReviewQuery = SteamReviewQuery(),
+    onLoadReviews: () -> Unit = {},
+    onReviewQueryChange: (SteamReviewQuery) -> Unit = {},
+    onRefreshReviews: () -> Unit = {},
+    onLoadMoreReviews: () -> Unit = {},
+    discussionState: DiscussionSectionState = DiscussionSectionState.Idle,
+    onLoadDiscussions: () -> Unit = {},
+    onOpenDiscussion: (String) -> Unit = {},
+    onRefreshDiscussions: () -> Unit = {},
+    onLoadMoreDiscussions: () -> Unit = {},
+    onCloseDiscussionThread: () -> Boolean = { false },
     steamMatchStatus: SteamMatchStatus? = null,
     onFixSteamMatch: (() -> Unit)? = null,
 ) {
@@ -97,6 +115,21 @@ internal fun CanonicalGameDetailScreen(
     val tabs = CanonicalDetailTab.entries
     val uriHandler = LocalUriHandler.current
     var selectedTab by remember { mutableIntStateOf(0) }
+    val validSteamAppId = steamAppId?.takeIf { it > 0 }
+
+    LaunchedEffect(selectedTab, validSteamAppId) {
+        if (validSteamAppId == null) return@LaunchedEffect
+        when (tabs[selectedTab]) {
+            CanonicalDetailTab.REVIEWS -> onLoadReviews()
+            CanonicalDetailTab.DISCUSSIONS -> onLoadDiscussions()
+            else -> Unit
+        }
+    }
+    val detailBack = {
+        if (discussionState !is DiscussionSectionState.Thread || !onCloseDiscussionThread()) {
+            onBack()
+        }
+    }
 
     Surface(
         modifier = Modifier
@@ -114,7 +147,7 @@ internal fun CanonicalGameDetailScreen(
                     fallbackImageUrl = fallbackImageUrl,
                     ownedSources = ownedSources,
                     heroHeight = heroHeight,
-                    onBack = onBack,
+                    onBack = detailBack,
                 )
 
                 Column(
@@ -163,22 +196,35 @@ internal fun CanonicalGameDetailScreen(
                             hltbStats = hltbStats,
                             onRetry = onRetry,
                         )
-                        CanonicalDetailTab.REVIEWS -> DetailPlaceholder(
-                            text = stringResource(R.string.canonical_detail_reviews_placeholder),
-                            actionLabel = steamAppId?.let {
-                                stringResource(R.string.canonical_detail_open_steam_reviews)
+                        CanonicalDetailTab.REVIEWS -> SteamReviewsTab(
+                            state = if (validSteamAppId == null) {
+                                ReviewSectionState.Unavailable
+                            } else {
+                                reviewState
                             },
-                            onAction = steamAppId?.let { appId ->
+                            query = reviewQuery,
+                            onQueryChange = onReviewQueryChange,
+                            onRefresh = onRefreshReviews,
+                            onLoadMore = onLoadMoreReviews,
+                            onOpenSteam = validSteamAppId?.let { appId ->
                                 { uriHandler.openUri(steamReviewUrl(appId)) }
                             },
                         )
-                        CanonicalDetailTab.DISCUSSIONS -> DetailPlaceholder(
-                            text = stringResource(R.string.canonical_detail_discussions_placeholder),
-                            actionLabel = steamAppId?.let {
-                                stringResource(R.string.canonical_detail_open_steam_discussions)
+                        CanonicalDetailTab.DISCUSSIONS -> SteamDiscussionsTab(
+                            state = if (validSteamAppId == null) {
+                                DiscussionSectionState.Unavailable
+                            } else {
+                                discussionState
                             },
-                            onAction = steamAppId?.let { appId ->
+                            onOpenDiscussion = onOpenDiscussion,
+                            onRefresh = onRefreshDiscussions,
+                            onLoadMore = onLoadMoreDiscussions,
+                            onBackToListing = { onCloseDiscussionThread() },
+                            onOpenCommunity = validSteamAppId?.let { appId ->
                                 { uriHandler.openUri(steamDiscussionUrl(appId)) }
+                            },
+                            onOpenThread = { route ->
+                                uriHandler.openUri(steamCommunityThreadUrl(route))
                             },
                         )
                         CanonicalDetailTab.DETAILS -> DetailFields(
@@ -582,6 +628,9 @@ internal fun steamResourceLinks(steamAppId: Int?): List<SteamResourceLink> {
 private fun steamReviewUrl(appId: Int): String = "https://steamcommunity.com/app/$appId/reviews/"
 
 private fun steamDiscussionUrl(appId: Int): String = "https://steamcommunity.com/app/$appId/discussions/"
+
+private fun steamCommunityThreadUrl(route: String): String =
+    "https://steamcommunity.com${route.substringBefore('?')}"
 
 private fun CanonicalDetailTab.labelResId(): Int = when (this) {
     CanonicalDetailTab.OVERVIEW -> R.string.canonical_detail_overview

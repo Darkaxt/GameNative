@@ -484,8 +484,7 @@ Starting from `versionCode 30` / `1.1.3-rc4`:
 | Deliverable | Planned version | Planned tag |
 |---|---|---|
 | Steam resolution + Fix match | `31` / `1.1.3-rc5` through correction checkpoint `37` / `1.1.3-rc11`; RC9 was withheld and RC11 publication was canceled before release so remaining visible work can ship after one consolidated QA pass | `v1.1.3-rc5` through immutable checkpoint tag `v1.1.3-rc11`; only published releases count as acceptance candidates and the next release uses the next unused version/tag |
-| Native Reviews | Next unused version after resolver live acceptance | Next immutable prerelease tag |
-| Native Discussions | Version following the Reviews release | Following immutable prerelease tag |
+| Native Reviews + Discussions | One consolidated next-unused release after both implementations and the single owning QA pass | One next-unused immutable prerelease tag; no per-feature micro-release |
 
 A correction release consumes the next unused version code/tag and shifts later versions. Published tags are immutable and never reused.
 

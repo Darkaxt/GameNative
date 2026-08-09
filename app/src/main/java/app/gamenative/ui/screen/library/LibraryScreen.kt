@@ -93,6 +93,9 @@ import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.OwnedCopyActionGuard
 import app.gamenative.library.canonical.action.OwnedCopyRouteResult
+import app.gamenative.library.community.DiscussionSectionState
+import app.gamenative.library.community.ReviewSectionState
+import app.gamenative.library.community.SteamReviewQuery
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.ui.component.GamepadAction
 import app.gamenative.ui.component.GamepadActionBar
@@ -169,6 +172,9 @@ fun HomeLibraryScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val gameDetailState by detailViewModel.state.collectAsStateWithLifecycle()
+    val reviewState by detailViewModel.reviewState.collectAsStateWithLifecycle()
+    val reviewQuery by detailViewModel.reviewQuery.collectAsStateWithLifecycle()
+    val discussionState by detailViewModel.discussionState.collectAsStateWithLifecycle()
     val steamMatchState by steamMatchViewModel.state.collectAsStateWithLifecycle()
     val steamMatchQuery by steamMatchViewModel.query.collectAsStateWithLifecycle()
     val steamApiKeyState by steamApiKeyViewModel.state.collectAsStateWithLifecycle()
@@ -230,6 +236,19 @@ fun HomeLibraryScreen(
         gameDetailState = gameDetailState,
         onOpenCanonicalDetail = detailViewModel::load,
         onRetryCanonicalDetail = detailViewModel::retry,
+        reviewState = reviewState,
+        reviewQuery = reviewQuery,
+        onLoadReviews = { appId -> detailViewModel.loadReviews(appId, isOffline) },
+        onReviewQueryChange = { query -> detailViewModel.updateReviewQuery(query, isOffline) },
+        onRefreshReviews = { detailViewModel.refreshReviews(isOffline) },
+        onLoadMoreReviews = detailViewModel::loadMoreReviews,
+        discussionState = discussionState,
+        onLoadDiscussions = { appId -> detailViewModel.loadDiscussions(appId, isOffline) },
+        onOpenDiscussion = { route -> detailViewModel.openDiscussion(route, isOffline) },
+        onRefreshDiscussions = { detailViewModel.refreshDiscussions(isOffline) },
+        onLoadMoreDiscussions = detailViewModel::loadMoreDiscussions,
+        onCloseDiscussionThread = detailViewModel::closeDiscussionThread,
+        onClearCanonicalDetail = detailViewModel::clearDetail,
         steamMatchState = steamMatchState,
         steamMatchQuery = steamMatchQuery,
         onOpenSteamMatch = steamMatchViewModel::openMatch,
@@ -314,6 +333,19 @@ internal fun LibraryScreenContent(
     gameDetailState: GameDetailState = GameDetailState.Loading,
     onOpenCanonicalDetail: (CanonicalGameId) -> Unit = {},
     onRetryCanonicalDetail: () -> Unit = {},
+    reviewState: ReviewSectionState = ReviewSectionState.Idle,
+    reviewQuery: SteamReviewQuery = SteamReviewQuery(),
+    onLoadReviews: (Int) -> Unit = {},
+    onReviewQueryChange: (SteamReviewQuery) -> Unit = {},
+    onRefreshReviews: () -> Unit = {},
+    onLoadMoreReviews: () -> Unit = {},
+    discussionState: DiscussionSectionState = DiscussionSectionState.Idle,
+    onLoadDiscussions: (Int) -> Unit = {},
+    onOpenDiscussion: (String) -> Unit = {},
+    onRefreshDiscussions: () -> Unit = {},
+    onLoadMoreDiscussions: () -> Unit = {},
+    onCloseDiscussionThread: () -> Boolean = { false },
+    onClearCanonicalDetail: () -> Unit = {},
     steamMatchState: SteamMatchUiState = SteamMatchUiState(),
     steamMatchQuery: String = "",
     onOpenSteamMatch: (OwnedCopyKey) -> Unit = {},
@@ -608,6 +640,7 @@ internal fun LibraryScreenContent(
 
     fun clearSelectedSource() {
         supersedeRouteRequests()
+        if (showCanonicalDetail) onClearCanonicalDetail()
         selectedCardIdentity = null
         selectedSourceItem = null
         selectedPresentationCard = null
@@ -857,8 +890,20 @@ internal fun LibraryScreenContent(
         onSearchQuery("")
     }
 
-    BackHandler(enabled = selectedCardIdentity != null && !isSteamMatchPickerOpen) {
+    BackHandler(
+        enabled = selectedCardIdentity != null &&
+            !isSteamMatchPickerOpen &&
+            !(showCanonicalDetail && discussionState is DiscussionSectionState.Thread),
+    ) {
         clearSelectedSource()
+    }
+
+    BackHandler(
+        enabled = showCanonicalDetail &&
+            discussionState is DiscussionSectionState.Thread &&
+            !isSteamMatchPickerOpen,
+    ) {
+        onCloseDiscussionThread()
     }
 
     BackHandler(enabled = copiesSheetCardKey != null && !isSteamMatchPickerOpen) {
@@ -1295,6 +1340,12 @@ internal fun LibraryScreenContent(
                             if (copiesSheetCardKey != null) {
                                 dismissCopiesSheet()
                                 true
+                            } else if (
+                                showCanonicalDetail &&
+                                discussionState is DiscussionSectionState.Thread
+                            ) {
+                                onCloseDiscussionThread()
+                                true
                             } else if (selectedCardIdentity != null) {
                                 // Let LibraryAppScreen handle its own B-button
                                 false
@@ -1528,6 +1579,22 @@ internal fun LibraryScreenContent(
                     compatibilityStatus = presentationCard.compatibilityStatus,
                     hltbStats = HltbCache.get(selectedCanonicalCard.displayName),
                     isOffline = isOffline,
+                    reviewState = reviewState,
+                    reviewQuery = reviewQuery,
+                    onLoadReviews = {
+                        selectedCanonicalCard.steamAppId?.let(onLoadReviews)
+                    },
+                    onReviewQueryChange = onReviewQueryChange,
+                    onRefreshReviews = onRefreshReviews,
+                    onLoadMoreReviews = onLoadMoreReviews,
+                    discussionState = discussionState,
+                    onLoadDiscussions = {
+                        selectedCanonicalCard.steamAppId?.let(onLoadDiscussions)
+                    },
+                    onOpenDiscussion = onOpenDiscussion,
+                    onRefreshDiscussions = onRefreshDiscussions,
+                    onLoadMoreDiscussions = onLoadMoreDiscussions,
+                    onCloseDiscussionThread = onCloseDiscussionThread,
                     steamMatchStatus = detailSteamMatchStatus,
                     onFixSteamMatch = mutableSteamMatchCopies.takeIf { it.isNotEmpty() }?.let { copies ->
                         {

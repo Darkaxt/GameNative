@@ -51,6 +51,10 @@ import app.gamenative.library.canonical.source.EpicOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.GogOwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.OwnedCopySourceAdapter
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
+import app.gamenative.library.community.SteamDiscussionProvider
+import app.gamenative.library.community.SteamDiscussionSource
+import app.gamenative.library.community.SteamReviewPageProvider
+import app.gamenative.library.community.SteamReviewPageSource
 import app.gamenative.library.discovery.GameFacetRepository
 import app.gamenative.library.discovery.RoomGameFacetRepository
 import app.gamenative.library.discovery.SteamReviewSummaryProvider
@@ -184,6 +188,18 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamCatalogResolutionDiagnostics(
         implementation: FeatureSteamCatalogResolutionDiagnostics,
     ): SteamCatalogResolutionDiagnosticSink
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamDiscussionSource(
+        implementation: SteamDiscussionProvider,
+    ): SteamDiscussionSource
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamReviewPageSource(
+        implementation: SteamReviewPageProvider,
+    ): SteamReviewPageSource
 
     @Binds
     @Singleton

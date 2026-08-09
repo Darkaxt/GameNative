@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -35,7 +36,12 @@ class SteamReviewSummaryProvider internal constructor(
 ) : SteamReviewSummarySource {
     @Inject
     constructor() : this(
-        client = Net.http.newBuilder().followRedirects(false).followSslRedirects(false).build(),
+        client = Net.http.newBuilder()
+            .cache(null)
+            .cookieJar(CookieJar.NO_COOKIES)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build(),
         endpoint = DEFAULT_ENDPOINT.toHttpUrl(),
         allowedHosts = setOf(STEAM_STORE_HOST),
         requireHttps = true,
@@ -52,7 +58,13 @@ class SteamReviewSummaryProvider internal constructor(
             .addQueryParameter("purchase_type", "all")
             .addQueryParameter("num_per_page", "0")
             .build()
-        val body = executeValidated(Request.Builder().url(requestUrl).get().build())
+        val body = executeValidated(
+            Request.Builder()
+                .url(requestUrl)
+                .header("Cache-Control", "no-store")
+                .get()
+                .build(),
+        )
         return parse(body)
     }
 
@@ -69,7 +81,11 @@ class SteamReviewSummaryProvider internal constructor(
                 val next = response.header("Location")?.let(response.request.url::resolve)
                 response.close()
                 if (next == null || !isAllowedNetworkUrl(next)) throw SteamReviewSummaryUnavailable()
-                request = Request.Builder().url(next).get().build()
+                request = Request.Builder()
+                    .url(next)
+                    .header("Cache-Control", "no-store")
+                    .get()
+                    .build()
             } else {
                 response.use { finalResponse ->
                     if (!finalResponse.isSuccessful) throw SteamReviewSummaryUnavailable()

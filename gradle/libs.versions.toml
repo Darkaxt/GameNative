@@ -13,6 +13,7 @@ feature-delivery = "2.1.0" # https://mvnrepository.com/artifact/com.google.andro
 play-integrity = "1.6.0" # https://mvnrepository.com/artifact/com.google.android.play/integrity
 hiltNavigationCompose = "1.2.0" # https://mvnrepository.com/artifact/androidx.hilt/hilt-navigation-compose
 javasteam = "1.8.0.1-26-SNAPSHOT" # https://github.com/joshuatam/JavaSteam/tree/gamenative-latest
+jsoup = "1.23.1" # https://jsoup.org/
 json = "1.8.0" # https://mvnrepository.com/artifact/org.jetbrains.kotlinx/kotlinx-serialization-json
 junit = "4.13.2" # https://mvnrepository.com/artifact/junit/junit
 junitVersion = "1.2.1" # https://mvnrepository.com/artifact/androidx.test.ext/junit
@@ -79,6 +80,7 @@ hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "dagge
 hilt-android-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "dagger-hilt" }
 javasteam = { group = "io.github.joshuatam", name = "javasteam", version.ref = "javasteam" }
 javasteam-depotdownloader = { group = "io.github.joshuatam", name = "javasteam-depotdownloader", version.ref = "javasteam" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 jetbrains-kotlinx-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "json" }
 kotlin-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 landscapist-coil = { module = "com.github.skydoves:landscapist-coil", version.ref = "landscapistCoil" }
