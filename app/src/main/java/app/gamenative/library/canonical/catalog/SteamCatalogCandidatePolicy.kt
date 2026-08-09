@@ -31,17 +31,19 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             ?.let(CanonicalNormalization::developerKey)
             .orEmpty()
         val corroborated = eligible.filter { candidate ->
-            val candidateDeveloperKey = candidate.developer
-                ?.let(CanonicalNormalization::developerKey)
-                .orEmpty()
+            val candidateDeveloperKeys = sequenceOf(candidate.developer, candidate.publisher)
+                .filterNotNull()
+                .map(CanonicalNormalization::developerKey)
+                .filter(String::isNotEmpty)
+                .toSet()
             val developerMatches = sourceDeveloperKey.isNotEmpty() &&
-                candidateDeveloperKey == sourceDeveloperKey
+                sourceDeveloperKey in candidateDeveloperKeys
             val yearMatches = source.releaseYear != null &&
                 candidate.releaseYear != null &&
                 abs(source.releaseYear - candidate.releaseYear) <= 1
             val developerConflicts = sourceDeveloperKey.isNotEmpty() &&
-                candidateDeveloperKey.isNotEmpty() &&
-                sourceDeveloperKey != candidateDeveloperKey
+                candidateDeveloperKeys.isNotEmpty() &&
+                sourceDeveloperKey !in candidateDeveloperKeys
             val yearConflicts = source.releaseYear != null &&
                 candidate.releaseYear != null &&
                 abs(source.releaseYear - candidate.releaseYear) > 1

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -54,9 +55,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.enums.AppTheme
+import app.gamenative.ui.model.SteamWebApiKeySettingsState
+import app.gamenative.ui.model.SteamWebApiKeySettingsViewModel
 import app.gamenative.ui.theme.PluviaTheme
 import com.materialkolor.PaletteStyle
 
@@ -68,9 +73,15 @@ fun SettingsScreen(
     onPaletteStyle: (PaletteStyle) -> Unit,
     onBack: () -> Unit,
 ) {
+    val steamKeyViewModel: SteamWebApiKeySettingsViewModel = hiltViewModel()
+    val steamKeyState by steamKeyViewModel.state.collectAsStateWithLifecycle()
     SettingsScreenContent(
         appTheme = appTheme,
         paletteStyle = paletteStyle,
+        steamKeyState = steamKeyState,
+        onSaveSteamKey = steamKeyViewModel::save,
+        onDeleteSteamKey = steamKeyViewModel::delete,
+        onClearSteamKeyFeedback = steamKeyViewModel::clearFeedback,
         onAppTheme = onAppTheme,
         onPaletteStyle = onPaletteStyle,
         onBack = onBack,
@@ -81,6 +92,10 @@ fun SettingsScreen(
 private fun SettingsScreenContent(
     appTheme: AppTheme,
     paletteStyle: PaletteStyle,
+    steamKeyState: SteamWebApiKeySettingsState,
+    onSaveSteamKey: (String) -> Unit,
+    onDeleteSteamKey: () -> Unit,
+    onClearSteamKeyFeedback: () -> Unit,
     onAppTheme: (AppTheme) -> Unit,
     onPaletteStyle: (PaletteStyle) -> Unit,
     onBack: () -> Unit,
@@ -141,6 +156,19 @@ private fun SettingsScreenContent(
                         paletteStyle = paletteStyle,
                         onAppTheme = onAppTheme,
                         onPaletteStyle = onPaletteStyle,
+                    )
+                }
+
+                SettingsSection(
+                    title = stringResource(R.string.settings_steam_title),
+                    icon = Icons.Default.VpnKey,
+                    iconTint = PluviaTheme.colors.accentWarning,
+                ) {
+                    SettingsGroupSteam(
+                        state = steamKeyState,
+                        onSave = onSaveSteamKey,
+                        onDelete = onDeleteSteamKey,
+                        onClearFeedback = onClearSteamKeyFeedback,
                     )
                 }
 
@@ -363,6 +391,10 @@ private fun Preview_SettingsScreen() {
         SettingsScreenContent(
             appTheme = AppTheme.DAY,
             paletteStyle = PaletteStyle.TonalSpot,
+            steamKeyState = SteamWebApiKeySettingsState(),
+            onSaveSteamKey = { },
+            onDeleteSteamKey = { },
+            onClearSteamKeyFeedback = { },
             onAppTheme = { },
             onPaletteStyle = { },
             onBack = { },

@@ -16,6 +16,7 @@ data class SteamCatalogCandidate(
     val releaseYear: Int?,
     val appType: CanonicalAppType,
     val headerImageUrl: String?,
+    val publisher: String? = null,
 ) {
     init {
         require(steamAppId > 0) { "Steam AppID must be positive" }

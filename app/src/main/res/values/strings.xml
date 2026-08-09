@@ -1121,6 +1121,19 @@
     <string name="settings_emulation_wine_proton_manager_title">Wine/Proton Manager</string>
     <string name="settings_emulation_wine_proton_manager_subtitle">Import custom Wine/Proton versions (Bionic only)</string>
 
+    <!-- Settings: Steam Group -->
+    <string name="settings_steam_title">Steam catalog</string>
+    <string name="settings_steam_web_api_key_title">Steam Web API key</string>
+    <string name="settings_steam_web_api_key_configured">Configured. Retry Steam resolution from Library Options after replacing it.</string>
+    <string name="settings_steam_web_api_key_not_configured">Required for automatic cross-store Steam matching.</string>
+    <string name="settings_steam_web_api_key_description">Enter the 32-character key from steamcommunity.com/dev/apikey. It is encrypted on this device and is never shown again.</string>
+    <string name="settings_steam_web_api_key_field">Web API key</string>
+    <string name="settings_steam_web_api_key_invalid">Enter exactly 32 hexadecimal characters.</string>
+    <string name="settings_steam_web_api_key_failed">The key could not be stored.</string>
+    <string name="settings_steam_web_api_key_replace">Replace</string>
+    <string name="settings_steam_web_api_key_delete_title">Delete Steam Web API key?</string>
+    <string name="settings_steam_web_api_key_delete_description">Automatic title lookup will use the cached catalog until it expires, then require another key.</string>
+
     <!-- Settings: Debug Group -->
     <string name="settings_debug_title">Debug</string>
     <string name="settings_debug_export_feature_diagnostics_title" translatable="false">Export feature diagnostics</string>

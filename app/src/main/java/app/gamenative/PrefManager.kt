@@ -808,6 +808,24 @@ object PrefManager {
             setPref(RECENTLY_CRASHED, value)
         }
 
+    private val STEAM_WEB_API_KEY_ENC = byteArrayPreferencesKey("steam_web_api_key_enc")
+
+    internal suspend fun readEncryptedSteamWebApiKey(): ByteArray? =
+        dataStore.data.first()[STEAM_WEB_API_KEY_ENC]?.copyOf()
+
+    internal suspend fun writeEncryptedSteamWebApiKey(value: ByteArray) {
+        require(value.isNotEmpty()) { "Encrypted Steam Web API key cannot be empty" }
+        dataStore.edit { preferences ->
+            preferences[STEAM_WEB_API_KEY_ENC] = value.copyOf()
+        }
+    }
+
+    internal suspend fun deleteEncryptedSteamWebApiKey() {
+        dataStore.edit { preferences ->
+            preferences.remove(STEAM_WEB_API_KEY_ENC)
+        }
+    }
+
     /* Login Info */
     private val CELL_ID = intPreferencesKey("cell_id")
     private val CELL_ID_MANUALLY_SET = booleanPreferencesKey("cell_id_manually_set")

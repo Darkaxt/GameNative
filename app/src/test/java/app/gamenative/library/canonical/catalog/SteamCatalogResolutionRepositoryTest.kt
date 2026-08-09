@@ -124,7 +124,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `automatic scan limits concurrency to two and isolates item failures`() = runTest {
+    fun `automatic scan serializes and paces provider work while isolating item failures`() = runTest {
         repeat(4) { index ->
             val canonical = canonical(index + 1L, steamAppId = null)
             db.canonicalGameDao().insert(canonical)
@@ -139,8 +139,10 @@ class SteamCatalogResolutionRepositoryTest {
         val active = AtomicInteger(0)
         val maxActive = AtomicInteger(0)
         val calls = AtomicInteger(0)
+        val startTimes = mutableListOf<Long>()
         val repository = repository(
             search = SteamCatalogSearchSource { query, _ ->
+                startTimes += testScheduler.currentTime
                 calls.incrementAndGet()
                 val current = active.incrementAndGet()
                 maxActive.updateAndGet { previous -> maxOf(previous, current) }
@@ -157,7 +159,8 @@ class SteamCatalogResolutionRepositoryTest {
         val progress = repository.scanAutomatically()
 
         assertEquals(4, calls.get())
-        assertTrue(maxActive.get() <= 2)
+        assertEquals(1, maxActive.get())
+        assertTrue(startTimes.zipWithNext().all { (left, right) -> right - left >= 350L })
         assertEquals(4, progress.completed)
         assertEquals(4, progress.total)
         assertEquals(1, progress.failed)
@@ -209,7 +212,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `automatic scan fails closed when selected candidate validation is incomplete`() = runTest {
+    fun `automatic scan defers to review when one exact candidate cannot be validated`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         db.canonicalGameDao().insert(canonical)
         seedMatch(
@@ -237,9 +240,11 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(1, progress.failed)
+        assertEquals(0, progress.failed)
+        assertEquals(1, progress.needsReview)
         assertEquals(0, progress.autoAccepted)
-        assertTrue(writer.operations.isEmpty())
+        val recorded = writer.operations.single() as DecisionOperation.Review
+        assertEquals(1, recorded.steamAppId)
     }
 
     @Test
@@ -263,6 +268,32 @@ class SteamCatalogResolutionRepositoryTest {
         repository.searchManually(expected, "Manual Marker")
 
         assertEquals(3, calls.get())
+    }
+
+    @Test
+    fun `explicit retries reset local catalog refresh backoff while direct AppID does not`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        val selected = match(key(GameSource.GOG, "refresh"), canonical.canonicalId, title = "Refresh Marker")
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(selected)
+        val retryRequests = AtomicInteger(0)
+        val search = object : SteamCatalogSearchSource {
+            override suspend fun search(
+                query: String,
+                locale: MetadataLocale,
+            ): List<SteamStoreSearchHit> = emptyList()
+
+            override fun requestImmediateRetry() {
+                retryRequests.incrementAndGet()
+            }
+        }
+        val repository = repository(search = search)
+
+        repository.retryAutomatically()
+        repository.searchManually(expected(selected), "Refresh Marker")
+        repository.searchManually(expected(selected), "42")
+
+        assertEquals(2, retryRequests.get())
     }
 
     @Test
@@ -354,6 +385,10 @@ class SteamCatalogResolutionRepositoryTest {
             assertFalse(diagnosticText.contains(appId.toString()))
         }
         assertFalse(diagnosticText.contains("response URL"))
+        assertEquals(
+            listOf("UNEXPECTED_FAILURE"),
+            diagnostics.events.mapNotNull(SteamResolutionDiagnosticEvent::errorType),
+        )
         assertTrue(diagnostics.events.map(SteamResolutionDiagnosticEvent::result).containsAll(
             listOf(
                 SteamResolutionItemResult.AutoAccepted,
@@ -362,6 +397,58 @@ class SteamCatalogResolutionRepositoryTest {
                 SteamResolutionItemResult.ProviderUnavailable,
             ),
         ))
+    }
+
+    @Test
+    fun `provider diagnostics distinguish catalog details and partial failures`() = runTest {
+        listOf("Index Marker", "Details Marker", "Partial Marker").forEachIndexed { index, title ->
+            val canonical = canonical(index + 1L, steamAppId = null)
+            db.canonicalGameDao().insert(canonical)
+            seedMatch(
+                match(
+                    key(GameSource.GOG, "failure-${index + 1}"),
+                    canonical.canonicalId,
+                    title = title,
+                ),
+            )
+        }
+        val repository = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                when (query) {
+                    "Index Marker" -> throw SteamCatalogSearchException()
+                    "Details Marker" -> listOf(SteamStoreSearchHit(1, query, null))
+                    else -> listOf(
+                        SteamStoreSearchHit(2, query, null),
+                        SteamStoreSearchHit(3, query, null),
+                    )
+                }
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                when (steamAppId) {
+                    2 -> record(steamAppId, "Partial Marker", "Studio", 2020)
+                    else -> error("private app details failure")
+                }
+            },
+        )
+
+        repository.scanAutomatically()
+
+        assertEquals(
+            listOf(
+                "APP_LIST_UNAVAILABLE",
+                "APP_DETAILS_UNAVAILABLE",
+                "CANDIDATE_DETAILS_INCOMPLETE",
+            ),
+            diagnostics.events.map(SteamResolutionDiagnosticEvent::errorType),
+        )
+        assertEquals(
+            listOf(
+                SteamResolutionItemResult.ProviderUnavailable,
+                SteamResolutionItemResult.ProviderUnavailable,
+                SteamResolutionItemResult.ReviewRequired,
+            ),
+            diagnostics.events.map(SteamResolutionDiagnosticEvent::result),
+        )
     }
 
     @Test

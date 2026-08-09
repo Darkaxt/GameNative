@@ -1,6 +1,7 @@
 package app.gamenative.build
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -31,6 +32,15 @@ class DarkaxtBuildContractTest {
         assertTrue(manifest.contains("${'$'}{roundIcon}"))
         assertTrue(manifest.contains("${'$'}{altIcon}"))
         assertTrue(manifest.contains("android:scheme=\"nxm\""))
+    }
+
+    @Test
+    fun launcherPackageIsNotClassifiedAsGameSoSamsungDoesNotHideIt() {
+        val manifest = File(repositoryRoot(), "app/src/main/AndroidManifest.xml").readText()
+
+        assertFalse(manifest.contains("android:isGame=\"true\""))
+        assertFalse(manifest.contains("android:appCategory=\"game\""))
+        assertTrue(manifest.contains("android.intent.category.LAUNCHER"))
     }
 
     private fun repositoryRoot(): File = generateSequence(

@@ -35,7 +35,7 @@ class OwnershipProviderParsingTest {
         assertTrue(GOGApiClient.parseGameDetails(JSONObject(), "123").isFailure)
         assertTrue(
             GOGApiClient.parseGameDetails(
-                JSONObject().put("title", "Game").put("game_type", "unknown"),
+                JSONObject().put("title", "Game").put("game_type", ""),
                 "123",
             ).isFailure,
         )
@@ -47,6 +47,16 @@ class OwnershipProviderParsingTest {
 
         assertEquals("123", parsed.id)
         assertEquals("Game", parsed.title)
+    }
+
+    @Test
+    fun gogPackDetailsAreMaterializedAsNonBaseGames() {
+        val parsed = GOGApiClient.parseGameDetails(
+            JSONObject().put("title", "Pack").put("game_type", "pack"),
+            "123",
+        ).getOrThrow()
+
+        assertTrue(parsed.isDlc)
     }
 
     @Test

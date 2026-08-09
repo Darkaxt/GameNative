@@ -4,7 +4,7 @@
 
 **Goal:** Automatically resolve non-Steam games to trustworthy Steam catalog identities with a native correction path, then ship native Reviews and Discussions as three independently testable signed deliverables.
 
-**Architecture:** Keep canonical projection and source execution unchanged. Add bounded keyless Steam catalog search outside Room transactions, feed validated evidence into guarded canonical mutations, and reuse the accepted AppID for metadata/facets/popularity. Add Reviews and Discussions through a separate no-store community package and extend only the existing detail ViewModel and placeholder branches.
+**Architecture:** Keep canonical projection and source execution unchanged. Use authenticated Steam Web API AppList discovery with a compact app-private public-catalog cache and exact local title lookup, then feed Store-validated evidence into guarded canonical mutations and reuse accepted AppIDs for metadata/facets/popularity. Add Reviews and Discussions through a separate no-store community package and extend only the existing detail ViewModel and placeholder branches.
 
 **Tech Stack:** Kotlin 2.1.21, Jetpack Compose, Material 3, Room 2.8.4 schema 27, Hilt, DataStore Preferences, coroutines/Flow, kotlinx.serialization, OkHttp/MockWebServer, Jsoup 1.23.1, JUnit 4, Robolectric, Compose UI tests, GitHub Actions
 
@@ -18,9 +18,9 @@ The implementation first produces three highest-priority visible signed RCs:
 
 | Core deliverable | Initial reserved release |
 |---|---|
-| Automatic resolution + Fix Steam match | code 31, `1.1.3-rc5`, `v1.1.3-rc5` |
-| Native Reviews | code 32, `1.1.3-rc6`, `v1.1.3-rc6` |
-| Native Discussions | code 33, `1.1.3-rc7`, `v1.1.3-rc7` |
+| Automatic resolution + Fix Steam match | code 31, `1.1.3-rc5`, `v1.1.3-rc5`; corrected provider/source RC code 32, `1.1.3-rc6`, `v1.1.3-rc6` |
+| Native Reviews | code 33, `1.1.3-rc7`, `v1.1.3-rc7` |
+| Native Discussions | code 34, `1.1.3-rc8`, `v1.1.3-rc8` |
 
 If a correction release consumes a code/tag, increment every subsequent reservation. Never move or reuse a published tag.
 
@@ -37,7 +37,7 @@ For each deliverable:
 
 A second surviving Critical/High blocker stops delivery. Every Medium/Low finding receives a design-ledger ID, target task/stage, and acceptance condition before the cross-check closes.
 
-RC5–RC7 do not end the plan. Tasks 15–19 execute the design ledger's resolver/detail completion, community completion, external-storage hardening, LSFG decision, and aggregate upstream handoff. An item may leave the plan only with implementation evidence or an explicit user-approved permanent-boundary decision.
+RC5–RC8 do not end the plan. Tasks 15–19 execute the design ledger's resolver/detail completion, community completion, external-storage hardening, LSFG decision, and aggregate upstream handoff. An item may leave the plan only with implementation evidence or an explicit user-approved permanent-boundary decision.
 
 ## 2. File structure
 
@@ -844,7 +844,7 @@ Apply the one-pass classification/correction rule. Review-body/identity persiste
 
 - [ ] **Step 3: Set the next unused release version and publish**
 
-Use code 32/name/tag RC6 only if unused; otherwise use the next increasing identity. Repeat Task 7's upstream sync, workflow-contract test, feature-branch push, fork-master fast-forward, immutable annotated tag, parallel workflow dispatch, four-APK/checksum/signature verification. Commit message:
+Use code 33/name/tag RC7. Repeat Task 7's upstream sync, workflow-contract test, feature-branch push, fork-master fast-forward, immutable annotated tag, parallel workflow dispatch, four-APK/checksum/signature verification. Commit message:
 
 ```bash
 git commit -m "chore: prepare native Reviews RC" -m "Co-Authored-By: Claude <noreply@anthropic.com>"
@@ -991,7 +991,7 @@ Apply the one-pass classification/correction rule. Authenticated scraping/cookie
 
 - [ ] **Step 3: Set the next unused release version and publish**
 
-Use code 33/name/tag RC7 only if unused; otherwise use the next increasing identity. Repeat Task 7's full upstream-sync and publication procedure. Commit message:
+Use code 34/name/tag RC8. Repeat Task 7's full upstream-sync and publication procedure. Commit message:
 
 ```bash
 git commit -m "chore: prepare native Discussions RC" -m "Co-Authored-By: Claude <noreply@anthropic.com>"

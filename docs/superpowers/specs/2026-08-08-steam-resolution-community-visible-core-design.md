@@ -484,9 +484,9 @@ Starting from `versionCode 30` / `1.1.3-rc4`:
 
 | Deliverable | Planned version | Planned tag |
 |---|---|---|
-| Steam resolution + Fix match | `31` / `1.1.3-rc5` | `v1.1.3-rc5` |
-| Native Reviews | `32` / `1.1.3-rc6` | `v1.1.3-rc6` |
-| Native Discussions | `33` / `1.1.3-rc7` | `v1.1.3-rc7` |
+| Steam resolution + Fix match | `31` / `1.1.3-rc5`; corrected provider/source RC `32` / `1.1.3-rc6` | `v1.1.3-rc5`; `v1.1.3-rc6` |
+| Native Reviews | `33` / `1.1.3-rc7` | `v1.1.3-rc7` |
+| Native Discussions | `34` / `1.1.3-rc8` | `v1.1.3-rc8` |
 
 A correction release consumes the next unused version code/tag and shifts later versions. Published tags are immutable and never reused.
 
@@ -551,12 +551,17 @@ This ledger is authoritative. Cross-checks may add rows but may not delete unres
 
 | ID | Missing or misimplemented feature | Current disposition | Target | Completion evidence |
 |---|---|---|---|---|
-| R1 | Non-Steam-only games cannot discover Steam identities | Implement now | Deliverable 1 | Automatic search/validation tests and signed acceptance path |
+| R1 | Non-Steam-only games cannot discover Steam identities | Corrected implementation; signed live acceptance pending | Deliverable 1 corrected RC | Authenticated full AppList bootstrap, exact local search, bounded validation tests, and signed acceptance path |
 | R2 | No visible provenance or Fix Steam match flow | Implement now | Deliverable 1 | Search/select/reject/reset UI and sticky-decision tests |
 | R3 | Non-owned accepted AppIDs lack PICS tags/categories | Implement now | Deliverable 1 | Logged-in best-effort PICS test without false ownership |
 | R4 | Resolver scan lacks process-death/durable resume | Named decision | Stage 4 | Implement durable resume or record fixture/live evidence that foreground resume meets acceptance |
-| R5 | Global catalog/FTS, fuzzy candidate quality, indirect mapping hints | Coverage-triggered expansion | Stage 4 | Aggregate coverage ≥80%, or implement the next source and remeasure |
+| R5 | Full authoritative catalog coverage is available for exact normalized title matches; fuzzy quality and indirect mapping hints remain incomplete | Exact AppList index implemented; fuzzy expansion remains coverage-triggered | Stage 4 | Corrected RC resolves the measured target and aggregate exact-match coverage is measured before any fuzzy expansion |
 | R6 | Rejection history stores only one candidate | Evidence-triggered repair | Stage 4 | Rejected candidates do not recur incorrectly, or schema/history repair ships |
+| R7 | Resolver provider failures were opaque/redacted and detail responses were unbounded | Corrected now | Deliverable 1 corrected RC | Fixed provider reason categories, one-worker pacing, partial-detail review fallback, and bounded-response tests |
+| R8 | GOG recommendation-media fallback still performs a separate Store title search outside canonical resolution | Named correction; not part of ownership resolution | Stage 4 | Route through a trusted resolved/AppList identity or remove the fallback without reducing canonical resolver coverage |
+| R9 | AppList `last_modified` is retained in the public cache but not yet used to suppress accepted-identity enrichment refreshes | Named optimization | Stage 4 | Unchanged accepted AppIDs avoid redundant rich enrichment while explicit/manual refresh remains possible |
+| O1 | A legitimate GOG non-game product type aborted complete ownership materialization | Corrected now | Deliverable 1 corrected RC | Pack-product parsing regression test and signed live GOG source acceptance |
+| U1 | Samsung launcher policy could hide the package because the launcher was classified as a game | Corrected now | Deliverable 1 corrected RC | Manifest contract test and signed-device launcher visibility acceptance |
 | P1 | Accepted Steam metadata can be overwritten by non-Steam projection | Repair now | Deliverable 1 | Provider-precedence regression test |
 | P2 | Steam-first card artwork/title remains incomplete | Named work | Stage 4 | Accepted non-Steam cards use cached Steam presentation with fallback |
 | D1 | Detail has a fifth Resources tab | Repair now | Deliverable 1 | Exactly four tabs; Resources rendered inside Details |

@@ -27,11 +27,15 @@ import app.gamenative.library.canonical.SteamCatalogDecisionWriter
 import app.gamenative.library.canonical.SystemCanonicalProjectionClock
 import app.gamenative.library.canonical.TrustedSteamMappingProvider
 import app.gamenative.library.canonical.catalog.FeatureSteamCatalogResolutionDiagnostics
+import app.gamenative.library.canonical.catalog.FileSteamAppListCache
 import app.gamenative.library.canonical.catalog.SteamAcceptedIdentityEnricher
 import app.gamenative.library.canonical.catalog.SteamAcceptedIdentityEnrichmentSink
+import app.gamenative.library.canonical.catalog.SteamAppListCache
+import app.gamenative.library.canonical.catalog.SteamAppListRemoteSource
+import app.gamenative.library.canonical.catalog.SteamAppListSearchProvider
 import app.gamenative.library.canonical.catalog.SteamCatalogResolutionDiagnosticSink
-import app.gamenative.library.canonical.catalog.SteamCatalogSearchProvider
 import app.gamenative.library.canonical.catalog.SteamCatalogSearchSource
+import app.gamenative.library.canonical.catalog.SteamWebApiAppListProvider
 import app.gamenative.library.canonical.catalog.SteamPublicPicsFacetSource
 import app.gamenative.library.canonical.catalog.SteamSessionPublicPicsFacetSource
 import app.gamenative.library.canonical.runtime.AmazonOwnedCopyRuntimeAdapter
@@ -134,9 +138,21 @@ abstract class CanonicalLibraryModule {
 
     @Binds
     @Singleton
-    abstract fun bindSteamCatalogSearchSource(
-        implementation: SteamCatalogSearchProvider,
+    internal abstract fun bindSteamCatalogSearchSource(
+        implementation: SteamAppListSearchProvider,
     ): SteamCatalogSearchSource
+
+    @Binds
+    @Singleton
+    internal abstract fun bindSteamAppListRemoteSource(
+        implementation: SteamWebApiAppListProvider,
+    ): SteamAppListRemoteSource
+
+    @Binds
+    @Singleton
+    internal abstract fun bindSteamAppListCache(
+        implementation: FileSteamAppListCache,
+    ): SteamAppListCache
 
     @Binds
     @Singleton

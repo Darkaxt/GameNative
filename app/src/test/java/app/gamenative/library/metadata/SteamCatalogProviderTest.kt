@@ -244,6 +244,21 @@ class SteamCatalogProviderTest {
     }
 
     @Test
+    fun rejectsOversizedAppDetailsResponse() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                successFixture() + " ".repeat(MAX_APP_DETAILS_RESPONSE_BYTES + 1),
+            ),
+        )
+
+        try {
+            provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US"))
+            fail("Expected oversized app-details response to be rejected")
+        } catch (_: SteamCatalogException) {
+        }
+    }
+
+    @Test
     fun cancellationEscapesAndCancelsTheHttpCall() = runTest {
         server.enqueue(
             MockResponse()
@@ -310,5 +325,6 @@ class SteamCatalogProviderTest {
 
     private companion object {
         const val TRUSTED_APP_ID = 424242
+        const val MAX_APP_DETAILS_RESPONSE_BYTES = 4 * 1024 * 1024
     }
 }

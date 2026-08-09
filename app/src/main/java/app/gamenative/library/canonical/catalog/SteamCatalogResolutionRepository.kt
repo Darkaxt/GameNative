@@ -24,6 +24,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -73,7 +74,10 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
 
     suspend fun scanAutomatically(): SteamResolutionProgress = runAutomaticScan(force = false)
 
-    suspend fun retryAutomatically(): SteamResolutionProgress = runAutomaticScan(force = true)
+    suspend fun retryAutomatically(): SteamResolutionProgress {
+        searchSource.requestImmediateRetry()
+        return runAutomaticScan(force = true)
+    }
 
     private suspend fun runAutomaticScan(force: Boolean): SteamResolutionProgress = scanMutex.withLock {
         if (!force && automaticScanCompleted) return@withLock mutableProgress.value
@@ -101,7 +105,8 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         val candidates = if (directSteamAppId != null) {
             listOfNotNull(fetchDirectCandidate(directSteamAppId, locale))
         } else {
-            fetchCandidates(query, locale)
+            searchSource.requestImmediateRetry()
+            fetchCandidates(query, locale).candidates
         }
         candidateLists[expected.key] = candidates
         return candidates
@@ -183,6 +188,9 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                     val index = nextIndex.getAndIncrement()
                     if (index >= matches.size) break
                     resolveAndRecord(matches[index])
+                    if (index + 1 < matches.size) {
+                        delay(AUTOMATIC_ITEM_INTERVAL_MS)
+                    }
                 }
             }
         }
@@ -196,7 +204,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         } catch (error: Exception) {
             ItemResolution(
                 result = SteamResolutionItemResult.ProviderUnavailable,
-                errorType = error::class.simpleName ?: UNKNOWN_EXCEPTION,
+                errorType = error.diagnosticCategory(),
             )
         }
         updateProgress(match.source, resolution)
@@ -205,8 +213,20 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private suspend fun resolve(match: StoreMatchEntity): ItemResolution {
         val expected = match.expectedState()
         val locale = localeProvider.current()
-        val candidates = fetchCandidates(match.evidenceDisplayName, locale)
+        val fetched = fetchCandidates(match.evidenceDisplayName, locale)
+        val candidates = fetched.candidates
         candidateLists[expected.key] = candidates
+        if (fetched.incomplete) {
+            val selected = candidates.first()
+            return decisionWriter.recordCandidate(
+                expected = expected,
+                steamAppId = selected.steamAppId,
+                resolverVersion = CURRENT_RESOLVER_VERSION,
+                nowEpochMs = clock.nowEpochMs(),
+            ).asItemResolution(SteamResolutionItemResult.ReviewRequired).copy(
+                errorType = CANDIDATE_DETAILS_INCOMPLETE,
+            )
+        }
         return when (val decision = candidatePolicy.evaluate(match.sourceEvidence(), candidates)) {
             is CatalogDecision.AutoAccept -> {
                 val selected = candidates.first { it.steamAppId == decision.steamAppId }
@@ -245,7 +265,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private suspend fun fetchCandidates(
         query: String,
         locale: MetadataLocale,
-    ): List<SteamCatalogCandidate> {
+    ): CandidateFetchResult {
         var failedFetches = 0
         val candidates = searchSource.search(query, locale)
             .distinctBy(SteamStoreSearchHit::steamAppId)
@@ -257,16 +277,23 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                     throw error
                 } catch (_: Exception) {
                     failedFetches++
-                    null
+                    return@mapNotNull null
                 }
-                record
-                    ?.takeIf { it.steamAppId == hit.steamAppId }
-                    ?.toCandidate(hit, locale)
+                val validated = record?.takeIf { it.steamAppId == hit.steamAppId }
+                if (validated == null) {
+                    failedFetches++
+                    null
+                } else {
+                    validated.toCandidate(hit, locale)
+                }
             }
-        if (failedFetches > 0) {
+        if (failedFetches > 0 && candidates.isEmpty()) {
             throw SteamCatalogCandidateFetchException()
         }
-        return candidates
+        return CandidateFetchResult(
+            candidates = candidates,
+            incomplete = failedFetches > 0,
+        )
     }
 
     private suspend fun fetchDirectCandidate(
@@ -298,6 +325,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             releaseYear = releaseYear,
             appType = appType,
             headerImageUrl = metadata.headerImageUrl ?: hit.headerImageUrl,
+            publisher = metadata.publishers.firstOrNull(),
         )
     }
 
@@ -365,6 +393,12 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         )
     }
 
+    private fun Exception.diagnosticCategory(): String = when (this) {
+        is SteamCatalogSearchException -> APP_LIST_UNAVAILABLE
+        is SteamCatalogCandidateFetchException -> APP_DETAILS_UNAVAILABLE
+        else -> UNEXPECTED_FAILURE
+    }
+
     private fun CanonicalGuardedMutationResult.asItemResolution(
         appliedResult: SteamResolutionItemResult,
     ): ItemResolution = ItemResolution(
@@ -414,6 +448,11 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         val locale: MetadataLocale,
     )
 
+    private data class CandidateFetchResult(
+        val candidates: List<SteamCatalogCandidate>,
+        val incomplete: Boolean,
+    )
+
     private data class ItemResolution(
         val result: SteamResolutionItemResult,
         val errorType: String? = null,
@@ -423,8 +462,12 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         IllegalStateException("Steam catalog candidate details unavailable")
 
     private companion object {
-        const val MAX_CONCURRENCY = 2
+        const val MAX_CONCURRENCY = 1
         const val MAX_VALIDATED_HITS = 5
-        const val UNKNOWN_EXCEPTION = "UNKNOWN_EXCEPTION"
+        const val AUTOMATIC_ITEM_INTERVAL_MS = 350L
+        const val APP_LIST_UNAVAILABLE = "APP_LIST_UNAVAILABLE"
+        const val APP_DETAILS_UNAVAILABLE = "APP_DETAILS_UNAVAILABLE"
+        const val CANDIDATE_DETAILS_INCOMPLETE = "CANDIDATE_DETAILS_INCOMPLETE"
+        const val UNEXPECTED_FAILURE = "UNEXPECTED_FAILURE"
     }
 }

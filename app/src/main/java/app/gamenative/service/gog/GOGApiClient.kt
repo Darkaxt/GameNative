@@ -110,7 +110,8 @@ object GOGApiClient {
         val title = rawResponse.opt("title") as? String
         require(!title.isNullOrBlank() && title == title.trim()) { "MALFORMED_GOG_DETAIL" }
         if (rawResponse.has("game_type")) {
-            require(rawResponse.opt("game_type") in setOf("game", "dlc")) {
+            val gameType = rawResponse.opt("game_type") as? String
+            require(!gameType.isNullOrBlank() && gameType == gameType.trim()) {
                 "MALFORMED_GOG_DETAIL"
             }
         }
@@ -522,7 +523,7 @@ object GOGApiClient {
         // Used in GOG Galaxy to hide specific entitlements
         val isSecret = rawResponse.optBoolean("is_secret", false)
         val gameType = rawResponse.optString("game_type", "dlc")
-        val isDlc = gameType == "dlc"
+        val isDlc = gameType != "game"
 
         val installers = downloads?.optJSONArray("installers")
         val downloadSize = if (installers != null && installers.length() > 0) {

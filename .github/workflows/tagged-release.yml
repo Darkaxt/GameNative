@@ -21,6 +21,8 @@ permissions:
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  EXPECTED_VERSION_CODE: "32"
+  EXPECTED_VERSION_NAME: "1.1.3-rc6"
 
 jobs:
   build:
@@ -46,6 +48,10 @@ jobs:
             fi
           elif [[ ! "$TAG" =~ $pushed_tag_pattern ]]; then
             echo "Invalid pushed release tag: $TAG" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" != "v$EXPECTED_VERSION_NAME" ]]; then
+            echo "Release tag does not match the APK version" >&2
             exit 1
           fi
 
@@ -276,8 +282,8 @@ jobs:
       - name: Verify APK signatures, packages, versions, and generate checksums
         env:
           EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
-          EXPECTED_VERSION_CODE: "31"
-          EXPECTED_VERSION_NAME: "1.1.3-rc5"
+          EXPECTED_VERSION_CODE: "32"
+          EXPECTED_VERSION_NAME: "1.1.3-rc6"
         run: |
           set -euo pipefail
           BUILD_TOOLS_DIR="${ANDROID_HOME}/build-tools/34.0.0"

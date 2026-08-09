@@ -23,6 +23,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.ResponseBody
 
 interface SteamCatalogDataSource {
     suspend fun fetch(
@@ -101,7 +102,7 @@ class SteamCatalogProvider internal constructor(
             } else {
                 response.use { finalResponse ->
                     if (!finalResponse.isSuccessful) throw SteamCatalogException()
-                    return finalResponse.body.string()
+                    return finalResponse.body.readAppDetailsBoundedUtf8(MAX_RESPONSE_BYTES)
                 }
             }
         }
@@ -257,6 +258,7 @@ class SteamCatalogProvider internal constructor(
     private companion object {
         const val DEFAULT_ENDPOINT = "https://store.steampowered.com/api/appdetails"
         const val MAX_NETWORK_HOPS = 4
+        const val MAX_RESPONSE_BYTES = 4L * 1024L * 1024L
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
         val BREAK_TAG = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
         val RELEASE_YEAR = Regex("(?<!\\d)\\d{4}(?!\\d)")
@@ -273,6 +275,13 @@ private fun JsonElement?.positiveIntOrNull(): Int? =
     (this as? JsonPrimitive)?.contentOrNull?.toIntOrNull()?.takeIf { it > 0 }
 private fun JsonElement?.nonNegativeIntOrNull(): Int? =
     (this as? JsonPrimitive)?.intOrNull?.takeIf { it >= 0 }
+
+private fun ResponseBody.readAppDetailsBoundedUtf8(maxBytes: Long): String {
+    if (contentLength() > maxBytes) throw SteamCatalogException()
+    val source = source()
+    if (source.request(maxBytes + 1L)) throw SteamCatalogException()
+    return source.readUtf8()
+}
 
 private suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }

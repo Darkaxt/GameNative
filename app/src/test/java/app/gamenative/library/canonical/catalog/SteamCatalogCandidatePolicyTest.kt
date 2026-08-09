@@ -82,6 +82,23 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
+    fun sourceDeveloperMatchingSteamPublisherCorroboratesExactCandidate() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Publisher", year = null),
+            candidates = listOf(
+                candidate(
+                    steamAppId = 42,
+                    title = "Example",
+                    developer = "Actual Studio",
+                    publisher = "Publisher",
+                ),
+            ),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(42), result)
+    }
+
+    @Test
     fun developerConflictPreventsAutoAccept() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio A", year = null),
@@ -145,6 +162,7 @@ class SteamCatalogCandidatePolicyTest {
         developer: String? = null,
         year: Int? = null,
         appType: CanonicalAppType = CanonicalAppType.GAME,
+        publisher: String? = null,
     ) = SteamCatalogCandidate(
         steamAppId = steamAppId,
         title = title,
@@ -152,5 +170,6 @@ class SteamCatalogCandidatePolicyTest {
         releaseYear = year,
         appType = appType,
         headerImageUrl = null,
+        publisher = publisher,
     )
 }
