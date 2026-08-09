@@ -17,7 +17,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
 
-const val CURRENT_RESOLVER_VERSION = 2
+const val CURRENT_RESOLVER_VERSION = 3
 const val SUPPORTED_TRUSTED_MAP_VERSION = 1
 
 data class TrustedSteamMapping(
@@ -92,7 +92,11 @@ class CanonicalGameResolver @Inject constructor(
         if (
             existingMatch?.decisionSource == MatchDecisionSource.AUTOMATIC &&
             existingMatch.matchMethod == MatchMethod.STEAM_CATALOG &&
-            existingMatch.resolverVersion == CURRENT_RESOLVER_VERSION
+            (
+                existingMatch.resolverVersion == CURRENT_RESOLVER_VERSION ||
+                    existingMatch.confidence == MatchConfidence.HIGH ||
+                    existingMatch.confidence == MatchConfidence.VERIFIED
+            )
         ) {
             return existingResolution(
                 existingMatch = existingMatch,

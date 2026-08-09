@@ -96,7 +96,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
 
         mutableIsScanning.value = true
         try {
-            val selectedMatches = eligibleMatches()
+            val selectedMatches = eligibleMatches(force)
             mutableProgress.value = SteamResolutionProgress(total = selectedMatches.size)
             if (selectedMatches.isNotEmpty()) {
                 resolveWithBoundedWorkers(selectedMatches)
@@ -164,17 +164,18 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         nowEpochMs = clock.nowEpochMs(),
     )
 
-    private suspend fun eligibleMatches(): List<StoreMatchEntity> = storeMatchDao
+    private suspend fun eligibleMatches(force: Boolean): List<StoreMatchEntity> = storeMatchDao
         .getPresentWithoutSteamIdentity(GameSource.STEAM)
         .groupBy(StoreMatchEntity::canonicalId)
         .toSortedMap()
         .values
         .filterNot { matches ->
             matches.any { match -> match.decisionSource == MatchDecisionSource.USER } ||
-                matches.any { match ->
+                (!force && matches.any { match ->
                     match.matchMethod == MatchMethod.STEAM_CATALOG &&
-                        match.confidence == MatchConfidence.REVIEW_REQUIRED
-                }
+                        match.confidence == MatchConfidence.REVIEW_REQUIRED &&
+                        match.resolverVersion >= CURRENT_RESOLVER_VERSION
+                })
         }
         .map(::strongestEvidence)
 

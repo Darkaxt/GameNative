@@ -347,6 +347,77 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
+    fun `automatic retry revalidates a current automatic review decision`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        val selected = match(
+            key(GameSource.EPIC, "current-review"),
+            canonical.canonicalId,
+            title = "Exact Marker",
+            developer = "studio",
+            year = 2020,
+        ).copy(
+            candidateSteamAppId = 42,
+            matchMethod = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.REVIEW_REQUIRED,
+        )
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(selected)
+        val calls = AtomicInteger(0)
+        val repository = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                calls.incrementAndGet()
+                listOf(SteamStoreSearchHit(42, query, null))
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(steamAppId, "Exact Marker", "Studio", 2020)
+            },
+        )
+
+        val automatic = repository.scanAutomatically()
+        val retried = repository.retryAutomatically()
+
+        assertEquals(0, automatic.total)
+        assertEquals(1, retried.total)
+        assertEquals(1, retried.autoAccepted)
+        assertEquals(1, calls.get())
+        assertTrue(writer.operations.single() is DecisionOperation.Accepted)
+    }
+
+    @Test
+    fun `automatic scan revalidates review decisions persisted by the previous resolver`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        val selected = match(
+            key(GameSource.EPIC, "previous-review"),
+            canonical.canonicalId,
+            title = "Exact Marker",
+            developer = "studio",
+            year = 2020,
+        ).copy(
+            candidateSteamAppId = 42,
+            matchMethod = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.REVIEW_REQUIRED,
+            resolverVersion = 2,
+        )
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(selected)
+        val repository = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                listOf(SteamStoreSearchHit(42, query, null))
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(steamAppId, "Exact Marker", "Studio", 2020)
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertTrue(CURRENT_RESOLVER_VERSION > selected.resolverVersion)
+        assertEquals(1, progress.total)
+        assertEquals(1, progress.autoAccepted)
+        assertTrue(writer.operations.single() is DecisionOperation.Accepted)
+    }
+
+    @Test
     fun `manual confirmation enriches the validated selected identity`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         val selected = match(key(GameSource.GOG, "manual-confirm"), canonical.canonicalId, title = "Manual Marker")

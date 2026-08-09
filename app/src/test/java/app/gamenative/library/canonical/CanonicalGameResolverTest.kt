@@ -315,7 +315,7 @@ class CanonicalGameResolverTest {
     }
 
     @Test
-    fun acceptedSteamCatalogDecisionSurvivesLocalProjection() = runTest {
+    fun acceptedSteamCatalogDecisionSurvivesResolverUpgrade() = runTest {
         val ownedCopy = copy(displayName = "Control", developer = "Remedy", releaseYear = 2019)
         val selected = canonical(
             index = 1,
@@ -330,6 +330,7 @@ class CanonicalGameResolverTest {
             canonicalId = selected.canonicalId,
             method = MatchMethod.STEAM_CATALOG,
             confidence = MatchConfidence.HIGH,
+            resolverVersion = CURRENT_RESOLVER_VERSION - 1,
             matchedAt = 123,
             candidateSteamAppId = 870780,
         )

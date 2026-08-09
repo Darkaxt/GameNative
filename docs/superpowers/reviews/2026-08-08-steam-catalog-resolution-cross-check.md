@@ -135,4 +135,20 @@ RC8 key-gate/terminal-page correction evidence:
 - An attempted combined Gradle invocation applied `--tests` only to the final test task and unintentionally started the unrelated unfiltered Legacy suite. It was stopped after pre-existing baseline failures appeared, stale daemons were stopped, and both intended variant gates were rerun independently as recorded above; the accidental run is not counted as product verification.
 - RC8 publication, installation, live resolver completion, three-per-store sampling, AppID `2229940`, and Samsung launcher visibility remain required and are not represented as passed.
 
-**Gate result:** The RC7 Android Keystore/UI gate passed, but signed live resolution exposed two deterministic blockers. Reviews remain blocked until RC8 is published and the requested live resolver acceptance is verified and reported.
+RC10 visible-media and resolver follow-up evidence:
+
+- RC10 was published as a four-channel persistently signed prerelease and installed over RC8 without clearing app data; package code 36/name `1.1.3-rc10` was verified on the signed tablet.
+- The seven-day support prompt appeared once after upgrading from a build with no stored timestamp, then remained absent across two cold relaunches.
+- Current Steam HLS trailer payloads were restored and old screenshot-only metadata snapshots invalidated. The signed DREDGE detail showed two moving trailers as media 1/18 and 2/18 before screenshots.
+- Live inspection also confirmed that the Epic-owned DREDGE copy remained separate because its automatic Steam catalog relationship was latched in `REVIEW_REQUIRED`; equal visible titles are deliberately not a canonical grouping key.
+
+RC11 latched-review correction evidence:
+
+- The resolver regression was observed RED in Legacy: explicit Retry selected zero current automatic review decisions, resolver-v2 review decisions were skipped after upgrade, and an accepted automatic catalog identity was destabilized by a resolver-version change.
+- Resolver v3 now reconsiders persisted v2 automatic review decisions once, explicit Retry revalidates current automatic review decisions, and accepted automatic catalog identities survive version upgrades. User decisions remain excluded before force/version eligibility is evaluated.
+- The existing candidate policy still owns acceptance, so app-type or developer/year conflicts remain review-required rather than being merged by equal title alone.
+- Focused Legacy and Modern resolver, guarded automatic merge, grouped-card projection, source-action routing, and RC11 release-contract tests passed after the correction.
+- `assembleLegacyDebug` passed; `apkanalyzer` verified package `app.gamenative`, version code 37, and version name `1.1.3-rc11`.
+- Signed publication and tablet acceptance evidence are recorded only after their fresh gates complete.
+
+**Gate result:** The RC10 signed-media corrections passed, but resolver acceptance remains blocked by R11 until RC11 is published and the previously separate non-Steam copy is re-evaluated on the signed tablet. Reviews do not begin before that result is reported.
