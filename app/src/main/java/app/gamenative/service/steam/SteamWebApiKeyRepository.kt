@@ -4,6 +4,9 @@ import app.gamenative.PrefManager
 import java.nio.charset.StandardCharsets
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 enum class SteamWebApiKeyStatus {
     CONFIGURED,
@@ -16,6 +19,8 @@ enum class SteamWebApiKeySaveResult {
 }
 
 interface SteamWebApiKeyRepository {
+    val changes: SharedFlow<SteamWebApiKeyStatus>
+
     suspend fun status(): SteamWebApiKeyStatus
 
     suspend fun save(key: String): SteamWebApiKeySaveResult
@@ -46,6 +51,9 @@ internal class DefaultSteamWebApiKeyRepository @Inject constructor(
     private val persistence: SteamWebApiKeyPersistence,
     private val cipher: SteamWebApiKeyCipher,
 ) : SteamWebApiKeyRepository, SteamWebApiKeySource {
+    private val mutableChanges = MutableSharedFlow<SteamWebApiKeyStatus>(extraBufferCapacity = 1)
+    override val changes: SharedFlow<SteamWebApiKeyStatus> = mutableChanges.asSharedFlow()
+
     override suspend fun status(): SteamWebApiKeyStatus =
         if (persistence.read() == null) {
             SteamWebApiKeyStatus.NOT_CONFIGURED
@@ -59,6 +67,7 @@ internal class DefaultSteamWebApiKeyRepository @Inject constructor(
         val plaintext = key.toByteArray(StandardCharsets.UTF_8)
         return try {
             persistence.write(cipher.encrypt(plaintext))
+            mutableChanges.emit(SteamWebApiKeyStatus.CONFIGURED)
             SteamWebApiKeySaveResult.SAVED
         } finally {
             plaintext.fill(0)
@@ -67,6 +76,7 @@ internal class DefaultSteamWebApiKeyRepository @Inject constructor(
 
     override suspend fun delete() {
         persistence.delete()
+        mutableChanges.emit(SteamWebApiKeyStatus.NOT_CONFIGURED)
     }
 
     override suspend fun keyOrNull(): String? {

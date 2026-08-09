@@ -9,6 +9,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.resetMain
@@ -144,6 +146,7 @@ class SteamWebApiKeySettingsViewModelTest {
     )
 
     private class RecordingRepository : SteamWebApiKeyRepository {
+        override val changes: SharedFlow<SteamWebApiKeyStatus> = MutableSharedFlow()
         val savedKeys = mutableListOf<String>()
         var saveFailure: Exception? = null
 

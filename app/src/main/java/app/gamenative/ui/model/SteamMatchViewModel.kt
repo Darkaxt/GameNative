@@ -19,6 +19,8 @@ import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.canonical.catalog.SteamCatalogCandidate
 import app.gamenative.library.canonical.catalog.SteamCatalogResolutionRepository
 import app.gamenative.library.canonical.catalog.SteamResolutionProgress
+import app.gamenative.service.steam.SteamWebApiKeyRepository
+import app.gamenative.service.steam.SteamWebApiKeyStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -62,6 +64,7 @@ data class SteamMatchUiState(
     val coverage: SteamResolutionCoverage = SteamResolutionCoverage(),
     val progress: SteamResolutionProgress = SteamResolutionProgress(),
     val isScanning: Boolean = false,
+    val keyRequired: Boolean = false,
     val picker: SteamMatchPickerState = SteamMatchPickerState.Closed,
 )
 
@@ -95,6 +98,7 @@ internal fun OwnedCopySummary.steamMatchStatus(isScanning: Boolean): SteamMatchS
 @HiltViewModel
 class SteamMatchViewModel @Inject constructor(
     private val resolutionRepository: SteamCatalogResolutionRepository,
+    private val steamWebApiKeyRepository: SteamWebApiKeyRepository,
     private val canonicalLibraryDao: CanonicalLibraryDao,
     private val publicLibraryGate: CanonicalPublicLibraryGate,
     private val projectionReadiness: CanonicalProjectionReadiness,
@@ -128,8 +132,24 @@ class SteamMatchViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            resolutionRepository.keyRequired.collectLatest { current ->
+                mutableState.value = mutableState.value.copy(keyRequired = current)
+            }
+        }
+        viewModelScope.launch {
+            steamWebApiKeyRepository.changes.collectLatest { status ->
+                if (!resolverGateOpen(projectionReadiness.isReady.value, aggregates.value)) {
+                    return@collectLatest
+                }
+                when (status) {
+                    SteamWebApiKeyStatus.CONFIGURED -> resolutionRepository.retryAutomatically()
+                    SteamWebApiKeyStatus.NOT_CONFIGURED -> resolutionRepository.scanAutomatically()
+                }
+            }
+        }
+        viewModelScope.launch {
             combine(projectionReadiness.isReady, aggregates) { ready, current ->
-                ready && publicLibraryGate.isEnabled() && current.hasEligibleCopy()
+                resolverGateOpen(ready, current)
             }.first { it }
             resolutionRepository.scanAutomatically()
         }
@@ -302,6 +322,11 @@ class SteamMatchViewModel @Inject constructor(
         mutableQuery.value = ""
         mutableState.value = mutableState.value.copy(picker = SteamMatchPickerState.Closed)
     }
+
+    private fun resolverGateOpen(
+        projectionReady: Boolean,
+        current: List<CanonicalLibraryAggregate>,
+    ): Boolean = projectionReady && publicLibraryGate.isEnabled() && current.hasEligibleCopy()
 
     private fun List<CanonicalLibraryAggregate>.hasEligibleCopy(): Boolean = any { aggregate ->
         aggregate.matches.any { match -> match.isPresent && match.source != GameSource.STEAM }

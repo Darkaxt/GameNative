@@ -20,6 +20,8 @@ import app.gamenative.library.canonical.ExpectedMatchState
 import app.gamenative.library.canonical.catalog.SteamCatalogCandidate
 import app.gamenative.library.canonical.catalog.SteamCatalogResolutionRepository
 import app.gamenative.library.canonical.catalog.SteamResolutionProgress
+import app.gamenative.service.steam.SteamWebApiKeyRepository
+import app.gamenative.service.steam.SteamWebApiKeyStatus
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -31,6 +33,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -52,6 +55,9 @@ class SteamMatchViewModelTest {
     private lateinit var aggregates: MutableStateFlow<List<CanonicalLibraryAggregate>>
     private lateinit var progress: MutableStateFlow<SteamResolutionProgress>
     private lateinit var scanning: MutableStateFlow<Boolean>
+    private lateinit var keyRequired: MutableStateFlow<Boolean>
+    private lateinit var keyStatusChanges: MutableSharedFlow<SteamWebApiKeyStatus>
+    private lateinit var keyRepository: SteamWebApiKeyRepository
     private lateinit var repository: SteamCatalogResolutionRepository
     private lateinit var readiness: CanonicalProjectionReadiness
     private var publicLibraryEnabled = true
@@ -64,9 +70,14 @@ class SteamMatchViewModelTest {
         aggregates = MutableStateFlow(emptyList())
         progress = MutableStateFlow(SteamResolutionProgress())
         scanning = MutableStateFlow(false)
+        keyRequired = MutableStateFlow(false)
+        keyStatusChanges = MutableSharedFlow(extraBufferCapacity = 1)
+        keyRepository = mockk(relaxed = true)
+        every { keyRepository.changes } returns keyStatusChanges
         repository = mockk(relaxed = true)
         every { repository.progress } returns progress
         every { repository.isScanning } returns scanning
+        every { repository.keyRequired } returns keyRequired
         every { repository.candidatesFor(any()) } returns emptyList()
         coEvery { repository.scanAutomatically() } returns SteamResolutionProgress()
         coEvery { repository.retryAutomatically() } returns SteamResolutionProgress()
@@ -97,6 +108,48 @@ class SteamMatchViewModelTest {
 
         coVerify(exactly = 1) { repository.scanAutomatically() }
         assertEquals(1, viewModel.state.value.coverage.eligible)
+    }
+
+    @Test
+    fun keyRequiredStateIsExposedToTheResolverUi() = runTest(scheduler) {
+        val viewModel = viewModel()
+        runCurrent()
+
+        keyRequired.value = true
+        runCurrent()
+
+        assertEquals(true, viewModel.state.value.keyRequired)
+    }
+
+    @Test
+    fun savedOrDeletedKeyRefreshesTheReadyResolver() = runTest(scheduler) {
+        aggregates.value = listOf(aggregate(game(1), match(1, GameSource.GOG)))
+        readiness.markSucceeded()
+        viewModel()
+        runCurrent()
+
+        keyStatusChanges.emit(SteamWebApiKeyStatus.CONFIGURED)
+        runCurrent()
+        keyStatusChanges.emit(SteamWebApiKeyStatus.NOT_CONFIGURED)
+        runCurrent()
+
+        coVerify(exactly = 1) { repository.retryAutomatically() }
+        coVerify(exactly = 2) { repository.scanAutomatically() }
+    }
+
+    @Test
+    fun keyChangeBeforeReadinessUsesTheNormalResolverGate() = runTest(scheduler) {
+        viewModel()
+        runCurrent()
+
+        keyStatusChanges.emit(SteamWebApiKeyStatus.CONFIGURED)
+        runCurrent()
+
+        coVerify(exactly = 0) { repository.retryAutomatically() }
+        aggregates.value = listOf(aggregate(game(1), match(1, GameSource.GOG)))
+        readiness.markSucceeded()
+        runCurrent()
+        coVerify(exactly = 1) { repository.scanAutomatically() }
     }
 
     @Test
@@ -272,6 +325,7 @@ class SteamMatchViewModelTest {
 
     private fun viewModel() = SteamMatchViewModel(
         resolutionRepository = repository,
+        steamWebApiKeyRepository = keyRepository,
         canonicalLibraryDao = object : CanonicalLibraryDao {
             override fun observePresentGames(): Flow<List<CanonicalLibraryAggregate>> = aggregates
         },

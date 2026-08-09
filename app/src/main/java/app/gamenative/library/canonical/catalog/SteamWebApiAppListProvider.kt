@@ -252,8 +252,9 @@ internal class SteamWebApiAppListProvider internal constructor(
             }
         }
         val entries = parsedApps.mapNotNull(ParsedApp::entry)
-        val haveMore = response["have_more_results"].booleanValue()
-            ?: throw SteamCatalogSearchException()
+        val haveMore = response["have_more_results"]?.let { element ->
+            element.booleanValue() ?: throw SteamCatalogSearchException()
+        } ?: false
         val lastAppId = response["last_appid"].intValue()
         val invalidCursor =
             parsedApps.isEmpty() ||

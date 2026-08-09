@@ -115,6 +115,8 @@ import app.gamenative.ui.model.SteamMatchEffect
 import app.gamenative.ui.model.SteamMatchPickerState
 import app.gamenative.ui.model.SteamMatchUiState
 import app.gamenative.ui.model.SteamMatchViewModel
+import app.gamenative.ui.model.SteamWebApiKeySettingsState
+import app.gamenative.ui.model.SteamWebApiKeySettingsViewModel
 import app.gamenative.ui.model.steamMatchStatus
 import app.gamenative.service.SteamService
 import app.gamenative.ui.screen.library.components.CanonicalCopiesFeedback
@@ -146,12 +148,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import android.os.SystemClock
 
+private const val STEAM_WEB_API_KEY_PAGE = "https://steamcommunity.com/dev/apikey"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeLibraryScreen(
     viewModel: LibraryViewModel = hiltViewModel(),
     detailViewModel: GameDetailViewModel = hiltViewModel(),
     steamMatchViewModel: SteamMatchViewModel = hiltViewModel(),
+    steamApiKeyViewModel: SteamWebApiKeySettingsViewModel = hiltViewModel(),
     onClickPlay: (String, Boolean) -> Unit,
     onTestGraphics: (String) -> Unit,
     onPlayWithDiagnostics: (String) -> Unit,
@@ -166,6 +171,7 @@ fun HomeLibraryScreen(
     val gameDetailState by detailViewModel.state.collectAsStateWithLifecycle()
     val steamMatchState by steamMatchViewModel.state.collectAsStateWithLifecycle()
     val steamMatchQuery by steamMatchViewModel.query.collectAsStateWithLifecycle()
+    val steamApiKeyState by steamApiKeyViewModel.state.collectAsStateWithLifecycle()
     val importState by viewModel.importState.collectAsStateWithLifecycle()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -229,6 +235,15 @@ fun HomeLibraryScreen(
         onOpenSteamMatch = steamMatchViewModel::openMatch,
         onReviewSteamMatches = steamMatchViewModel::openReviewMatches,
         onRetrySteamResolution = steamMatchViewModel::retryAutomatically,
+        steamApiKeyState = steamApiKeyState,
+        onGetSteamApiKey = {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(STEAM_WEB_API_KEY_PAGE)),
+            )
+        },
+        onTestSteamApiKey = steamApiKeyViewModel::test,
+        onSaveSteamApiKey = steamApiKeyViewModel::save,
+        onClearSteamApiKeyFeedback = steamApiKeyViewModel::clearFeedback,
         onSteamMatchQueryChange = steamMatchViewModel::updateQuery,
         onSearchSteamMatches = steamMatchViewModel::search,
         onSelectSteamMatch = steamMatchViewModel::selectCandidate,
@@ -304,6 +319,11 @@ internal fun LibraryScreenContent(
     onOpenSteamMatch: (OwnedCopyKey) -> Unit = {},
     onReviewSteamMatches: () -> Unit = {},
     onRetrySteamResolution: () -> Unit = {},
+    steamApiKeyState: SteamWebApiKeySettingsState = SteamWebApiKeySettingsState(),
+    onGetSteamApiKey: () -> Unit = {},
+    onTestSteamApiKey: (String) -> Unit = {},
+    onSaveSteamApiKey: (String) -> Unit = {},
+    onClearSteamApiKeyFeedback: () -> Unit = {},
     onSteamMatchQueryChange: (String) -> Unit = {},
     onSearchSteamMatches: () -> Unit = {},
     onSelectSteamMatch: (Int) -> Unit = {},
@@ -1663,11 +1683,16 @@ internal fun LibraryScreenContent(
                 onSteamReviewMinimumChanged = onSteamReviewMinimumChanged,
                 onRetrySteamPopularity = onRetrySteamPopularity,
                 steamMatchState = steamMatchState,
+                steamApiKeyState = steamApiKeyState,
                 onReviewSteamMatches = {
                     onOptionsPanelToggle(false)
                     onReviewSteamMatches()
                 },
                 onRetrySteamResolution = onRetrySteamResolution,
+                onGetSteamApiKey = onGetSteamApiKey,
+                onTestSteamApiKey = onTestSteamApiKey,
+                onSaveSteamApiKey = onSaveSteamApiKey,
+                onClearSteamApiKeyFeedback = onClearSteamApiKeyFeedback,
             )
 
             // System menu (START) - renders on top of everything

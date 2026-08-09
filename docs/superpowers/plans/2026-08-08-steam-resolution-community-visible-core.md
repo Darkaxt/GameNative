@@ -18,9 +18,9 @@ The implementation first produces three highest-priority visible signed RCs:
 
 | Core deliverable | Initial reserved release |
 |---|---|
-| Automatic resolution + Fix Steam match | code 31, `1.1.3-rc5`, `v1.1.3-rc5`; corrected provider/source RC code 32, `1.1.3-rc6`, `v1.1.3-rc6`; corrected key-validation/persistence RC code 33, `1.1.3-rc7`, `v1.1.3-rc7` |
-| Native Reviews | code 34, `1.1.3-rc8`, `v1.1.3-rc8` |
-| Native Discussions | code 35, `1.1.3-rc9`, `v1.1.3-rc9` |
+| Automatic resolution + Fix Steam match | code 31, `1.1.3-rc5`, `v1.1.3-rc5`; corrected provider/source RC code 32, `1.1.3-rc6`, `v1.1.3-rc6`; corrected key-validation/persistence RC code 33, `1.1.3-rc7`, `v1.1.3-rc7`; corrected key-gate/terminal-page RC code 34, `1.1.3-rc8`, `v1.1.3-rc8` |
+| Native Reviews | code 35, `1.1.3-rc9`, `v1.1.3-rc9` |
+| Native Discussions | code 36, `1.1.3-rc10`, `v1.1.3-rc10` |
 
 If a correction release consumes a code/tag, increment every subsequent reservation. Never move or reuse a published tag.
 

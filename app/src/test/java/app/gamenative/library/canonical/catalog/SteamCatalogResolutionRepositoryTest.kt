@@ -25,6 +25,9 @@ import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
+import app.gamenative.service.steam.SteamWebApiKeyRepository
+import app.gamenative.service.steam.SteamWebApiKeySaveResult
+import app.gamenative.service.steam.SteamWebApiKeyStatus
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
@@ -32,6 +35,8 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -64,6 +69,28 @@ class SteamCatalogResolutionRepositoryTest {
     @After
     fun tearDown() {
         db.close()
+    }
+
+    @Test
+    fun `automatic scan waits for a configured Steam Web API key`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.GOG, "blocked"), canonical.canonicalId, title = "Blocked"))
+        val calls = AtomicInteger(0)
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ ->
+                calls.incrementAndGet()
+                emptyList()
+            },
+            keyStatus = SteamWebApiKeyStatus.NOT_CONFIGURED,
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(SteamResolutionProgress(), progress)
+        assertEquals(0, calls.get())
+        assertTrue(repository.keyRequired.value)
+        assertFalse(repository.isScanning.value)
     }
 
     @Test
@@ -475,6 +502,7 @@ class SteamCatalogResolutionRepositoryTest {
     private fun repository(
         search: SteamCatalogSearchSource,
         records: SteamCatalogRecordSource = SteamCatalogRecordSource { _, _ -> null },
+        keyStatus: SteamWebApiKeyStatus = SteamWebApiKeyStatus.CONFIGURED,
     ) = SteamCatalogResolutionRepository(
         storeMatchDao = db.storeMatchDao(),
         searchSource = search,
@@ -485,6 +513,16 @@ class SteamCatalogResolutionRepositoryTest {
         diagnostics = diagnostics,
         acceptedIdentityEnrichment = enrichment,
         clock = MetadataClock { 1_000L },
+        steamWebApiKeyRepository = object : SteamWebApiKeyRepository {
+            override val changes: SharedFlow<SteamWebApiKeyStatus> = MutableSharedFlow()
+
+            override suspend fun status(): SteamWebApiKeyStatus = keyStatus
+
+            override suspend fun save(key: String): SteamWebApiKeySaveResult =
+                SteamWebApiKeySaveResult.SAVED
+
+            override suspend fun delete() = Unit
+        },
     )
 
     private suspend fun seedMatch(match: StoreMatchEntity) {

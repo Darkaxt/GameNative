@@ -1,6 +1,10 @@
 package app.gamenative.service.steam
 
 import java.nio.charset.StandardCharsets
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -13,7 +17,7 @@ class SteamWebApiKeyRepositoryTest {
     @Test
     fun publicRepositoryDoesNotExposePlaintextReads() {
         assertEquals(
-            setOf("delete", "save", "status"),
+            setOf("delete", "getChanges", "save", "status"),
             SteamWebApiKeyRepository::class.java.declaredMethods.map { it.name }.toSet(),
         )
         assertFalse(
@@ -84,6 +88,25 @@ class SteamWebApiKeyRepositoryTest {
         assertEquals(SteamWebApiKeyStatus.NOT_CONFIGURED, implementation.status())
         assertNull(implementation.keyOrNull())
         assertNull(persistence.value)
+    }
+
+    @Test
+    fun saveAndDeletePublishConfigurationChanges() = runTest {
+        val repository = DefaultSteamWebApiKeyRepository(FakePersistence(), FakeCipher())
+        val changes = async(start = CoroutineStart.UNDISPATCHED) {
+            repository.changes.take(2).toList()
+        }
+
+        repository.save("a".repeat(32))
+        repository.delete()
+
+        assertEquals(
+            listOf(
+                SteamWebApiKeyStatus.CONFIGURED,
+                SteamWebApiKeyStatus.NOT_CONFIGURED,
+            ),
+            changes.await(),
+        )
     }
 
     @Test

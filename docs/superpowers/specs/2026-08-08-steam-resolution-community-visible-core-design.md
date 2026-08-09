@@ -483,9 +483,9 @@ Starting from `versionCode 30` / `1.1.3-rc4`:
 
 | Deliverable | Planned version | Planned tag |
 |---|---|---|
-| Steam resolution + Fix match | `31` / `1.1.3-rc5`; corrected provider/source RC `32` / `1.1.3-rc6`; corrected key-validation/persistence RC `33` / `1.1.3-rc7` | `v1.1.3-rc5`; `v1.1.3-rc6`; `v1.1.3-rc7` |
-| Native Reviews | `34` / `1.1.3-rc8` | `v1.1.3-rc8` |
-| Native Discussions | `35` / `1.1.3-rc9` | `v1.1.3-rc9` |
+| Steam resolution + Fix match | `31` / `1.1.3-rc5`; corrected provider/source RC `32` / `1.1.3-rc6`; corrected key-validation/persistence RC `33` / `1.1.3-rc7`; corrected key-gate/terminal-page RC `34` / `1.1.3-rc8` | `v1.1.3-rc5`; `v1.1.3-rc6`; `v1.1.3-rc7`; `v1.1.3-rc8` |
+| Native Reviews | `35` / `1.1.3-rc9` | `v1.1.3-rc9` |
+| Native Discussions | `36` / `1.1.3-rc10` | `v1.1.3-rc10` |
 
 A correction release consumes the next unused version code/tag and shifts later versions. Published tags are immutable and never reused.
 

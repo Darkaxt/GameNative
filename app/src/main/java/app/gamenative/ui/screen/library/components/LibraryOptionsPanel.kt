@@ -95,6 +95,7 @@ import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.enums.SortOption
 import app.gamenative.ui.model.SteamMatchUiState
+import app.gamenative.ui.model.SteamWebApiKeySettingsState
 import app.gamenative.ui.theme.PluviaTheme
 import app.gamenative.ui.util.adaptivePanelWidth
 import java.util.EnumSet
@@ -139,8 +140,14 @@ fun LibraryOptionsPanel(
     onSteamReviewMinimumChanged: (Int?) -> Unit = {},
     onRetrySteamPopularity: () -> Unit = {},
     steamMatchState: SteamMatchUiState = SteamMatchUiState(),
+    steamApiKeyState: SteamWebApiKeySettingsState = SteamWebApiKeySettingsState(),
     onReviewSteamMatches: () -> Unit = {},
     onRetrySteamResolution: () -> Unit = {},
+    onGetSteamApiKey: () -> Unit = {},
+    onEnterSteamApiKey: () -> Unit = {},
+    onTestSteamApiKey: (String) -> Unit = {},
+    onSaveSteamApiKey: (String) -> Unit = {},
+    onClearSteamApiKeyFeedback: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val firstItemFocusRequester = remember { FocusRequester() }
@@ -282,6 +289,12 @@ fun LibraryOptionsPanel(
                             state = steamMatchState,
                             onReviewMatches = onReviewSteamMatches,
                             onRetry = onRetrySteamResolution,
+                            onGetApiKey = onGetSteamApiKey,
+                            onEnterApiKey = onEnterSteamApiKey,
+                            keySettingsState = steamApiKeyState,
+                            onTestApiKey = onTestSteamApiKey,
+                            onSaveApiKey = onSaveSteamApiKey,
+                            onClearApiKeyFeedback = onClearSteamApiKeyFeedback,
                         )
 
                         Spacer(modifier = Modifier.height(20.dp))

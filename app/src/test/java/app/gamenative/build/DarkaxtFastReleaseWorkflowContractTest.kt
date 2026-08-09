@@ -10,8 +10,8 @@ class DarkaxtFastReleaseWorkflowContractTest {
         val workflow = repositoryFile(".github/workflows/darkaxt-fast-release.yml").readText()
 
         assertTrue(workflow.contains("EXPECTED_FORK_CERT_SHA256"))
-        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"33\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.1.3-rc7\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"34\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.1.3-rc8\""))
         assertTrue(workflow.contains("[[ \"\$RELEASE_TAG\" != \"v\$EXPECTED_VERSION_NAME\" ]]"))
         assertTrue(workflow.contains("compat-legacy-xr"))
         assertTrue(workflow.contains("side-by-side-legacy-xr"))

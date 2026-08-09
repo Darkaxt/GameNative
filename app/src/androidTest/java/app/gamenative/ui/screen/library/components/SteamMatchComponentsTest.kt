@@ -65,6 +65,34 @@ class SteamMatchComponentsTest {
     }
 
     @Test
+    fun missingKeyOffersOfficialSetupAndHidesResolverActions() {
+        var getKeyClicks = 0
+        var enterKeyClicks = 0
+        composeRule.setContent {
+            PluviaTheme {
+                SteamResolutionStatus(
+                    state = SteamMatchUiState(keyRequired = true),
+                    onReviewMatches = {},
+                    onRetry = {},
+                    onGetApiKey = { getKeyClicks += 1 },
+                    onEnterApiKey = { enterKeyClicks += 1 },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Steam Web API key required").assertIsDisplayed()
+        composeRule.onNodeWithText("Get Steam Web API key").performClick()
+        composeRule.onNodeWithText("Enter API key").performClick()
+        composeRule.onNodeWithTag("steam-web-api-key-input").assertIsDisplayed()
+        composeRule.onNodeWithTag("steam-resolution-review").assertDoesNotExist()
+        composeRule.onNodeWithTag("steam-resolution-retry").assertDoesNotExist()
+        composeRule.runOnIdle {
+            assertEquals(1, getKeyClicks)
+            assertEquals(1, enterKeyClicks)
+        }
+    }
+
+    @Test
     fun pickerRequiresSelectionAndExposesCandidateCorrectionActions() {
         val selected = mutableStateOf<Int?>(null)
         var confirmClicks = 0

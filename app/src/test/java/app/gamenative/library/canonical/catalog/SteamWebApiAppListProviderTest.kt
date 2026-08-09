@@ -62,6 +62,28 @@ class SteamWebApiAppListProviderTest {
     }
 
     @Test
+    fun omittedHaveMoreResultsCompletesTheTerminalPage() = runTest {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                {
+                  "response": {
+                    "apps": [
+                      {"appid": 10, "name": "Final", "last_modified": 100}
+                    ]
+                  }
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        val entries = provider().fetchAll(API_KEY)
+
+        assertEquals(listOf(10), entries.map(SteamAppListEntry::steamAppId))
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
     fun validatesCredentialWithOneBoundedHeaderOnlyRequest() = runTest {
         server.enqueue(page(appId = 10, name = "First", haveMore = true, lastAppId = 10))
 

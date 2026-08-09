@@ -158,6 +158,9 @@
     <string name="steam_resolution_progress">%1$d / %2$d checked · %3$d failed</string>
     <string name="steam_resolution_review_matches">Review matches</string>
     <string name="steam_resolution_retry">Retry resolution</string>
+    <string name="steam_resolution_key_required">Steam Web API key required</string>
+    <string name="steam_resolution_get_api_key">Get Steam Web API key</string>
+    <string name="steam_resolution_enter_api_key">Enter API key</string>
     <string name="canonical_copy_state_changed">This copy changed or is no longer available. Refresh and try again.</string>
     <string name="canonical_preference_not_remembered">The action is ready, but your choice was not remembered.</string>
     <string name="canonical_preference_clear_failed">Could not use automatic selection. Your preferred copy was not changed.</string>

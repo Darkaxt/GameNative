@@ -18,6 +18,8 @@ import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
+import app.gamenative.service.steam.SteamWebApiKeyRepository
+import app.gamenative.service.steam.SteamWebApiKeyStatus
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -60,17 +62,20 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val diagnostics: SteamCatalogResolutionDiagnosticSink,
     private val acceptedIdentityEnrichment: SteamAcceptedIdentityEnrichmentSink,
     private val clock: MetadataClock,
+    private val steamWebApiKeyRepository: SteamWebApiKeyRepository,
 ) {
     private val scanMutex = Mutex()
     private val progressMutex = Mutex()
     private val mutableProgress = MutableStateFlow(SteamResolutionProgress())
     private val mutableIsScanning = MutableStateFlow(false)
+    private val mutableKeyRequired = MutableStateFlow(false)
     private val candidateLists = ConcurrentHashMap<OwnedCopyKey, List<SteamCatalogCandidate>>()
     private val candidateRecords = ConcurrentHashMap<Int, ValidatedSteamCatalogRecord>()
     private var automaticScanCompleted = false
 
     val progress: StateFlow<SteamResolutionProgress> = mutableProgress.asStateFlow()
     val isScanning: StateFlow<Boolean> = mutableIsScanning.asStateFlow()
+    val keyRequired: StateFlow<Boolean> = mutableKeyRequired.asStateFlow()
 
     suspend fun scanAutomatically(): SteamResolutionProgress = runAutomaticScan(force = false)
 
@@ -80,6 +85,13 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     }
 
     private suspend fun runAutomaticScan(force: Boolean): SteamResolutionProgress = scanMutex.withLock {
+        val keyConfigured = steamWebApiKeyRepository.status() == SteamWebApiKeyStatus.CONFIGURED
+        mutableKeyRequired.value = !keyConfigured
+        if (!keyConfigured) {
+            automaticScanCompleted = false
+            mutableProgress.value = SteamResolutionProgress()
+            return@withLock mutableProgress.value
+        }
         if (!force && automaticScanCompleted) return@withLock mutableProgress.value
 
         mutableIsScanning.value = true
