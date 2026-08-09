@@ -79,6 +79,7 @@ fun SettingsScreen(
         appTheme = appTheme,
         paletteStyle = paletteStyle,
         steamKeyState = steamKeyState,
+        onTestSteamKey = steamKeyViewModel::test,
         onSaveSteamKey = steamKeyViewModel::save,
         onDeleteSteamKey = steamKeyViewModel::delete,
         onClearSteamKeyFeedback = steamKeyViewModel::clearFeedback,
@@ -93,6 +94,7 @@ private fun SettingsScreenContent(
     appTheme: AppTheme,
     paletteStyle: PaletteStyle,
     steamKeyState: SteamWebApiKeySettingsState,
+    onTestSteamKey: (String) -> Unit,
     onSaveSteamKey: (String) -> Unit,
     onDeleteSteamKey: () -> Unit,
     onClearSteamKeyFeedback: () -> Unit,
@@ -166,6 +168,7 @@ private fun SettingsScreenContent(
                 ) {
                     SettingsGroupSteam(
                         state = steamKeyState,
+                        onTest = onTestSteamKey,
                         onSave = onSaveSteamKey,
                         onDelete = onDeleteSteamKey,
                         onClearFeedback = onClearSteamKeyFeedback,
@@ -392,6 +395,7 @@ private fun Preview_SettingsScreen() {
             appTheme = AppTheme.DAY,
             paletteStyle = PaletteStyle.TonalSpot,
             steamKeyState = SteamWebApiKeySettingsState(),
+            onTestSteamKey = { },
             onSaveSteamKey = { },
             onDeleteSteamKey = { },
             onClearSteamKeyFeedback = { },

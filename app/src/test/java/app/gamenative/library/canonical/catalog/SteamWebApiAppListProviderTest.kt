@@ -1,14 +1,26 @@
 package app.gamenative.library.canonical.catalog
 
 import app.gamenative.library.metadata.SteamUrlPolicy
+import app.gamenative.service.steam.SteamWebApiKeyValidationResult
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -47,6 +59,90 @@ class SteamWebApiAppListProviderTest {
         val second = server.takeRequest()
         assertEquals("10", second.requestUrl?.queryParameter("last_appid"))
         assertEquals(API_KEY, second.getHeader("x-webapi-key"))
+    }
+
+    @Test
+    fun validatesCredentialWithOneBoundedHeaderOnlyRequest() = runTest {
+        server.enqueue(page(appId = 10, name = "First", haveMore = true, lastAppId = 10))
+
+        assertEquals(SteamWebApiKeyValidationResult.VALID, provider().validate(API_KEY))
+
+        val request = server.takeRequest()
+        assertEquals("/IStoreService/GetAppList/v1/", request.requestUrl?.encodedPath)
+        assertEquals(API_KEY, request.getHeader("x-webapi-key"))
+        assertNull(request.requestUrl?.queryParameter("key"))
+        assertEquals("1", request.requestUrl?.queryParameter("max_results"))
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun distinguishesRejectedCredentialFromProviderFailure() = runTest {
+        server.enqueue(MockResponse().setResponseCode(401))
+        server.enqueue(MockResponse().setResponseCode(403))
+        server.enqueue(MockResponse().setResponseCode(429))
+        server.enqueue(MockResponse().setBody("{}"))
+
+        assertEquals(SteamWebApiKeyValidationResult.INVALID, provider().validate(API_KEY))
+        assertEquals(SteamWebApiKeyValidationResult.INVALID, provider().validate(API_KEY))
+        assertEquals(SteamWebApiKeyValidationResult.UNAVAILABLE, provider().validate(API_KEY))
+        assertEquals(SteamWebApiKeyValidationResult.UNAVAILABLE, provider().validate(API_KEY))
+    }
+
+    @Test
+    fun validationRejectsInvalidFormatAndOversizedResponse() = runTest {
+        assertEquals(SteamWebApiKeyValidationResult.INVALID, provider().validate("not-a-key"))
+        assertEquals(0, server.requestCount)
+        server.enqueue(MockResponse().setBody("x".repeat(129)))
+
+        assertEquals(
+            SteamWebApiKeyValidationResult.UNAVAILABLE,
+            provider(maxValidationResponseBytes = 128).validate(API_KEY),
+        )
+    }
+
+    @Test
+    fun validationCancellationEscapesAndCancelsTheHttpCall() = runTest {
+        server.enqueue(
+            page(appId = 10, name = "First", haveMore = true, lastAppId = 10)
+                .setBodyDelay(1, TimeUnit.MINUTES),
+        )
+        val job = launch { provider().validate(API_KEY) }
+        while (server.requestCount == 0) {
+            kotlinx.coroutines.yield()
+        }
+
+        job.cancelAndJoin()
+
+        assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun validationBodyReadDoesNotBlockTheCallerDispatcher() = runBlocking {
+        server.enqueue(
+            page(appId = 10, name = "First", haveMore = true, lastAppId = 10)
+                .setBodyDelay(2, TimeUnit.SECONDS),
+        )
+        val callerDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val validation = launch(callerDispatcher) { provider().validate(API_KEY) }
+        try {
+            assertNotNull(server.takeRequest(5, TimeUnit.SECONDS))
+            delay(250)
+
+            val callerResponsive = async(callerDispatcher) { true }
+
+            assertEquals(true, withTimeoutOrNull(500) { callerResponsive.await() })
+            validation.cancel()
+            assertEquals(
+                true,
+                withTimeoutOrNull(500) {
+                    validation.join()
+                    true
+                },
+            )
+        } finally {
+            validation.cancelAndJoin()
+            callerDispatcher.close()
+        }
     }
 
     @Test
@@ -96,6 +192,7 @@ class SteamWebApiAppListProviderTest {
     private fun provider(
         endpoint: HttpUrl = server.url("/IStoreService/GetAppList/v1/"),
         maxResponseBytes: Long = 16L * 1024L * 1024L,
+        maxValidationResponseBytes: Long = 64L * 1024L,
     ) = SteamWebApiAppListProvider(
         client = OkHttpClient.Builder()
             .followRedirects(false)
@@ -108,6 +205,7 @@ class SteamWebApiAppListProviderTest {
             allowedPorts = setOf(server.port, 443),
         ),
         maxResponseBytes = maxResponseBytes,
+        maxValidationResponseBytes = maxValidationResponseBytes,
     )
 
     private fun page(

@@ -2,6 +2,9 @@ package app.gamenative.library.canonical.catalog
 
 import app.gamenative.library.metadata.SteamUrlPolicy
 import app.gamenative.library.metadata.sanitizeSteamText
+import app.gamenative.service.steam.SteamWebApiKeyValidationResult
+import app.gamenative.service.steam.SteamWebApiKeyValidator
+import app.gamenative.service.steam.hasValidSteamWebApiKeyFormat
 import app.gamenative.utils.Net
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -40,7 +43,8 @@ internal class SteamWebApiAppListProvider internal constructor(
     private val endpoint: HttpUrl,
     private val urlPolicy: SteamUrlPolicy,
     private val maxResponseBytes: Long,
-) : SteamAppListRemoteSource {
+    private val maxValidationResponseBytes: Long = MAX_VALIDATION_RESPONSE_BYTES,
+) : SteamAppListRemoteSource, SteamWebApiKeyValidator {
     @Inject
     constructor() : this(
         client = Net.http.newBuilder()
@@ -56,10 +60,22 @@ internal class SteamWebApiAppListProvider internal constructor(
 
     init {
         require(maxResponseBytes in 1..MAX_RESPONSE_BYTES)
+        require(maxValidationResponseBytes in 1..MAX_VALIDATION_RESPONSE_BYTES)
+    }
+
+    override suspend fun validate(key: String): SteamWebApiKeyValidationResult {
+        if (!hasValidSteamWebApiKeyFormat(key)) return SteamWebApiKeyValidationResult.INVALID
+        return try {
+            validateInternal(key)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            SteamWebApiKeyValidationResult.UNAVAILABLE
+        }
     }
 
     override suspend fun fetchAll(apiKey: String): List<SteamAppListEntry> {
-        require(API_KEY_PATTERN.matches(apiKey)) { "Steam Web API key is invalid" }
+        require(hasValidSteamWebApiKeyFormat(apiKey)) { "Steam Web API key is invalid" }
         return try {
             fetchAllInternal(apiKey)
         } catch (error: CancellationException) {
@@ -71,25 +87,61 @@ internal class SteamWebApiAppListProvider internal constructor(
         }
     }
 
+    private suspend fun validateInternal(apiKey: String): SteamWebApiKeyValidationResult {
+        val request = buildAppListRequest(
+            apiKey = apiKey,
+            maxResults = VALIDATION_PAGE_SIZE,
+        )
+        if (!urlPolicy.isAllowedWebApiAppListRequest(request.url)) {
+            return SteamWebApiKeyValidationResult.UNAVAILABLE
+        }
+        val response = executeBounded(request, maxValidationResponseBytes)
+        return when {
+            !response.requestAllowed -> SteamWebApiKeyValidationResult.UNAVAILABLE
+            response.statusCode == 401 || response.statusCode == 403 -> {
+                SteamWebApiKeyValidationResult.INVALID
+            }
+            !response.successful -> SteamWebApiKeyValidationResult.UNAVAILABLE
+            response.body?.let(::isValidValidationResponse) == true -> {
+                SteamWebApiKeyValidationResult.VALID
+            }
+            else -> SteamWebApiKeyValidationResult.UNAVAILABLE
+        }
+    }
+
+    private fun buildAppListRequest(
+        apiKey: String,
+        maxResults: Int,
+        lastAppId: Int? = null,
+    ): Request {
+        val url = endpoint.newBuilder()
+            .query(null)
+            .addQueryParameter("include_games", "true")
+            .addQueryParameter("include_dlc", "false")
+            .addQueryParameter("include_software", "false")
+            .addQueryParameter("include_videos", "false")
+            .addQueryParameter("include_hardware", "false")
+            .addQueryParameter("max_results", maxResults.toString())
+            .apply {
+                lastAppId?.let { addQueryParameter("last_appid", it.toString()) }
+            }
+            .build()
+        return Request.Builder()
+            .url(url)
+            .header(API_KEY_HEADER, apiKey)
+            .get()
+            .build()
+    }
+
     private suspend fun fetchAllInternal(apiKey: String): List<SteamAppListEntry> {
         val entries = ArrayList<SteamAppListEntry>()
         var lastAppId: Int? = null
         repeat(MAX_PAGES) {
-            val url = endpoint.newBuilder()
-                .query(null)
-                .addQueryParameter("include_games", "true")
-                .addQueryParameter("include_dlc", "false")
-                .addQueryParameter("include_software", "false")
-                .addQueryParameter("include_videos", "false")
-                .addQueryParameter("include_hardware", "false")
-                .addQueryParameter("max_results", PAGE_SIZE.toString())
-                .apply { lastAppId?.let { addQueryParameter("last_appid", it.toString()) } }
-                .build()
-            val request = Request.Builder()
-                .url(url)
-                .header(API_KEY_HEADER, apiKey)
-                .get()
-                .build()
+            val request = buildAppListRequest(
+                apiKey = apiKey,
+                maxResults = PAGE_SIZE,
+                lastAppId = lastAppId,
+            )
             val page = parsePage(executeValidated(request), lastAppId)
             if (entries.size + page.entries.size > MAX_TOTAL_ENTRIES) {
                 throw SteamCatalogSearchException()
@@ -107,12 +159,78 @@ internal class SteamWebApiAppListProvider internal constructor(
         if (!urlPolicy.isAllowedWebApiAppListRequest(request.url)) {
             throw SteamCatalogSearchException()
         }
-        val response = client.newCall(request).awaitAppListResponse()
-        response.use {
-            if (!urlPolicy.isAllowedWebApiAppListRequest(it.request.url) || !it.isSuccessful) {
-                throw SteamCatalogSearchException()
+        val response = executeBounded(request, maxResponseBytes)
+        if (!response.requestAllowed || !response.successful) {
+            throw SteamCatalogSearchException()
+        }
+        return response.body ?: throw SteamCatalogSearchException()
+    }
+
+    private suspend fun executeBounded(
+        request: Request,
+        maxBytes: Long,
+    ): BoundedAppListResponse = suspendCancellableCoroutine { continuation ->
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(
+            object : Callback {
+                override fun onFailure(call: Call, error: java.io.IOException) {
+                    if (continuation.isActive) continuation.resumeWith(Result.failure(error))
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    if (!continuation.isActive) {
+                        response.close()
+                        return
+                    }
+                    val result = try {
+                        Result.success(
+                            response.use {
+                                val requestAllowed =
+                                    urlPolicy.isAllowedWebApiAppListRequest(it.request.url)
+                                BoundedAppListResponse(
+                                    requestAllowed = requestAllowed,
+                                    statusCode = it.code,
+                                    successful = it.isSuccessful,
+                                    body = if (requestAllowed && it.isSuccessful) {
+                                        it.body.readAppListBoundedUtf8(maxBytes)
+                                    } else {
+                                        null
+                                    },
+                                )
+                            },
+                        )
+                    } catch (error: Exception) {
+                        Result.failure(error)
+                    }
+                    if (continuation.isActive) continuation.resumeWith(result)
+                }
+            },
+        )
+    }
+
+    private fun isValidValidationResponse(body: String): Boolean {
+        return try {
+            val root = JSON.parseToJsonElement(body) as? JsonObject
+                ?: return false
+            val response = root["response"] as? JsonObject
+                ?: return false
+            val apps = response["apps"] as? JsonArray
+                ?: return false
+            if (apps.size > VALIDATION_PAGE_SIZE) return false
+            val appIds = apps.map { element ->
+                val app = element as? JsonObject ?: return false
+                app["appid"].intValue()?.takeIf { it > 0 } ?: return false
             }
-            return it.body.readAppListBoundedUtf8(maxResponseBytes)
+            val haveMore = response["have_more_results"].booleanValue()
+                ?: return false
+            !haveMore ||
+                (
+                    appIds.isNotEmpty() &&
+                        response["last_appid"].intValue() == appIds.last()
+                    )
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -137,13 +255,12 @@ internal class SteamWebApiAppListProvider internal constructor(
         val haveMore = response["have_more_results"].booleanValue()
             ?: throw SteamCatalogSearchException()
         val lastAppId = response["last_appid"].intValue()
-        if (haveMore && (
-                parsedApps.isEmpty() ||
-                    lastAppId == null ||
-                    lastAppId != parsedApps.last().appId ||
-                    previousLastAppId?.let { lastAppId <= it } == true
-                )
-        ) {
+        val invalidCursor =
+            parsedApps.isEmpty() ||
+                lastAppId == null ||
+                lastAppId != parsedApps.last().appId ||
+                previousLastAppId?.let { lastAppId <= it } == true
+        if (haveMore && invalidCursor) {
             throw SteamCatalogSearchException()
         }
         return ParsedPage(entries, haveMore, lastAppId)
@@ -160,6 +277,13 @@ internal class SteamWebApiAppListProvider internal constructor(
         return ParsedApp(appId, SteamAppListEntry(appId, title, lastModified))
     }
 
+    private data class BoundedAppListResponse(
+        val requestAllowed: Boolean,
+        val statusCode: Int,
+        val successful: Boolean,
+        val body: String?,
+    )
+
     private data class ParsedApp(
         val appId: Int,
         val entry: SteamAppListEntry?,
@@ -174,12 +298,13 @@ internal class SteamWebApiAppListProvider internal constructor(
     private companion object {
         const val DEFAULT_ENDPOINT = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
         const val API_KEY_HEADER = "x-webapi-key"
+        const val VALIDATION_PAGE_SIZE = 1
         const val PAGE_SIZE = 50_000
         const val MAX_PAGES = 10
         const val MAX_TOTAL_ENTRIES = 500_000
         const val MAX_TITLE_CODE_POINTS = 500
+        const val MAX_VALIDATION_RESPONSE_BYTES = 64L * 1024L
         const val MAX_RESPONSE_BYTES = 16L * 1024L * 1024L
-        val API_KEY_PATTERN = Regex("[0-9A-Fa-f]{32}")
         val JSON = Json { ignoreUnknownKeys = true }
     }
 }
@@ -199,23 +324,3 @@ private fun ResponseBody.readAppListBoundedUtf8(maxBytes: Long): String {
     if (source.request(maxBytes + 1L)) throw SteamCatalogSearchException()
     return source.readUtf8()
 }
-
-private suspend fun Call.awaitAppListResponse(): Response =
-    suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation { cancel() }
-        enqueue(
-            object : Callback {
-                override fun onFailure(call: Call, error: java.io.IOException) {
-                    if (continuation.isActive) continuation.resumeWith(Result.failure(error))
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    if (continuation.isActive) {
-                        continuation.resumeWith(Result.success(response))
-                    } else {
-                        response.close()
-                    }
-                }
-            },
-        )
-    }

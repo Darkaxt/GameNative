@@ -19,12 +19,14 @@ class TaggedReleaseWorkflowContractTest {
             "gamenative-\${{ env.RELEASE_TAG }}-side-by-side-legacy-xr.apk",
             "SHA256SUMS",
         )
-        val universalApks = "universal-compat.apk universal-compat-legacy-xr.apk universal-side-by-side.apk universal-side-by-side-legacy-xr.apk"
+        val universalApks =
+            "universal-compat.apk universal-compat-legacy-xr.apk" +
+                " universal-side-by-side.apk universal-side-by-side-legacy-xr.apk"
 
-        assertTrue(appGradle.contains("versionCode = 32"))
-        assertTrue(appGradle.contains("versionName = \"1.1.3-rc6\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"32\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.1.3-rc6\""))
+        assertTrue(appGradle.contains("versionCode = 33"))
+        assertTrue(appGradle.contains("versionName = \"1.1.3-rc7\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"33\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.1.3-rc7\""))
         assertTrue(workflow.contains("[[ \"\$RELEASE_TAG\" != \"v\$EXPECTED_VERSION_NAME\" ]]"))
         assertTrue(workflow.contains("timeout-minutes: 75"))
         assertTrue(workflow.contains(":app:bundleLegacyRelease"))
@@ -35,8 +37,18 @@ class TaggedReleaseWorkflowContractTest {
         assertTrue(workflow.contains("app/build/outputs/bundle/legacyXrReleaseDarkaxt/app-legacyXr-releaseDarkaxt.aab"))
         assertEquals(2, workflow.count("for apk in $universalApks; do"))
 
-        assertTrue(workflow.contains("      publish_release:\n        description: \"Publish the validated candidate as a GitHub prerelease\"\n        required: false\n        default: false\n        type: boolean"))
-        assertTrue(workflow.contains("  release:\n    if: \${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}\n    needs: build"))
+        val publishInput =
+            "      publish_release:\n" +
+                "        description: \"Publish the validated candidate as a GitHub prerelease\"\n" +
+                "        required: false\n" +
+                "        default: false\n" +
+                "        type: boolean"
+        val releaseJob =
+            "  release:\n" +
+                "    if: \${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}\n" +
+                "    needs: build"
+        assertTrue(workflow.contains(publishInput))
+        assertTrue(workflow.contains(releaseJob))
 
         assertTrue(workflow.contains("gamenative-\${RELEASE_TAG}-compat.apk|app.gamenative"))
         assertTrue(workflow.contains("gamenative-\${RELEASE_TAG}-compat-legacy-xr.apk|app.gamenative"))
@@ -50,8 +62,10 @@ class TaggedReleaseWorkflowContractTest {
         assertTrue(workflow.contains("\"\$APKANALYZER\" manifest version-name \"\$apk\""))
         assertFalse(workflow.contains("\${BUILD_TOOLS_DIR}/apkanalyzer"))
         assertTrue(workflow.contains("Verified using v2 scheme (APK Signature Scheme v2): true"))
-        assertTrue(workflow.indexOf("Verify APK signatures, packages, versions, and generate checksums") <
-            workflow.indexOf("Upload release assets for next job"),)
+        assertTrue(
+            workflow.indexOf("Verify APK signatures, packages, versions, and generate checksums") <
+                workflow.indexOf("Upload release assets for next job"),
+        )
 
         assertEquals(expectedAssets, uploadedAssets(workflow))
         assertEquals(expectedAssets, publishedAssets(workflow))

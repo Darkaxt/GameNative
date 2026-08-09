@@ -35,9 +35,9 @@ import app.gamenative.library.canonical.catalog.SteamAppListRemoteSource
 import app.gamenative.library.canonical.catalog.SteamAppListSearchProvider
 import app.gamenative.library.canonical.catalog.SteamCatalogResolutionDiagnosticSink
 import app.gamenative.library.canonical.catalog.SteamCatalogSearchSource
-import app.gamenative.library.canonical.catalog.SteamWebApiAppListProvider
 import app.gamenative.library.canonical.catalog.SteamPublicPicsFacetSource
 import app.gamenative.library.canonical.catalog.SteamSessionPublicPicsFacetSource
+import app.gamenative.library.canonical.catalog.SteamWebApiAppListProvider
 import app.gamenative.library.canonical.runtime.AmazonOwnedCopyRuntimeAdapter
 import app.gamenative.library.canonical.runtime.CanonicalIoDispatcher
 import app.gamenative.library.canonical.runtime.CustomOwnedCopyRuntimeAdapter
@@ -64,6 +64,7 @@ import app.gamenative.library.metadata.SteamCatalogProvider
 import app.gamenative.library.metadata.SteamCatalogRecordSource
 import app.gamenative.library.metadata.SystemMetadataClock
 import app.gamenative.library.metadata.SystemMetadataLocaleProvider
+import app.gamenative.service.steam.SteamWebApiKeyValidator
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -147,6 +148,12 @@ abstract class CanonicalLibraryModule {
     internal abstract fun bindSteamAppListRemoteSource(
         implementation: SteamWebApiAppListProvider,
     ): SteamAppListRemoteSource
+
+    @Binds
+    @Singleton
+    internal abstract fun bindSteamWebApiKeyValidator(
+        implementation: SteamWebApiAppListProvider,
+    ): SteamWebApiKeyValidator
 
     @Binds
     @Singleton

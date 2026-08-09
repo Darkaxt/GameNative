@@ -125,14 +125,14 @@ Do not persist or export:
 - tokens;
 - account IDs or SteamIDs;
 - usernames;
-- game titles or match-candidate titles in diagnostics;
+- owned-library titles or match-candidate titles in diagnostics;
 - search text;
 - install paths;
 - full URLs;
 - review bodies;
 - discussion bodies.
 
-Search and public community content may exist only in active process memory and network request/response buffers. They must not enter Room, DataStore, `SavedStateHandle`, `rememberSaveable`, WorkManager input/output, OkHttp disk cache, Coil disk cache, Timber context, crash messages, or diagnostic attributes.
+Owned-library search text and public community content may exist only in active process memory and network request/response buffers. They must not enter Room, DataStore, `SavedStateHandle`, `rememberSaveable`, WorkManager input/output, OkHttp disk cache, Coil disk cache, Timber context, crash messages, or diagnostic attributes. The sole title-persistence exception is the reproducible public Steam AppList catalog: positive AppID, sanitized public title, and `last_modified` may be stored in a bounded, versioned app-private cache with atomic replacement and seven-day freshness. It contains no ownership, account, search, candidate-selection, or credential data.
 
 Typed diagnostics may contain fixed categories, counts, durations, source names, outcomes, fixed reason codes, HTTP status, exception class, and short hashed correlations only.
 
@@ -140,25 +140,24 @@ Typed diagnostics may contain fixed categories, counts, durations, source names,
 
 ### 6.1 Components
 
-#### `SteamCatalogSearchProvider`
+#### `SteamWebApiAppListProvider` and `SteamAppListSearchProvider`
 
-A dedicated keyless provider calls the public Steam Store search endpoint. It does not reuse the recommendation repository.
+A dedicated authenticated provider downloads the authoritative public game catalog from `IStoreService/GetAppList/v1`; a separate search provider builds an exact normalized-title index locally. Source-library titles are therefore never transmitted for catalog discovery.
 
 Contract:
 
-- HTTPS only;
-- exact allowlisted Steam Store host and port 443;
-- endpoint-bound path and query keys;
-- redirects disabled in OkHttp and manually revalidated at every hop and final effective URL;
-- no cookies or Steam session material;
-- `Cache-Control: no-store`;
-- bounded response/decompression size;
-- provider-owned timeout and cancellation;
-- locale and country from the existing `MetadataLocale` boundary;
-- at most ten parsed positive AppID results;
-- no title, query, AppID, URL, or body logging.
+- HTTPS only and exact allowlisted Steam Web API host, port, path, and query keys;
+- API key sent only in the `x-webapi-key` header, never in a URL;
+- redirects, cookies, and disk HTTP caching disabled;
+- bounded page count, entries, decompressed response size, and cancellation through body consumption;
+- response bodies consumed on OkHttp workers rather than the caller/Main dispatcher;
+- complete game-only catalog pages with strictly increasing positive AppIDs and cursor validation;
+- compact versioned app-private cache containing only positive AppID, sanitized public title, and `last_modified`;
+- seven-day freshness, atomic replacement, stale fallback, and explicit retry after provider failure;
+- exact normalized-title lookup with at most ten local results;
+- no source title, query, AppID, URL, body, or credential logging.
 
-Automatic search sends the source title to Steam because Steam is the selected authoritative catalog provider. The title must not be retained after the request or exposed through diagnostics.
+The runtime key setting has an explicit **Test** action. Test accepts only the fixed 32-hex format, makes a bounded one-result AppList request, distinguishes provider rejection from temporary unavailability, and enables Save only for the exact key instance that validated. The ViewModel retains only a SHA-256 fingerprint of that key. Save encrypts with a dedicated randomized Android Keystore AES-GCM key, lets Keystore generate the encryption IV, and stores versioned ciphertext only after successful validation. A failed validation or storage operation leaves the editor open with fixed retry feedback and never reports success.
 
 #### `SteamCatalogCandidatePolicy`
 
@@ -219,14 +218,14 @@ Every transaction revalidates:
 2. Select present non-Steam canonicals with no trusted Steam AppID and no sticky user decision.
 3. Choose the present copy with the strongest evidence: known compatible type, developer, then release year. Search once per canonical, not once per copy.
 4. Preserve existing local exact canonical matching as the first automatic path.
-5. Query Steam Store search for unresolved canonicals with concurrency two.
-6. Keep at most ten search results and validate at most five plausible title candidates through `appdetails`.
+5. Load a fresh public AppList cache or refresh the complete game catalog with the validated runtime key, then perform exact normalized-title lookup locally.
+6. Keep at most ten exact local results and validate at most five candidates through bounded Store `appdetails` requests.
 7. Apply the policy.
 8. Commit only the final fixed-category result in one guarded Room transaction.
 9. Publish progress and continue after per-game failures.
 10. Stop promptly when the owning scope is cancelled. Accepted decisions already committed remain valid; a later run naturally resumes unresolved games.
 
-The 80/20 first release uses no new Room table. Automatic scanning runs once per process session and may use only a fixed global last-success timestamp/resolver version in DataStore to avoid immediate repeat scans. Candidate lists and search strings remain memory-only. Stage 4 then adds schema-28 durable attempt/rejection history and WorkManager resume, and applies the measured 80% coverage trigger for a broader local catalog index.
+The 80/20 first release uses no new Room table. Automatic scanning runs once per process session and may use only a fixed global last-success timestamp/resolver version in DataStore to avoid immediate repeat scans. Candidate lists and search strings remain memory-only; the reproducible public AppList cache follows Section 5.3. Stage 4 decides schema-28 durable attempt/rejection history and WorkManager resume from measured completion evidence, then applies the 80% coverage trigger only to fuzzy/indirect candidate expansion.
 
 ### 6.3 Automatic acceptance policy
 
@@ -484,9 +483,9 @@ Starting from `versionCode 30` / `1.1.3-rc4`:
 
 | Deliverable | Planned version | Planned tag |
 |---|---|---|
-| Steam resolution + Fix match | `31` / `1.1.3-rc5`; corrected provider/source RC `32` / `1.1.3-rc6` | `v1.1.3-rc5`; `v1.1.3-rc6` |
-| Native Reviews | `33` / `1.1.3-rc7` | `v1.1.3-rc7` |
-| Native Discussions | `34` / `1.1.3-rc8` | `v1.1.3-rc8` |
+| Steam resolution + Fix match | `31` / `1.1.3-rc5`; corrected provider/source RC `32` / `1.1.3-rc6`; corrected key-validation/persistence RC `33` / `1.1.3-rc7` | `v1.1.3-rc5`; `v1.1.3-rc6`; `v1.1.3-rc7` |
+| Native Reviews | `34` / `1.1.3-rc8` | `v1.1.3-rc8` |
+| Native Discussions | `35` / `1.1.3-rc9` | `v1.1.3-rc9` |
 
 A correction release consumes the next unused version code/tag and shifts later versions. Published tags are immutable and never reused.
 
@@ -508,7 +507,7 @@ The first three RCs establish the highest-value paths; they do not close the pro
 ### Stage 4 — resolver and detail completion
 
 - Run the aggregate resolver coverage fixture and record only counts.
-- If strict targeted search resolves or surfaces credible candidates for less than 80% of eligible non-Steam canonicals, add the next bounded candidate source: global AppList/local index, validated GOG hints, alternate normalization, or durable candidate history according to measured failure categories.
+- If exact local AppList search resolves or surfaces credible candidates for less than 80% of eligible non-Steam canonicals, add the next bounded candidate source: validated GOG hints, alternate normalization, or durable candidate history according to measured failure categories.
 - Decide WorkManager/process-death resume with evidence from the 900-game fixture and live scan completion. Implement it if foreground scanning cannot complete/resume acceptably; otherwise close it with recorded evidence rather than silence.
 - Finish Steam-first card title/artwork precedence for accepted matches.
 - Restore the integrated detail action bar and remaining approved Overview/Details fields.
@@ -560,6 +559,7 @@ This ledger is authoritative. Cross-checks may add rows but may not delete unres
 | R7 | Resolver provider failures were opaque/redacted and detail responses were unbounded | Corrected now | Deliverable 1 corrected RC | Fixed provider reason categories, one-worker pacing, partial-detail review fallback, and bounded-response tests |
 | R8 | GOG recommendation-media fallback still performs a separate Store title search outside canonical resolution | Named correction; not part of ownership resolution | Stage 4 | Route through a trusted resolved/AppList identity or remove the fallback without reducing canonical resolver coverage |
 | R9 | AppList `last_modified` is retained in the public cache but not yet used to suppress accepted-identity enrichment refreshes | Named optimization | Stage 4 | Unchanged accepted AppIDs avoid redundant rich enrichment while explicit/manual refresh remains possible |
+| R10 | RC6 could validate format locally but Android Keystore rejected the caller-supplied AES-GCM encryption IV, and Save had no provider validation gate | Corrected now; physical acceptance pending | Deliverable 1 corrected RC7 | Host cipher regression, bounded provider validator tests, exact-key Test-before-Save ViewModel/UI tests, physical Keystore persistence, and signed-device Test → Save acceptance |
 | O1 | A legitimate GOG non-game product type aborted complete ownership materialization | Corrected now | Deliverable 1 corrected RC | Pack-product parsing regression test and signed live GOG source acceptance |
 | U1 | Samsung launcher policy could hide the package because the launcher was classified as a game | Corrected now | Deliverable 1 corrected RC | Manifest contract test and signed-device launcher visibility acceptance |
 | P1 | Accepted Steam metadata can be overwritten by non-Steam projection | Repair now | Deliverable 1 | Provider-precedence regression test |
@@ -594,24 +594,25 @@ This ledger is authoritative. Cross-checks may add rows but may not delete unres
 7. Newly mapped non-Steam cards participate in popularity filtering in All and their native source tabs.
 8. Accepted identities trigger Steam details/genres/features/review count and best-effort PICS tags without false ownership.
 9. Resolver progress/coverage is visible and source-agnostic.
-10. Search/title/AppID/URL evidence is absent from exported diagnostics.
+10. A runtime Steam Web API key must pass bounded provider validation before Save; a different or untested key cannot be persisted, and successful persistence survives repository recreation.
+11. Search/title/AppID/URL/credential evidence is absent from exported diagnostics.
 
 ### Reviews
 
-11. Reviews are native, paginated, independently refreshable, and support the fixed 80/20 filters.
-12. Review content is bounded, sanitized, process-memory-only, and absent from diagnostics/disk caches.
-13. Offline/error/empty states are honest and do not blank other detail sections.
-14. Unsupported authenticated actions open Steam explicitly.
+12. Reviews are native, paginated, independently refreshable, and support the fixed 80/20 filters.
+13. Review content is bounded, sanitized, process-memory-only, and absent from diagnostics/disk caches.
+14. Offline/error/empty states are honest and do not blank other detail sections.
+15. Unsupported authenticated actions open Steam explicitly.
 
 ### Discussions
 
-15. Public discussion listings and fixture-supported threads render natively as plain text.
-16. URL policy binds every request/redirect/thread to the trusted AppID and Steam Community host.
-17. Parser failure retains a visible external fallback.
-18. Discussion content/user identity is bounded, process-memory-only, and absent from persistence/diagnostics.
+16. Public discussion listings and fixture-supported threads render natively as plain text.
+17. URL policy binds every request/redirect/thread to the trusted AppID and Steam Community host.
+18. Parser failure retains a visible external fallback.
+19. Discussion content/user identity is bounded, process-memory-only, and absent from persistence/diagnostics.
 
 ### Delivery discipline
 
-19. Each deliverable has one focused cross-check, at most one blocker correction pass, owning tests, and one signed fork RC.
-20. Rewrites occur only at structurally invalid active boundaries; every non-blocking issue remains in the completion ledger with a named target or explicit user-approved permanent boundary.
-21. Stages 4–8 remain part of the delivery sequence; completing RC5–RC7 does not silently close their ledger items.
+20. Each deliverable has one focused cross-check, at most one blocker correction pass, owning tests, and one signed fork RC.
+21. Rewrites occur only at structurally invalid active boundaries; every non-blocking issue remains in the completion ledger with a named target or explicit user-approved permanent boundary.
+22. Stages 4–8 remain part of the delivery sequence; completing RC5–RC9 does not silently close their ledger items.

@@ -3,7 +3,6 @@ package app.gamenative.service.steam
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.security.KeyStore
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -22,12 +21,13 @@ internal class AndroidSteamWebApiKeyCipher @Inject constructor() : SteamWebApiKe
     override fun encrypt(plaintext: ByteArray): ByteArray {
         require(plaintext.isNotEmpty()) { "Plaintext cannot be empty" }
 
-        val iv = ByteArray(IV_LENGTH_BYTES).also(SecureRandom()::nextBytes)
         val header = byteArrayOf(FORMAT_VERSION, IV_LENGTH_BYTES.toByte())
         val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-            init(Cipher.ENCRYPT_MODE, getOrCreateKey(), GCMParameterSpec(TAG_LENGTH_BITS, iv))
-            updateAAD(header)
+            init(Cipher.ENCRYPT_MODE, getOrCreateKey())
         }
+        val iv = cipher.iv.copyOf()
+        check(iv.size == IV_LENGTH_BYTES) { "Android Keystore generated an invalid IV length" }
+        cipher.updateAAD(header)
         return header + iv + cipher.doFinal(plaintext)
     }
 

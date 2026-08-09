@@ -18,9 +18,9 @@ The implementation first produces three highest-priority visible signed RCs:
 
 | Core deliverable | Initial reserved release |
 |---|---|
-| Automatic resolution + Fix Steam match | code 31, `1.1.3-rc5`, `v1.1.3-rc5`; corrected provider/source RC code 32, `1.1.3-rc6`, `v1.1.3-rc6` |
-| Native Reviews | code 33, `1.1.3-rc7`, `v1.1.3-rc7` |
-| Native Discussions | code 34, `1.1.3-rc8`, `v1.1.3-rc8` |
+| Automatic resolution + Fix Steam match | code 31, `1.1.3-rc5`, `v1.1.3-rc5`; corrected provider/source RC code 32, `1.1.3-rc6`, `v1.1.3-rc6`; corrected key-validation/persistence RC code 33, `1.1.3-rc7`, `v1.1.3-rc7` |
+| Native Reviews | code 34, `1.1.3-rc8`, `v1.1.3-rc8` |
+| Native Discussions | code 35, `1.1.3-rc9`, `v1.1.3-rc9` |
 
 If a correction release consumes a code/tag, increment every subsequent reservation. Never move or reuse a published tag.
 
@@ -37,7 +37,7 @@ For each deliverable:
 
 A second surviving Critical/High blocker stops delivery. Every Medium/Low finding receives a design-ledger ID, target task/stage, and acceptance condition before the cross-check closes.
 
-RC5–RC8 do not end the plan. Tasks 15–19 execute the design ledger's resolver/detail completion, community completion, external-storage hardening, LSFG decision, and aggregate upstream handoff. An item may leave the plan only with implementation evidence or an explicit user-approved permanent-boundary decision.
+RC5–RC9 do not end the plan. Tasks 15–19 execute the design ledger's resolver/detail completion, community completion, external-storage hardening, LSFG decision, and aggregate upstream handoff. An item may leave the plan only with implementation evidence or an explicit user-approved permanent-boundary decision.
 
 ## 2. File structure
 
@@ -667,7 +667,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 
 - [ ] **Step 2: Perform one design cross-check**
 
-Check design Sections 5–6, 10–13, and Steam-resolution acceptance criteria 1–10. Record only deterministic evidence. Classify every discrepancy. Batch confirmed Critical/High fixes into one correction commit; do not launch a second review.
+Check design Sections 5–6, 10–13, and Steam-resolution acceptance criteria 1–11. Record only deterministic evidence. Classify every discrepancy. Batch confirmed Critical/High fixes into one correction commit; do not launch a second review.
 
 - [ ] **Step 3: Prepare the next unused release identity**
 
