@@ -59,4 +59,6 @@ All three exact title resolutions matched the expected AppIDs, all complete resu
 
 The aggregate strict live result is **all-succeeded**. Every target fetched exactly 3 unique review pages, 3 unique listing pages, and 2 unique nonempty sampled-thread pages. This keeps a strong multi-page proof while matching the available Stardew thread depth instead of treating its legitimate end after page 2 as a failure.
 
+A separate final numeric-AppID probe used `1562430` instead of a title. It resolved by `app_id` and schema-validated 2 review pages / 40 cards, 2 listing pages / 30 topics, and 2 thread pages / 31 posts, with zero duplicate review, topic, or post identities.
+
 The machine report is 36 KB and retains commands, counts, identity strategies, typed HTTP/parser diagnostics, and unmet-condition arrays without persisting complete live review/post bodies.
