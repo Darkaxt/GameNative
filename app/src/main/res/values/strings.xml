@@ -1127,7 +1127,7 @@
     <!-- Settings: Steam Group -->
     <string name="settings_steam_title">Steam catalog</string>
     <string name="settings_steam_web_api_key_title">Steam Web API key</string>
-    <string name="settings_steam_web_api_key_configured">Configured. Retry Steam resolution from Library Options after replacing it.</string>
+    <string name="settings_steam_web_api_key_configured">Configured for automatic cross-store Steam matching.</string>
     <string name="settings_steam_web_api_key_not_configured">Required for automatic cross-store Steam matching.</string>
     <string name="settings_steam_web_api_key_description">Enter the 32-character key from steamcommunity.com/dev/apikey. Test it before saving. It is encrypted on this device and is never shown again.</string>
     <string name="settings_steam_web_api_key_field">Web API key</string>

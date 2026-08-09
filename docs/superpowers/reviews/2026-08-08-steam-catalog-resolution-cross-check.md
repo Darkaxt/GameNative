@@ -50,6 +50,7 @@ Live RC5 evidence exposed provider and source failures before Reviews began. The
 11. Automatic resolution now checks encrypted-key configuration before selecting or searching any library item. A missing key leaves progress idle in an explicit key-required state instead of reporting one provider failure per eligible game.
 12. Full AppList pagination treats an omitted `have_more_results` field as terminal completion, matching the live fourth-page response. A present malformed flag still fails closed, and a true flag still requires a valid advancing cursor.
 13. The key-required resolver UI links to Steam's official Web API key page and replaces Review/Retry with one **Enter API key** action. That action opens the same Test → Save editor used by Settings. Successful Save/Delete operations publish configuration changes, so a retained library resolver refreshes after either the inline editor or Settings changes the credential; the editor closes only after successful persistence.
+14. Official upstream commit `4c3269c6` (gametime tracking correction) was integrated in merge `ac9ff46e` before RC8 release validation.
 
 The separate GOG recommendation-media Store title-search fallback is recorded as ledger R8. It is outside canonical ownership resolution and remains assigned to Stage 4 rather than being silently treated as migrated. AppList `last_modified` is retained for the named Stage 4 enrichment-refresh optimization in R9; the corrected RC does not claim that optimization is already wired.
 
@@ -129,7 +130,9 @@ RC8 key-gate/terminal-page correction evidence:
 
 - The terminal-page regression was observed RED when RC7 required `have_more_results` and GREEN after omission became terminal completion.
 - The resolver key-gate regression was observed RED before the repository exposed a key-required state and GREEN after unconfigured scans returned without invoking catalog search.
-- Focused Legacy repository, AppList provider, and resolver ViewModel suites passed together; the Legacy Compose Android-test source set compiled with the direct key-required editor regression.
+- Review found that a key saved through Settings could leave a retained library resolver stale, then that the first shared-change repair bypassed projection/public-library readiness. Configuration changes now use the same readiness gate as initial scanning; both defects have focused RED/GREEN ViewModel coverage, and final focused review found no remaining concrete blocker.
+- After upstream merge `ac9ff46e`, the final focused repository, AppList provider, key repository/settings, resolver ViewModel, launcher, and release-contract matrix passed in Legacy (6m 24s) and Modern (5m 45s). Both Compose Android-test source sets compiled together in 34s.
+- An attempted combined Gradle invocation applied `--tests` only to the final test task and unintentionally started the unrelated unfiltered Legacy suite. It was stopped after pre-existing baseline failures appeared, stale daemons were stopped, and both intended variant gates were rerun independently as recorded above; the accidental run is not counted as product verification.
 - RC8 publication, installation, live resolver completion, three-per-store sampling, AppID `2229940`, and Samsung launcher visibility remain required and are not represented as passed.
 
 **Gate result:** The RC7 Android Keystore/UI gate passed, but signed live resolution exposed two deterministic blockers. Reviews remain blocked until RC8 is published and the requested live resolver acceptance is verified and reported.
