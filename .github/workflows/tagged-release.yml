@@ -21,8 +21,8 @@ permissions:
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-  EXPECTED_VERSION_CODE: "37"
-  EXPECTED_VERSION_NAME: "1.1.3-rc11"
+  EXPECTED_VERSION_CODE: "38"
+  EXPECTED_VERSION_NAME: "1.1.3-rc12"
 
 jobs:
   build:
