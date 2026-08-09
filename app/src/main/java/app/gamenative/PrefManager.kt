@@ -1087,6 +1087,14 @@ object PrefManager {
             setPref(TIPPED, value)
         }
 
+    private val SUPPORT_PROMPT_LAST_SHOWN_AT = longPreferencesKey("support_prompt_last_shown_at")
+    val supportPromptLastShownAt: Long
+        get() = getPref(SUPPORT_PROMPT_LAST_SHOWN_AT, 0L)
+
+    suspend fun persistSupportPromptShownAt(value: Long) {
+        dataStore.edit { pref -> pref[SUPPORT_PROMPT_LAST_SHOWN_AT] = value }
+    }
+
     private val APP_THEME = intPreferencesKey("app_theme")
     var appTheme: AppTheme
         get() {

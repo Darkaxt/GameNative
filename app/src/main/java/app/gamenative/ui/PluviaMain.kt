@@ -1446,6 +1446,7 @@ fun PluviaMain(
                     // Skip when offline with Steam credentials (avoid flash when Steam reconnects)
                     LaunchedEffect(Unit) {
                         val shouldShowDialogs = !isOffline || !SteamUtils.hasStoredCredentials()
+                        val supportPromptNowMillis = System.currentTimeMillis()
 
                         if (shouldShowDialogs && !state.annoyingDialogShown && PluviaApp.xEnvironment == null && !SteamService.keepAlive && !MainActivity.wasLaunchedViaExternalIntent) {
                             val currentUpdateInfo = updateInfo
@@ -1472,7 +1473,14 @@ fun PluviaMain(
                                     message = context.getString(R.string.main_recent_crash_message),
                                     confirmBtnText = context.getString(R.string.ok),
                                 )
-                            } else if (!(PrefManager.tipped || BuildConfig.GOLD)) {
+                            } else if (
+                                !(PrefManager.tipped || BuildConfig.GOLD) &&
+                                claimSupportPrompt(
+                                    lastShownAtMillis = PrefManager.supportPromptLastShownAt,
+                                    nowMillis = supportPromptNowMillis,
+                                    persistShownAt = PrefManager::persistSupportPromptShownAt,
+                                )
+                            ) {
                                 viewModel.setAnnoyingDialogShown(true)
                                 msgDialogState = MessageDialogState(
                                     visible = true,
