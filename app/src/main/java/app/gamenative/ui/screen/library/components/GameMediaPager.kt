@@ -39,6 +39,8 @@ internal fun GameMediaPager(
     contentDescription: String,
     modifier: Modifier = Modifier,
     loadingPolicy: GameMediaLoadingPolicy = GameMediaLoadingPolicy.DEFAULT,
+    steamVideoMuted: Boolean = true,
+    onSteamVideoMutedChange: (Boolean) -> Unit = {},
 ) {
     val safeMedia = rememberSafeMedia(media, loadingPolicy)
     val pagerState = rememberPagerState(pageCount = { safeMedia.size.coerceAtLeast(1) })
@@ -49,6 +51,8 @@ internal fun GameMediaPager(
         pagerState = pagerState,
         modifier = modifier,
         loadingPolicy = loadingPolicy,
+        steamVideoMuted = steamVideoMuted,
+        onSteamVideoMutedChange = onSteamVideoMutedChange,
     )
 }
 
@@ -60,6 +64,8 @@ internal fun GameMediaPager(
     pagerState: PagerState,
     modifier: Modifier = Modifier,
     loadingPolicy: GameMediaLoadingPolicy = GameMediaLoadingPolicy.DEFAULT,
+    steamVideoMuted: Boolean = true,
+    onSteamVideoMutedChange: (Boolean) -> Unit = {},
 ) {
     val safeMedia = rememberSafeMedia(media, loadingPolicy)
 
@@ -80,6 +86,8 @@ internal fun GameMediaPager(
                             fallbackImageUrl = item.imageUrl ?: fallbackImageUrl,
                             contentDescription = contentDescription,
                             active = page == pagerState.currentPage,
+                            muted = steamVideoMuted,
+                            onMutedChange = onSteamVideoMutedChange,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }

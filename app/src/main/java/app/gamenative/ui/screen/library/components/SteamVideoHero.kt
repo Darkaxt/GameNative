@@ -5,8 +5,16 @@ import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -17,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -30,6 +40,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import app.gamenative.R
 import app.gamenative.library.metadata.SteamMediaRedirectInterceptor
 import app.gamenative.utils.Net
 
@@ -41,6 +52,8 @@ internal fun SteamVideoHero(
     contentDescription: String,
     modifier: Modifier = Modifier,
     active: Boolean = true,
+    muted: Boolean = true,
+    onMutedChange: (Boolean) -> Unit = {},
 ) {
     if (!active) {
         SteamMediaImage(
@@ -72,10 +85,14 @@ internal fun SteamVideoHero(
             .apply {
                 setMediaItem(MediaItem.fromUri(videoUrl))
                 repeatMode = Player.REPEAT_MODE_ALL
-                volume = 0f
+                volume = trailerVolume(muted)
                 playWhenReady = true
                 prepare()
             }
+    }
+
+    LaunchedEffect(exoPlayer, muted) {
+        exoPlayer.volume = trailerVolume(muted)
     }
 
     DisposableEffect(exoPlayer, lifecycleOwner) {
@@ -132,5 +149,27 @@ internal fun SteamVideoHero(
                 contentScale = ContentScale.Fit,
             )
         }
+        IconButton(
+            onClick = {
+                val nextMuted = !muted
+                exoPlayer.volume = trailerVolume(nextMuted)
+                onMutedChange(nextMuted)
+            },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(8.dp)
+                .background(Color.Black.copy(alpha = 0.62f), RoundedCornerShape(8.dp))
+                .testTag("steam-media-audio-toggle"),
+        ) {
+            Icon(
+                imageVector = if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
+                contentDescription = stringResource(
+                    if (muted) R.string.canonical_trailer_unmute else R.string.canonical_trailer_mute,
+                ),
+                tint = Color.White,
+            )
+        }
     }
 }
+
+internal fun trailerVolume(muted: Boolean): Float = if (muted) 0f else 1f

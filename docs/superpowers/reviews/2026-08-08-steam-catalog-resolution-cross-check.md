@@ -150,5 +150,6 @@ RC11 latched-review correction evidence:
 - Focused Legacy and Modern resolver, guarded automatic merge, grouped-card projection, source-action routing, and RC11 release-contract tests passed after the correction.
 - `assembleLegacyDebug` passed; `apkanalyzer` verified package `app.gamenative`, version code 37, and version name `1.1.3-rc11`.
 - Signed publication and tablet acceptance evidence are recorded only after their fresh gates complete.
+- The `v1.1.3-rc11` tag was pushed for the correction checkpoint, but its publication workflow was canceled before release when delivery policy changed to batch the remaining visible work before one consolidated QA/release pass. RC11 is not an acceptance release and its immutable tag will not be reused.
 
-**Gate result:** The RC10 signed-media corrections passed, but resolver acceptance remains blocked by R11 until RC11 is published and the previously separate non-Steam copy is re-evaluated on the signed tablet. Reviews do not begin before that result is reported.
+**Gate result:** The resolver correction is implemented and retained as a pushed checkpoint. Per the updated delivery policy, remaining visible-core tasks are implemented before one consolidated QA/release pass; RC11 was canceled and is not represented as accepted.

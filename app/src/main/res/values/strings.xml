@@ -177,6 +177,8 @@
     <string name="canonical_detail_refresh_failed">Couldn’t refresh. Showing saved details.</string>
     <string name="canonical_detail_unavailable">Details are not available for this game.</string>
     <string name="canonical_detail_retry">Retry</string>
+    <string name="canonical_trailer_unmute">Unmute trailer</string>
+    <string name="canonical_trailer_mute">Mute trailer</string>
     <string name="canonical_detail_reviews_placeholder">Native review browsing is not available yet.</string>
     <string name="canonical_detail_discussions_placeholder">Native discussion browsing is not available yet.</string>
     <string name="canonical_detail_open_steam_reviews">Open Steam reviews</string>

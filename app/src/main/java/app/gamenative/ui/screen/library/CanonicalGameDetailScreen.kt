@@ -305,13 +305,19 @@ private fun DetailOverview(
     hltbStats: HltbService.Stats?,
     onRetry: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val galleryWidth = constrainedMediaGalleryWidth(
+            availableWidth = maxWidth,
+            availableHeight = maxHeight,
+            hasCarousel = media.size > 1,
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
         when {
             state == GameDetailState.Loading -> {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
@@ -330,7 +336,7 @@ private fun DetailOverview(
                         contentDescription = title,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .widthIn(max = MEDIA_MAX_WIDTH)
+                            .widthIn(max = galleryWidth)
                             .align(Alignment.CenterHorizontally),
                     )
                 }
@@ -386,6 +392,7 @@ private fun DetailOverview(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -607,7 +614,30 @@ private fun GamePlatform.label(): String = when (this) {
     GamePlatform.LINUX -> "Linux"
 }
 
+internal fun constrainedMediaGalleryWidth(
+    availableWidth: androidx.compose.ui.unit.Dp,
+    availableHeight: androidx.compose.ui.unit.Dp,
+    hasCarousel: Boolean,
+): androidx.compose.ui.unit.Dp {
+    val contentWidth = (availableWidth - OVERVIEW_PADDING * 2)
+        .coerceAtLeast(0.dp)
+        .coerceAtMost(MEDIA_MAX_WIDTH)
+    val carouselHeight = if (hasCarousel) MEDIA_CAROUSEL_HEIGHT else 0.dp
+    val heightBoundWidth = (
+        availableHeight - OVERVIEW_PADDING * 2 - carouselHeight
+    ).coerceAtLeast(MEDIA_MIN_VIEWPORT_HEIGHT) * MEDIA_ASPECT_RATIO
+    val minimumReadableWidth = contentWidth.coerceAtMost(MEDIA_MIN_VIEWPORT_WIDTH)
+    return heightBoundWidth
+        .coerceAtLeast(minimumReadableWidth)
+        .coerceAtMost(contentWidth)
+}
+
 private val TABLET_BREAKPOINT = 840.dp
 private val DETAIL_MAX_WIDTH = 1180.dp
 private val MEDIA_MAX_WIDTH = 960.dp
+private val MEDIA_MIN_VIEWPORT_WIDTH = 320.dp
+private val MEDIA_MIN_VIEWPORT_HEIGHT = 180.dp
+private val MEDIA_CAROUSEL_HEIGHT = 84.dp
+private val OVERVIEW_PADDING = 16.dp
+private const val MEDIA_ASPECT_RATIO = 16f / 9f
 private val READING_MAX_WIDTH = 840.dp

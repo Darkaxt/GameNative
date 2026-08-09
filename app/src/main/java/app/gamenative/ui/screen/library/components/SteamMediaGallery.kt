@@ -62,6 +62,7 @@ internal fun SteamMediaGallery(
     val pagerState = rememberPagerState(pageCount = { safeMedia.size.coerceAtLeast(1) })
     val scope = rememberCoroutineScope()
     var fullscreenPage by remember { mutableStateOf<Int?>(null) }
+    var videosMuted by remember { mutableStateOf(true) }
 
     Column(
         modifier = modifier.testTag("steam-media-gallery"),
@@ -82,6 +83,8 @@ internal fun SteamMediaGallery(
                     .fillMaxSize()
                     .testTag("steam-media-gallery-viewport"),
                 loadingPolicy = GameMediaLoadingPolicy.STEAM_MEDIA,
+                steamVideoMuted = videosMuted,
+                onSteamVideoMutedChange = { videosMuted = it },
             )
             val currentItem = safeMedia.getOrNull(pagerState.currentPage)
             if (currentItem != null && currentItem.videoUrl.isNullOrBlank()) {

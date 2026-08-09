@@ -1,11 +1,17 @@
 package app.gamenative.ui.screen.library
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.library.metadata.CanonicalGameMetadata
@@ -18,6 +24,7 @@ import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.theme.PluviaTheme
 import app.gamenative.utils.HltbService
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -107,6 +114,9 @@ class CanonicalGameDetailScreenTest {
                     state = GameDetailState.Content(
                         metadata = metadata().copy(
                             headerImageUrl = "https://shared.akamai.steamstatic.com/header.jpg",
+                            screenshots = listOf(
+                                "https://shared.akamai.steamstatic.com/screenshot.jpg",
+                            ),
                             movies = listOf(
                                 GameMovie(
                                     name = "Trailer",
@@ -134,6 +144,54 @@ class CanonicalGameDetailScreenTest {
 
         composeRule.onNodeWithTag("steam-media-gallery").assertIsDisplayed()
         composeRule.onNodeWithTag("steam-media-video").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Unmute trailer").performClick()
+        composeRule.onNodeWithContentDescription("Mute trailer").assertIsDisplayed()
+        composeRule.onNodeWithTag("steam-media-thumbnail:1").performClick()
+        composeRule.onNodeWithTag("steam-media-thumbnail:0").performClick()
+        composeRule.onNodeWithContentDescription("Mute trailer").assertIsDisplayed()
+    }
+
+    @Test
+    fun constrainedHeightKeepsMediaViewportAndCarouselInsideOverview() {
+        composeRule.setContent {
+            PluviaTheme {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(650.dp)
+                        .testTag("detail-height-host"),
+                ) {
+                    CanonicalGameDetailScreen(
+                        state = GameDetailState.Content(
+                            metadata = metadata().copy(
+                                screenshots = listOf("first", "second"),
+                            ),
+                            stale = false,
+                        ),
+                        fallbackTitle = "Canonical fallback",
+                        fallbackImageUrl = "",
+                        steamAppId = 123456,
+                        ownedSources = setOf(GameSource.STEAM),
+                        compatibilityStatus = null,
+                        hltbStats = null,
+                        isOffline = false,
+                        onBack = {},
+                        onCopies = {},
+                        onSourceDetails = {},
+                        onRetry = {},
+                    )
+                }
+            }
+        }
+
+        val hostBottom = composeRule.onNodeWithTag("detail-height-host")
+            .fetchSemanticsNode().boundsInRoot.bottom
+        val carouselBottom = composeRule.onNodeWithTag("steam-media-thumbnails")
+            .fetchSemanticsNode().boundsInRoot.bottom
+
+        assertTrue(carouselBottom <= hostBottom)
+        composeRule.onNodeWithTag("steam-media-gallery-viewport").assertIsDisplayed()
+        composeRule.onNodeWithTag("steam-media-thumbnails").assertIsDisplayed()
     }
 
     private fun metadata() = CanonicalGameMetadata(
