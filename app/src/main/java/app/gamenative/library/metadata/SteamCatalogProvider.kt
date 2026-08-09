@@ -178,11 +178,12 @@ class SteamCatalogProvider internal constructor(
         .orEmpty()
         .mapNotNull { element ->
             val movie = element.objectOrNull() ?: return@mapNotNull null
-            val streamUrl = sequenceOf("webm", "mp4")
-                .mapNotNull { format ->
-                    movie[format].objectOrNull()?.get("max").safeMediaUrl()
-                }
-                .firstOrNull()
+            val streamUrl = movie["hls_h264"].safeMediaUrl()
+                ?: sequenceOf("webm", "mp4")
+                    .mapNotNull { format ->
+                        movie[format].objectOrNull()?.get("max").safeMediaUrl()
+                    }
+                    .firstOrNull()
                 ?: return@mapNotNull null
             GameMovie(
                 name = sanitizeSteamText(movie["name"].stringOrNull()),

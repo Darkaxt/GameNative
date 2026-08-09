@@ -17,12 +17,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Face4
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,7 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -166,7 +163,12 @@ internal fun ListViewCard(
                     InstallStatusBadge(card = card, isRefreshing = isRefreshing)
 
                     if (card.identity is LibraryCardIdentity.Canonical) {
-                        OwnedSourceBadges(sources = card.orderedSources, iconSize = 12)
+                        OwnedSourceCopiesAction(
+                            sources = card.orderedSources,
+                            onClick = onCopies,
+                            modifier = copiesActionModifier,
+                            iconSize = 12,
+                        )
                     }
 
                     // Family share indicator
@@ -194,18 +196,6 @@ internal fun ListViewCard(
                     stats = card.gameStats,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                 )
-            }
-
-            if (card.identity is LibraryCardIdentity.Canonical) {
-                IconButton(
-                    onClick = onCopies,
-                    modifier = copiesActionModifier.testTag("copies-action"),
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ContentCopy,
-                        contentDescription = stringResource(R.string.canonical_copies_action),
-                    )
-                }
             }
 
             val badgeStatus = if (card.isRecommended) {

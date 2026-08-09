@@ -142,6 +142,45 @@ class SteamCatalogProviderTest {
     }
 
     @Test
+    fun parsesCurrentHlsMovieStreamsBeforeScreenshots() = runTest {
+        val hlsUrl = "https://video.akamai.steamstatic.com/movie/master.m3u8"
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                {
+                  "$TRUSTED_APP_ID": {
+                    "success": true,
+                    "data": {
+                      "name": "Fixture Game",
+                      "movies": [
+                        {
+                          "name": "Trailer",
+                          "thumbnail": "https://shared.akamai.steamstatic.com/poster.jpg",
+                          "hls_h264": "$hlsUrl",
+                          "dash_h264": "https://video.akamai.steamstatic.com/movie/manifest.mpd"
+                        }
+                      ],
+                      "screenshots": [
+                        {
+                          "path_full": "https://shared.akamai.steamstatic.com/screenshot.jpg"
+                        }
+                      ]
+                    }
+                  }
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        val metadata = requireNotNull(
+            provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US")),
+        )
+
+        assertEquals(hlsUrl, metadata.movies.single().streamUrl)
+        assertEquals(1, metadata.screenshots.size)
+    }
+
+    @Test
     fun malformedOptionalFieldsDoNotDiscardUsableMetadata() = runTest {
         server.enqueue(
             MockResponse().setBody(

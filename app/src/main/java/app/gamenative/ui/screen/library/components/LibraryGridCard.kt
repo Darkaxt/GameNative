@@ -22,12 +22,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Face4
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,7 +47,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -368,30 +365,14 @@ internal fun GridViewCard(
                         )
                     }
                 } else if (card.identity is LibraryCardIdentity.Canonical) {
-                    Column(
-                        modifier = Modifier
+                    OwnedSourceCopiesAction(
+                        sources = card.orderedSources,
+                        onClick = onCopies,
+                        modifier = copiesActionModifier
                             .align(Alignment.TopEnd)
                             .padding(top = topOverlayPadding, end = topOverlayPadding),
-                        horizontalAlignment = Alignment.End,
-                    ) {
-                        OwnedSourceBadges(
-                            sources = card.orderedSources,
-                            iconSize = if (isCapsule) 14 else 12,
-                        )
-                        IconButton(
-                            onClick = onCopies,
-                            modifier = copiesActionModifier
-                                .testTag("copies-action")
-                                .size(if (isCapsule) 36.dp else 32.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.ContentCopy,
-                                contentDescription = stringResource(R.string.canonical_copies_action),
-                                tint = Color.White,
-                                modifier = Modifier.size(if (isCapsule) 18.dp else 16.dp),
-                            )
-                        }
-                    }
+                        iconSize = if (isCapsule) 14 else 12,
+                    )
                 } else if (!card.isRecommended) {
                     card.orderedSources.firstOrNull()?.let { source ->
                         GameSourceIcon(

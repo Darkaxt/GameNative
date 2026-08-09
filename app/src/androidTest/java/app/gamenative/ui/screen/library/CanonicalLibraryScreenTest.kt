@@ -115,7 +115,12 @@ class CanonicalLibraryScreenTest {
         composeRule.onAllNodesWithTag("canonical-card").assertCountEquals(1)
         composeRule.onAllNodesWithContentDescription("Owned on Steam").assertCountEquals(1)
         composeRule.onAllNodesWithContentDescription("Owned on GOG").assertCountEquals(1)
-        composeRule.onNodeWithTag("copies-action").assertHasClickAction().performClick()
+        val copiesBadges = composeRule.onNode(
+            hasTestTag("copies-action") and
+                hasAnyDescendant(hasTestTag("owned-source-badges")),
+            useUnmergedTree = true,
+        )
+        copiesBadges.assertHasClickAction().performClick()
         composeRule.runOnIdle { assertTrue(copiesOpened) }
     }
 
