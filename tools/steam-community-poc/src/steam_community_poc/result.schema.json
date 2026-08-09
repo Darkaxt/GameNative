@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamenative.app/schemas/steam-community-poc-result.schema.json",
+  "title": "GameNative Steam community POC result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "target", "request", "reviews", "discussions", "diagnostics"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "appId", "title", "resolution"],
+      "properties": {
+        "input": {"type": "string", "minLength": 1, "maxLength": 512},
+        "appId": {"type": "integer", "minimum": 1},
+        "title": {"type": "string", "minLength": 1, "maxLength": 512},
+        "resolution": {"enum": ["app_id", "exact_title"]}
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewPages", "discussionPages", "threadPages", "sampleThreads"],
+      "properties": {
+        "reviewPages": {"type": "integer", "minimum": 1, "maximum": 10},
+        "discussionPages": {"type": "integer", "minimum": 1, "maximum": 10},
+        "threadPages": {"type": "integer", "minimum": 1, "maximum": 10},
+        "sampleThreads": {"type": "integer", "minimum": 1, "maximum": 10}
+      }
+    },
+    "reviews": {"$ref": "#/$defs/reviewsSection"},
+    "discussions": {"$ref": "#/$defs/discussionsSection"},
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {"$ref": "#/$defs/diagnostic"}
+    }
+  },
+  "$defs": {
+    "simpleState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {"kind": {"enum": ["Idle", "Loading", "Empty", "Offline", "Unavailable"]}}
+    },
+    "reviewContentState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "canLoadMore", "loadingMore", "refreshFailed"],
+      "properties": {
+        "kind": {"const": "Content"},
+        "canLoadMore": {"type": "boolean"},
+        "loadingMore": {"type": "boolean"},
+        "refreshFailed": {"type": "boolean"}
+      }
+    },
+    "listingState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "canLoadMore", "loadingMore", "refreshFailed"],
+      "properties": {
+        "kind": {"const": "Listing"},
+        "canLoadMore": {"type": "boolean"},
+        "loadingMore": {"type": "boolean"},
+        "refreshFailed": {"type": "boolean"}
+      }
+    },
+    "threadState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "canLoadMore", "loadingMore", "refreshFailed"],
+      "properties": {
+        "kind": {"const": "Thread"},
+        "canLoadMore": {"type": "boolean"},
+        "loadingMore": {"type": "boolean"},
+        "refreshFailed": {"type": "boolean"}
+      }
+    },
+    "pagination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestedPages", "fetchedPages", "requestedUrls", "uniqueRequestCount", "uniqueItemCount", "duplicateItemCount", "identityKinds", "continuationAvailable"],
+      "properties": {
+        "requestedPages": {"type": "integer", "minimum": 1, "maximum": 10},
+        "fetchedPages": {"type": "integer", "minimum": 0, "maximum": 10},
+        "requestedUrls": {"type": "array", "maxItems": 10, "items": {"type": "string", "minLength": 1, "maxLength": 4096}},
+        "uniqueRequestCount": {"type": "integer", "minimum": 0, "maximum": 10},
+        "uniqueItemCount": {"type": "integer", "minimum": 0, "maximum": 500},
+        "duplicateItemCount": {"type": "integer", "minimum": 0, "maximum": 500},
+        "identityKinds": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 5,
+          "items": {"enum": ["recommendation_id", "review_page_element", "discussion_route", "steam_post_id", "page_element"]}
+        },
+        "continuationAvailable": {"type": "boolean"}
+      }
+    },
+    "reviewCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommended", "text", "playtimeMinutes", "helpfulVotes", "funnyVotes", "commentCount", "postedAtEpochSeconds", "updatedAtEpochSeconds", "receivedForFree", "earlyAccess", "developerResponse"],
+      "properties": {
+        "recommended": {"type": "boolean"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "playtimeMinutes": {"type": ["integer", "null"], "minimum": 0},
+        "helpfulVotes": {"type": "integer", "minimum": 0},
+        "funnyVotes": {"type": "integer", "minimum": 0},
+        "commentCount": {"type": "integer", "minimum": 0},
+        "postedAtEpochSeconds": {"type": "integer", "minimum": 0},
+        "updatedAtEpochSeconds": {"type": "integer", "minimum": 0},
+        "receivedForFree": {"type": "boolean"},
+        "earlyAccess": {"type": "boolean"},
+        "developerResponse": {"type": ["string", "null"], "maxLength": 8192}
+      }
+    },
+    "discussionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "replyCount", "activityLabel", "route", "viewCount"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 512},
+        "replyCount": {"type": ["integer", "null"], "minimum": 0},
+        "activityLabel": {"type": ["string", "null"], "maxLength": 256},
+        "route": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "viewCount": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "discussionPost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 32768}}
+    },
+    "reviewsSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sectionState", "items", "pagination"],
+      "properties": {
+        "sectionState": {"oneOf": [{"$ref": "#/$defs/simpleState"}, {"$ref": "#/$defs/reviewContentState"}]},
+        "items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/reviewCard"}},
+        "pagination": {"$ref": "#/$defs/pagination"}
+      }
+    },
+    "sampledThread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "route", "sectionState", "posts", "pagination"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 512},
+        "route": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sectionState": {"oneOf": [{"$ref": "#/$defs/simpleState"}, {"$ref": "#/$defs/threadState"}]},
+        "posts": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/discussionPost"}},
+        "pagination": {"$ref": "#/$defs/pagination"}
+      }
+    },
+    "discussionsSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sectionState", "items", "pagination", "sampledThreads"],
+      "properties": {
+        "sectionState": {"oneOf": [{"$ref": "#/$defs/simpleState"}, {"$ref": "#/$defs/listingState"}]},
+        "items": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/discussionSummary"}},
+        "pagination": {"$ref": "#/$defs/pagination"},
+        "sampledThreads": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/sampledThread"}}
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "severity", "code", "message", "context"],
+      "properties": {
+        "type": {"enum": ["resolution", "http", "parser", "pagination", "validation"]},
+        "severity": {"enum": ["info", "warning", "error"]},
+        "code": {"type": "string", "minLength": 1, "maxLength": 128},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "context": {"type": "object", "maxProperties": 32, "additionalProperties": true}
+      }
+    }
+  }
+}

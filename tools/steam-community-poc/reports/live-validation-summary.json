@@ -1,0 +1,993 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-09T23:46:06.938677+00:00",
+  "configuration": {
+    "reviewPages": 3,
+    "discussionPages": 3,
+    "threadPages": 2,
+    "sampleThreads": 1,
+    "bodyBytesMax": 1048576,
+    "rawBodiesPersisted": false
+  },
+  "allSucceeded": true,
+  "targets": [
+    {
+      "target": {
+        "input": "DREDGE",
+        "appId": 1562430,
+        "title": "DREDGE",
+        "resolution": "exact_title"
+      },
+      "expectedAppId": 1562430,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "DREDGE",
+        "--review-pages",
+        "3",
+        "--discussion-pages",
+        "3",
+        "--thread-pages",
+        "2",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "reviews": {
+        "sectionState": "Content",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "itemCount": 60,
+        "uniqueRequestCount": 3,
+        "uniqueItemCount": 60,
+        "duplicateItemCount": 0,
+        "identityKinds": [
+          "recommendation_id"
+        ],
+        "continuationAvailable": true
+      },
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "itemCount": 45,
+        "uniqueRequestCount": 3,
+        "uniqueItemCount": 45,
+        "duplicateItemCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "continuationAvailable": true
+      },
+      "sampledThreads": [
+        {
+          "title": "How did you find out about this game?",
+          "route": "/app/1562430/discussions/0/596268676749997442/",
+          "sectionState": "Thread",
+          "requestedPages": 2,
+          "fetchedPages": 2,
+          "itemCount": 31,
+          "uniqueRequestCount": 2,
+          "uniqueItemCount": 31,
+          "duplicateItemCount": 0,
+          "identityKinds": [
+            "steam_post_id"
+          ],
+          "continuationAvailable": true
+        }
+      ],
+      "diagnostics": {
+        "countsByType": {
+          "http": 9,
+          "parser": 8,
+          "resolution": 1,
+          "validation": 1
+        },
+        "http": [
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "store_search",
+              "page": 1,
+              "requestedUrl": "https://store.steampowered.com/api/storesearch/?term=DREDGE&l=english&cc=US",
+              "finalUrl": "https://store.steampowered.com/api/storesearch/?term=DREDGE&l=english&cc=US",
+              "statusCode": 200,
+              "bodyBytes": 3072,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 1,
+              "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
+              "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
+              "statusCode": 200,
+              "bodyBytes": 44260,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 2,
+              "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZhheAAAAAFP%2BDDDUAAAAB%2F0OvxBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZhheAAAAAFP%2BDDDUAAAAB%2F0OvxBg%3D%3D",
+              "statusCode": 200,
+              "bodyBytes": 27314,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 3,
+              "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZpA%2BAAAAAFP%2BCTGoAAAAB6%2BpfuBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZpA%2BAAAAAFP%2BCTGoAAAAB6%2BpfuBg%3D%3D",
+              "statusCode": 200,
+              "bodyBytes": 25010,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 1,
+              "requestedUrl": "https://steamcommunity.com/app/1562430/discussions/",
+              "finalUrl": "https://steamcommunity.com/app/1562430/discussions/",
+              "statusCode": 200,
+              "bodyBytes": 73295,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 2,
+              "requestedUrl": "https://steamcommunity.com/app/1562430/discussions/?fp=2",
+              "finalUrl": "https://steamcommunity.com/app/1562430/discussions/?fp=2",
+              "statusCode": 200,
+              "bodyBytes": 74359,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 3,
+              "requestedUrl": "https://steamcommunity.com/app/1562430/discussions/?fp=3",
+              "finalUrl": "https://steamcommunity.com/app/1562430/discussions/?fp=3",
+              "statusCode": 200,
+              "bodyBytes": 73026,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_thread",
+              "page": 1,
+              "requestedUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/",
+              "finalUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/",
+              "statusCode": 200,
+              "bodyBytes": 123877,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_thread",
+              "page": 2,
+              "requestedUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/?ctp=2",
+              "finalUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/?ctp=2",
+              "statusCode": 200,
+              "bodyBytes": 122019,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          }
+        ],
+        "parser": [
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 1,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 2,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 3,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 1,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/1562430/discussions/"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 2,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/1562430/discussions/?fp=2"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 3,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/1562430/discussions/?fp=3"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_thread_parsed",
+            "message": "Parsed a bounded Steam discussion thread page",
+            "context": {
+              "page": 1,
+              "itemCount": 16,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0,
+              "route": "/app/1562430/discussions/0/596268676749997442/"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_thread_parsed",
+            "message": "Parsed a bounded Steam discussion thread page",
+            "context": {
+              "page": 2,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0,
+              "route": "/app/1562430/discussions/0/596268676749997442/?ctp=2"
+            }
+          }
+        ],
+        "warningsAndErrors": []
+      }
+    },
+    {
+      "target": {
+        "input": "Dota 2",
+        "appId": 570,
+        "title": "Dota 2",
+        "resolution": "exact_title"
+      },
+      "expectedAppId": 570,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Dota 2",
+        "--review-pages",
+        "3",
+        "--discussion-pages",
+        "3",
+        "--thread-pages",
+        "2",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "reviews": {
+        "sectionState": "Content",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "itemCount": 60,
+        "uniqueRequestCount": 3,
+        "uniqueItemCount": 60,
+        "duplicateItemCount": 0,
+        "identityKinds": [
+          "recommendation_id"
+        ],
+        "continuationAvailable": true
+      },
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "itemCount": 45,
+        "uniqueRequestCount": 3,
+        "uniqueItemCount": 45,
+        "duplicateItemCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "continuationAvailable": true
+      },
+      "sampledThreads": [
+        {
+          "title": "HELP! - Q: \"Is this site a scam?\" A: Probably!",
+          "route": "/app/570/discussions/0/1696040635904700731/",
+          "sectionState": "Thread",
+          "requestedPages": 2,
+          "fetchedPages": 2,
+          "itemCount": 31,
+          "uniqueRequestCount": 2,
+          "uniqueItemCount": 31,
+          "duplicateItemCount": 0,
+          "identityKinds": [
+            "steam_post_id"
+          ],
+          "continuationAvailable": true
+        }
+      ],
+      "diagnostics": {
+        "countsByType": {
+          "http": 9,
+          "parser": 8,
+          "resolution": 1,
+          "validation": 1
+        },
+        "http": [
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "store_search",
+              "page": 1,
+              "requestedUrl": "https://store.steampowered.com/api/storesearch/?term=Dota+2&l=english&cc=US",
+              "finalUrl": "https://store.steampowered.com/api/storesearch/?term=Dota+2&l=english&cc=US",
+              "statusCode": 200,
+              "bodyBytes": 1202,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 1,
+              "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
+              "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
+              "statusCode": 200,
+              "bodyBytes": 32053,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 2,
+              "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFV6ssAAAAAFP%2BaIVMAAAAB196fwBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFV6ssAAAAAFP%2BaIVMAAAAB196fwBg%3D%3D",
+              "statusCode": 200,
+              "bodyBytes": 29676,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 3,
+              "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYUlmAAAAAFP%2BKvcKAAAAB7gOvtBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYUlmAAAAAFP%2BKvcKAAAAB7gOvtBg%3D%3D",
+              "statusCode": 200,
+              "bodyBytes": 34900,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 1,
+              "requestedUrl": "https://steamcommunity.com/app/570/discussions/",
+              "finalUrl": "https://steamcommunity.com/app/570/discussions/",
+              "statusCode": 200,
+              "bodyBytes": 76571,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 2,
+              "requestedUrl": "https://steamcommunity.com/app/570/discussions/?fp=2",
+              "finalUrl": "https://steamcommunity.com/app/570/discussions/?fp=2",
+              "statusCode": 200,
+              "bodyBytes": 71219,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 3,
+              "requestedUrl": "https://steamcommunity.com/app/570/discussions/?fp=3",
+              "finalUrl": "https://steamcommunity.com/app/570/discussions/?fp=3",
+              "statusCode": 200,
+              "bodyBytes": 71711,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_thread",
+              "page": 1,
+              "requestedUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/",
+              "finalUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/",
+              "statusCode": 200,
+              "bodyBytes": 146338,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_thread",
+              "page": 2,
+              "requestedUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/?ctp=2",
+              "finalUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/?ctp=2",
+              "statusCode": 200,
+              "bodyBytes": 130773,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          }
+        ],
+        "parser": [
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 1,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 2,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 3,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 1,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/570/discussions/"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 2,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/570/discussions/?fp=2"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 3,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/570/discussions/?fp=3"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_thread_parsed",
+            "message": "Parsed a bounded Steam discussion thread page",
+            "context": {
+              "page": 1,
+              "itemCount": 16,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0,
+              "route": "/app/570/discussions/0/1696040635904700731/"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_thread_parsed",
+            "message": "Parsed a bounded Steam discussion thread page",
+            "context": {
+              "page": 2,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0,
+              "route": "/app/570/discussions/0/1696040635904700731/?ctp=2"
+            }
+          }
+        ],
+        "warningsAndErrors": []
+      }
+    },
+    {
+      "target": {
+        "input": "Stardew Valley",
+        "appId": 413150,
+        "title": "Stardew Valley",
+        "resolution": "exact_title"
+      },
+      "expectedAppId": 413150,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Stardew Valley",
+        "--review-pages",
+        "3",
+        "--discussion-pages",
+        "3",
+        "--thread-pages",
+        "2",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "reviews": {
+        "sectionState": "Content",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "itemCount": 60,
+        "uniqueRequestCount": 3,
+        "uniqueItemCount": 60,
+        "duplicateItemCount": 0,
+        "identityKinds": [
+          "recommendation_id"
+        ],
+        "continuationAvailable": true
+      },
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "itemCount": 45,
+        "uniqueRequestCount": 3,
+        "uniqueItemCount": 45,
+        "duplicateItemCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "continuationAvailable": true
+      },
+      "sampledThreads": [
+        {
+          "title": "Other games you would love to see Stardew crossover with?",
+          "route": "/app/413150/discussions/0/574921762383389282/",
+          "sectionState": "Thread",
+          "requestedPages": 2,
+          "fetchedPages": 2,
+          "itemCount": 25,
+          "uniqueRequestCount": 2,
+          "uniqueItemCount": 25,
+          "duplicateItemCount": 0,
+          "identityKinds": [
+            "steam_post_id"
+          ],
+          "continuationAvailable": false
+        }
+      ],
+      "diagnostics": {
+        "countsByType": {
+          "http": 9,
+          "parser": 8,
+          "resolution": 1,
+          "validation": 1
+        },
+        "http": [
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "store_search",
+              "page": 1,
+              "requestedUrl": "https://store.steampowered.com/api/storesearch/?term=Stardew+Valley&l=english&cc=US",
+              "finalUrl": "https://store.steampowered.com/api/storesearch/?term=Stardew+Valley&l=english&cc=US",
+              "statusCode": 200,
+              "bodyBytes": 710,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 1,
+              "requestedUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
+              "finalUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
+              "statusCode": 200,
+              "bodyBytes": 36022,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 2,
+              "requestedUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFWIkIAAAAAFP%2BYvlmAAAABwgqbvBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFWIkIAAAAAFP%2BYvlmAAAABwgqbvBg%3D%3D",
+              "statusCode": 200,
+              "bodyBytes": 48347,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "reviews",
+              "page": 3,
+              "requestedUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYshcAAAAAFP%2BIWQgAAAAB8vLfxBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYshcAAAAAFP%2BIWQgAAAAB8vLfxBg%3D%3D",
+              "statusCode": 200,
+              "bodyBytes": 30313,
+              "contentType": "application/json",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 1,
+              "requestedUrl": "https://steamcommunity.com/app/413150/discussions/",
+              "finalUrl": "https://steamcommunity.com/app/413150/discussions/",
+              "statusCode": 200,
+              "bodyBytes": 74335,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 2,
+              "requestedUrl": "https://steamcommunity.com/app/413150/discussions/?fp=2",
+              "finalUrl": "https://steamcommunity.com/app/413150/discussions/?fp=2",
+              "statusCode": 200,
+              "bodyBytes": 78556,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_listing",
+              "page": 3,
+              "requestedUrl": "https://steamcommunity.com/app/413150/discussions/?fp=3",
+              "finalUrl": "https://steamcommunity.com/app/413150/discussions/?fp=3",
+              "statusCode": 200,
+              "bodyBytes": 70649,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_thread",
+              "page": 1,
+              "requestedUrl": "https://steamcommunity.com/app/413150/discussions/0/574921762383389282/",
+              "finalUrl": "https://steamcommunity.com/app/413150/discussions/0/574921762383389282/",
+              "statusCode": 200,
+              "bodyBytes": 130381,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          },
+          {
+            "type": "http",
+            "severity": "info",
+            "code": "http_response",
+            "message": "Steam returned a bounded successful response",
+            "context": {
+              "purpose": "discussion_thread",
+              "page": 2,
+              "requestedUrl": "https://steamcommunity.com/app/413150/discussions/0/574921762383389282/?ctp=2",
+              "finalUrl": "https://steamcommunity.com/app/413150/discussions/0/574921762383389282/?ctp=2",
+              "statusCode": 200,
+              "bodyBytes": 99575,
+              "contentType": "text/html",
+              "redirectCount": 0
+            }
+          }
+        ],
+        "parser": [
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 1,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 2,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "reviews_parsed",
+            "message": "Parsed a bounded Steam review page",
+            "context": {
+              "page": 3,
+              "itemCount": 20,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 1,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/413150/discussions/"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 2,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/413150/discussions/?fp=2"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_listing_parsed",
+            "message": "Parsed a bounded Steam discussion listing page",
+            "context": {
+              "page": 3,
+              "itemCount": 15,
+              "skippedItemCount": 0,
+              "route": "/app/413150/discussions/?fp=3"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_thread_parsed",
+            "message": "Parsed a bounded Steam discussion thread page",
+            "context": {
+              "page": 1,
+              "itemCount": 16,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0,
+              "route": "/app/413150/discussions/0/574921762383389282/"
+            }
+          },
+          {
+            "type": "parser",
+            "severity": "info",
+            "code": "discussion_thread_parsed",
+            "message": "Parsed a bounded Steam discussion thread page",
+            "context": {
+              "page": 2,
+              "itemCount": 9,
+              "skippedItemCount": 0,
+              "identityFallbackCount": 0,
+              "route": "/app/413150/discussions/0/574921762383389282/?ctp=2"
+            }
+          }
+        ],
+        "warningsAndErrors": []
+      }
+    }
+  ]
+}

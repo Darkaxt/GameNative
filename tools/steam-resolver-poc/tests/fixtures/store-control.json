@@ -1,0 +1,20 @@
+{
+  "apps": [
+    {
+      "steamAppId": 870780,
+      "title": "Control Ultimate Edition",
+      "developer": "Remedy Entertainment",
+      "publisher": "505 Games",
+      "releaseYear": 2020,
+      "appType": "GAME"
+    },
+    {
+      "steamAppId": 111,
+      "title": "Control Soundtrack",
+      "developer": "Petri Alanko",
+      "publisher": "505 Games",
+      "releaseYear": 2020,
+      "appType": "UNKNOWN"
+    }
+  ]
+}

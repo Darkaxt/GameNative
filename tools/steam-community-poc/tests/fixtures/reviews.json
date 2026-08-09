@@ -1,0 +1,22 @@
+{
+  "success": 1,
+  "cursor": "cursor two/+",
+  "reviews": [
+    {
+      "recommendationid": "r1",
+      "voted_up": true,
+      "review": "Safe <b>plain</b> review text",
+      "author": {"playtime_forever": 90},
+      "votes_up": 2,
+      "votes_funny": 1,
+      "comment_count": 3,
+      "timestamp_created": 10,
+      "timestamp_updated": 11,
+      "received_for_free": false,
+      "written_during_early_access": true,
+      "developer_response": "Developer response"
+    },
+    {"recommendationid": "blank", "voted_up": false, "review": "   "},
+    {"recommendationid": "missing"}
+  ]
+}
