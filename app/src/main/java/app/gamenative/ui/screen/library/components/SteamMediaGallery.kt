@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import app.gamenative.library.metadata.MetadataProvider
 import kotlinx.coroutines.launch
 
 @Composable
@@ -54,6 +55,7 @@ internal fun SteamMediaGallery(
     media: List<GameMediaItem>,
     fallbackImageUrl: String?,
     contentDescription: String,
+    provider: MetadataProvider,
     modifier: Modifier = Modifier,
 ) {
     val safeMedia = remember(media) {
@@ -83,6 +85,7 @@ internal fun SteamMediaGallery(
                     .fillMaxSize()
                     .testTag("steam-media-gallery-viewport"),
                 loadingPolicy = GameMediaLoadingPolicy.STEAM_MEDIA,
+                mediaProvider = provider,
                 steamVideoMuted = videosMuted,
                 onSteamVideoMutedChange = { videosMuted = it },
             )
@@ -140,6 +143,7 @@ internal fun SteamMediaGallery(
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop,
+                                provider = provider,
                             )
                             if (!item.videoUrl.isNullOrBlank()) {
                                 Icon(
@@ -163,6 +167,7 @@ internal fun SteamMediaGallery(
             media = safeMedia,
             initialPage = initialPage,
             contentDescription = contentDescription,
+            provider = provider,
             onDismiss = { fullscreenPage = null },
         )
     }
@@ -173,6 +178,7 @@ private fun SteamMediaFullscreenDialog(
     media: List<GameMediaItem>,
     initialPage: Int,
     contentDescription: String,
+    provider: MetadataProvider,
     onDismiss: () -> Unit,
 ) {
     var page by remember(initialPage) { mutableIntStateOf(initialPage) }
@@ -212,6 +218,7 @@ private fun SteamMediaFullscreenDialog(
                         }
                     },
                 contentScale = ContentScale.Fit,
+                provider = provider,
             )
 
             IconButton(

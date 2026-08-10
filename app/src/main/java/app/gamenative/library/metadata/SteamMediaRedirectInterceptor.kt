@@ -5,7 +5,7 @@ import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 internal class SteamMediaRedirectInterceptor(
-    private val urlPolicy: SteamUrlPolicy = SteamUrlPolicy(),
+    private val urlPolicy: MediaUrlPolicy = SteamUrlPolicy(),
     private val maxRedirects: Int = DEFAULT_MAX_REDIRECTS,
 ) : Interceptor {
     init {

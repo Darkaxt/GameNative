@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import app.gamenative.library.metadata.MetadataProvider
 import app.gamenative.library.metadata.SteamMediaDataSource
 import coil.ImageLoader
 import coil.decode.DataSource
@@ -26,9 +27,10 @@ internal fun SteamMediaImage(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
     sessionOnly: Boolean = false,
+    provider: MetadataProvider = MetadataProvider.STEAM_APPDETAILS,
 ) {
     val safeUrl = imageUrl?.takeIf(String::isNotBlank) ?: return
-    val imageLoader = rememberSteamMediaImageLoader(sessionOnly)
+    val imageLoader = rememberSteamMediaImageLoader(sessionOnly, provider)
     val model = remember(safeUrl) { SteamMediaImageModel(safeUrl) }
     CoilImage(
         imageModel = { model },
@@ -42,10 +44,13 @@ internal fun SteamMediaImage(
 }
 
 @Composable
-private fun rememberSteamMediaImageLoader(sessionOnly: Boolean): ImageLoader {
+private fun rememberSteamMediaImageLoader(
+    sessionOnly: Boolean,
+    provider: MetadataProvider,
+): ImageLoader {
     val context = LocalContext.current.applicationContext
-    val imageLoader = remember(context, sessionOnly) {
-        val dataSource = SteamMediaDataSource(noStore = sessionOnly)
+    val imageLoader = remember(context, sessionOnly, provider) {
+        val dataSource = SteamMediaDataSource(provider = provider, noStore = sessionOnly)
         ImageLoader.Builder(context)
             .apply {
                 if (sessionOnly) {

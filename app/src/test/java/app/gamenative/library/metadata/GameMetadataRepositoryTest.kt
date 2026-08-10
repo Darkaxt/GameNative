@@ -159,6 +159,7 @@ class GameMetadataRepositoryTest {
 
         val content = state as GameDetailState.Content
         assertEquals("Cached title", content.metadata.title)
+        assertEquals(MetadataProvider.STEAM_APPDETAILS, content.provider)
         assertFalse(content.stale)
         assertFalse(content.refreshFailed)
         assertTrue(provider.requestedIds.isEmpty())
@@ -194,6 +195,7 @@ class GameMetadataRepositoryTest {
 
         val content = state as GameDetailState.Content
         assertEquals("Epic source title", content.metadata.title)
+        assertEquals(MetadataProvider.EPIC_CMS, content.provider)
         assertFalse(content.stale)
         assertTrue(provider.requestedIds.isEmpty())
     }

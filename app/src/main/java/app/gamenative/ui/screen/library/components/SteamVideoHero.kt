@@ -41,7 +41,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import app.gamenative.R
+import app.gamenative.library.metadata.MetadataProvider
 import app.gamenative.library.metadata.SteamMediaRedirectInterceptor
+import app.gamenative.library.metadata.mediaUrlPolicy
 import app.gamenative.utils.Net
 
 @OptIn(UnstableApi::class)
@@ -53,6 +55,7 @@ internal fun SteamVideoHero(
     modifier: Modifier = Modifier,
     active: Boolean = true,
     muted: Boolean = true,
+    provider: MetadataProvider = MetadataProvider.STEAM_APPDETAILS,
     onMutedChange: (Boolean) -> Unit = {},
 ) {
     if (!active) {
@@ -61,6 +64,7 @@ internal fun SteamVideoHero(
             contentDescription = contentDescription,
             modifier = modifier,
             contentScale = ContentScale.Fit,
+            provider = provider,
         )
         return
     }
@@ -68,11 +72,11 @@ internal fun SteamVideoHero(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var showFallback by remember(videoUrl) { mutableStateOf(true) }
-    val mediaClient = remember {
+    val mediaClient = remember(provider) {
         Net.http.newBuilder()
             .followRedirects(false)
             .followSslRedirects(false)
-            .addInterceptor(SteamMediaRedirectInterceptor())
+            .addInterceptor(SteamMediaRedirectInterceptor(provider.mediaUrlPolicy()))
             .build()
     }
     val mediaSourceFactory = remember(mediaClient) {
@@ -147,6 +151,7 @@ internal fun SteamVideoHero(
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Fit,
+                provider = provider,
             )
         }
         IconButton(

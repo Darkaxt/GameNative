@@ -53,6 +53,37 @@ class SteamMediaDataSourceTest {
     }
 
     @Test
+    fun EpicMediaPolicyFollowsOnlyEpicApprovedRedirects() = runTest {
+        server.enqueue(redirectTo("/final.jpg"))
+        server.enqueue(MockResponse().setBody("Epic image bytes"))
+
+        val body = epicSource().open(server.url("/start.jpg").toString()).use {
+            it.body.string()
+        }
+
+        assertEquals("Epic image bytes", body)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun EpicMediaPolicyRejectsCrossProviderRedirect() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader(
+                    "Location",
+                    "https://shared.akamai.steamstatic.com/store_item_assets/image.jpg",
+                ),
+        )
+
+        expectUnavailable {
+            epicSource().open(server.url("/start.jpg").toString())
+        }
+
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
     fun sessionOnlyMediaRequestsAreNoStoreAcrossRedirects() = runTest {
         server.enqueue(redirectTo("/final.jpg"))
         server.enqueue(MockResponse().setBody("image bytes"))
@@ -186,6 +217,16 @@ class SteamMediaDataSourceTest {
         ),
         maxRedirects = maxRedirects,
         noStore = noStore,
+    )
+
+    private fun epicSource(): SteamMediaDataSource = SteamMediaDataSource(
+        baseClient = OkHttpClient(),
+        urlPolicy = EpicUrlPolicy(
+            cmsHosts = emptySet(),
+            mediaRoots = setOf(server.hostName),
+            requireHttps = false,
+            allowedPorts = setOf(server.port),
+        ),
     )
 
     private fun redirectTo(path: String): MockResponse = MockResponse()

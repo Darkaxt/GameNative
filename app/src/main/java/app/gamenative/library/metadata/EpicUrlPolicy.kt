@@ -7,7 +7,7 @@ class EpicUrlPolicy internal constructor(
     private val mediaRoots: Set<String> = EPIC_MEDIA_ROOTS,
     private val requireHttps: Boolean = true,
     private val allowedPorts: Set<Int> = setOf(443),
-) {
+) : MediaUrlPolicy {
     fun isAllowedCmsRequest(url: HttpUrl): Boolean {
         if (
             !hasSafeAuthority(url) ||
@@ -27,7 +27,7 @@ class EpicUrlPolicy internal constructor(
             PRODUCT_SLUG.matches(segments[4])
     }
 
-    fun isAllowedMediaUrl(url: HttpUrl): Boolean {
+    override fun isAllowedMediaUrl(url: HttpUrl): Boolean {
         if (!hasSafeAuthority(url) || url.fragment != null || !url.encodedPath.startsWith('/')) {
             return false
         }

@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import app.gamenative.library.metadata.MetadataProvider
 import com.skydoves.landscapist.ImageOptions
 import com.skydoves.landscapist.coil.CoilImage
 
@@ -39,6 +40,7 @@ internal fun GameMediaPager(
     contentDescription: String,
     modifier: Modifier = Modifier,
     loadingPolicy: GameMediaLoadingPolicy = GameMediaLoadingPolicy.DEFAULT,
+    mediaProvider: MetadataProvider = MetadataProvider.STEAM_APPDETAILS,
     steamVideoMuted: Boolean = true,
     onSteamVideoMutedChange: (Boolean) -> Unit = {},
 ) {
@@ -51,6 +53,7 @@ internal fun GameMediaPager(
         pagerState = pagerState,
         modifier = modifier,
         loadingPolicy = loadingPolicy,
+        mediaProvider = mediaProvider,
         steamVideoMuted = steamVideoMuted,
         onSteamVideoMutedChange = onSteamVideoMutedChange,
     )
@@ -64,6 +67,7 @@ internal fun GameMediaPager(
     pagerState: PagerState,
     modifier: Modifier = Modifier,
     loadingPolicy: GameMediaLoadingPolicy = GameMediaLoadingPolicy.DEFAULT,
+    mediaProvider: MetadataProvider = MetadataProvider.STEAM_APPDETAILS,
     steamVideoMuted: Boolean = true,
     onSteamVideoMutedChange: (Boolean) -> Unit = {},
 ) {
@@ -75,6 +79,7 @@ internal fun GameMediaPager(
                 fallbackImageUrl = fallbackImageUrl,
                 contentDescription = contentDescription,
                 loadingPolicy = loadingPolicy,
+                mediaProvider = mediaProvider,
             )
         } else {
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
@@ -87,6 +92,7 @@ internal fun GameMediaPager(
                             contentDescription = contentDescription,
                             active = page == pagerState.currentPage,
                             muted = steamVideoMuted,
+                            provider = mediaProvider,
                             onMutedChange = onSteamVideoMutedChange,
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -96,6 +102,7 @@ internal fun GameMediaPager(
                         contentDescription = contentDescription,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Fit,
+                        provider = mediaProvider,
                     )
                     !item.videoUrl.isNullOrBlank() -> VideoHero(
                         videoUrl = item.videoUrl,
@@ -154,6 +161,7 @@ private fun MediaFallback(
     fallbackImageUrl: String?,
     contentDescription: String,
     loadingPolicy: GameMediaLoadingPolicy,
+    mediaProvider: MetadataProvider,
 ) {
     when (loadingPolicy) {
         GameMediaLoadingPolicy.DEFAULT -> VideoHero(
@@ -167,6 +175,7 @@ private fun MediaFallback(
             contentDescription = contentDescription,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit,
+            provider = mediaProvider,
         )
     }
 }

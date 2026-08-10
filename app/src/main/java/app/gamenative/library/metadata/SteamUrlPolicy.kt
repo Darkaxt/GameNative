@@ -8,7 +8,7 @@ class SteamUrlPolicy(
     private val mediaHosts: Set<String> = STEAM_MEDIA_HOSTS,
     private val requireHttps: Boolean = true,
     private val allowedPorts: Set<Int> = setOf(443),
-) {
+) : MediaUrlPolicy {
     fun isAllowedApiRequest(url: HttpUrl): Boolean =
         isSafeBase(url) &&
             url.host in apiHosts &&
@@ -27,7 +27,7 @@ class SteamUrlPolicy(
             url.encodedPath == WEB_API_APP_LIST_PATH &&
             url.queryParameterNames.all(WEB_API_APP_LIST_QUERY_PARAMETERS::contains)
 
-    fun isAllowedMediaUrl(url: HttpUrl): Boolean =
+    override fun isAllowedMediaUrl(url: HttpUrl): Boolean =
         isSafeBase(url) && url.host in mediaHosts
 
     fun isAllowedNetworkUrl(url: HttpUrl): Boolean =

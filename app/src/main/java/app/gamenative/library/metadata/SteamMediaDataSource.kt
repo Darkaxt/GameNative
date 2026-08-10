@@ -16,7 +16,7 @@ internal class SteamMediaException : IOException("Steam media unavailable")
 
 internal class SteamMediaDataSource(
     baseClient: OkHttpClient,
-    private val urlPolicy: SteamUrlPolicy,
+    private val urlPolicy: MediaUrlPolicy,
     private val maxRedirects: Int = DEFAULT_MAX_REDIRECTS,
     private val noStore: Boolean = false,
 ) {
@@ -37,6 +37,15 @@ internal class SteamMediaDataSource(
     internal constructor(noStore: Boolean) : this(
         baseClient = Net.http,
         urlPolicy = SteamUrlPolicy(),
+        noStore = noStore,
+    )
+
+    internal constructor(
+        provider: MetadataProvider,
+        noStore: Boolean,
+    ) : this(
+        baseClient = Net.http,
+        urlPolicy = provider.mediaUrlPolicy(),
         noStore = noStore,
     )
 

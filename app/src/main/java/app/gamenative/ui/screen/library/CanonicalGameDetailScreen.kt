@@ -58,6 +58,7 @@ import app.gamenative.library.community.SteamReviewQuery
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GamePlatform
+import app.gamenative.library.metadata.MetadataProvider
 import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.screen.library.components.GameMediaItem
 import app.gamenative.ui.screen.library.components.GameMediaPager
@@ -112,6 +113,7 @@ internal fun CanonicalGameDetailScreen(
     }
     val title = metadata?.title?.takeIf(String::isNotBlank) ?: fallbackTitle
     val media = remember(metadata) { metadata?.let(::canonicalSteamMediaItems).orEmpty() }
+    val mediaProvider = canonicalMediaProvider(state)
     val tabs = CanonicalDetailTab.entries
     val uriHandler = LocalUriHandler.current
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -146,6 +148,7 @@ internal fun CanonicalGameDetailScreen(
                     imageUrl = metadata?.headerImageUrl,
                     fallbackImageUrl = fallbackImageUrl,
                     ownedSources = ownedSources,
+                    mediaProvider = mediaProvider,
                     heroHeight = heroHeight,
                     onBack = detailBack,
                 )
@@ -192,6 +195,7 @@ internal fun CanonicalGameDetailScreen(
                             metadata = metadata,
                             media = media,
                             title = title,
+                            mediaProvider = mediaProvider,
                             compatibilityStatus = compatibilityStatus,
                             hltbStats = hltbStats,
                             onRetry = onRetry,
@@ -247,6 +251,7 @@ private fun CanonicalHero(
     imageUrl: String?,
     fallbackImageUrl: String,
     ownedSources: Set<GameSource>,
+    mediaProvider: MetadataProvider,
     heroHeight: androidx.compose.ui.unit.Dp,
     onBack: () -> Unit,
 ) {
@@ -261,6 +266,7 @@ private fun CanonicalHero(
                 contentDescription = title,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+                provider = mediaProvider,
             )
         } else {
             GameMediaPager(
@@ -347,6 +353,7 @@ private fun DetailOverview(
     metadata: CanonicalGameMetadata?,
     media: List<GameMediaItem>,
     title: String,
+    mediaProvider: MetadataProvider,
     compatibilityStatus: GameCompatibilityStatus?,
     hltbStats: HltbService.Stats?,
     onRetry: () -> Unit,
@@ -380,6 +387,7 @@ private fun DetailOverview(
                         media = media,
                         fallbackImageUrl = metadata.headerImageUrl,
                         contentDescription = title,
+                        provider = mediaProvider,
                         modifier = Modifier
                             .fillMaxWidth()
                             .widthIn(max = galleryWidth)
@@ -592,6 +600,9 @@ private fun DetailStatusBanner(text: String) {
         )
     }
 }
+
+internal fun canonicalMediaProvider(state: GameDetailState): MetadataProvider =
+    (state as? GameDetailState.Content)?.provider ?: MetadataProvider.STEAM_APPDETAILS
 
 internal fun canonicalSteamMediaItems(metadata: CanonicalGameMetadata): List<GameMediaItem> = buildList {
     metadata.movies.forEach { movie ->

@@ -49,6 +49,49 @@ class SteamMediaRedirectInterceptorTest {
     }
 
     @Test
+    fun EpicMediaPolicyPreservesRangeRequestAcrossApprovedRedirect() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", server.url("/segment.m4s")),
+        )
+        server.enqueue(MockResponse().setResponseCode(206).setBody("Epic video bytes"))
+
+        epicClient().newCall(
+            Request.Builder()
+                .url(server.url("/manifest.m3u8"))
+                .header("Range", "bytes=200-399")
+                .build(),
+        ).execute().use { response ->
+            assertEquals(206, response.code)
+            assertEquals("Epic video bytes", response.body.string())
+        }
+
+        assertEquals("bytes=200-399", server.takeRequest().getHeader("Range"))
+        assertEquals("bytes=200-399", server.takeRequest().getHeader("Range"))
+    }
+
+    @Test
+    fun EpicMediaPolicyRejectsCrossProviderRedirect() {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader(
+                    "Location",
+                    "https://video.akamai.steamstatic.com/store_trailers/video.m3u8",
+                ),
+        )
+
+        expectUnavailable {
+            epicClient().newCall(
+                Request.Builder().url(server.url("/manifest.m3u8")).build(),
+            ).execute()
+        }
+
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
     fun rejectsUntrustedRedirectBeforeSendingAnotherRequest() {
         val untrusted = "https://media.example.invalid/private/video.webm"
         server.enqueue(
@@ -93,6 +136,21 @@ class SteamMediaRedirectInterceptorTest {
                 urlPolicy = SteamUrlPolicy(
                     apiHosts = emptySet(),
                     mediaHosts = setOf(server.hostName),
+                    requireHttps = false,
+                    allowedPorts = setOf(server.port),
+                ),
+            ),
+        )
+        .build()
+
+    private fun epicClient(): OkHttpClient = OkHttpClient.Builder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .addInterceptor(
+            SteamMediaRedirectInterceptor(
+                urlPolicy = EpicUrlPolicy(
+                    cmsHosts = emptySet(),
+                    mediaRoots = setOf(server.hostName),
                     requireHttps = false,
                     allowedPorts = setOf(server.port),
                 ),

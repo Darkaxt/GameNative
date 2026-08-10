@@ -28,6 +28,7 @@ sealed interface GameDetailState {
 
     data class Content(
         val metadata: CanonicalGameMetadata,
+        val provider: MetadataProvider = MetadataProvider.STEAM_APPDETAILS,
         val stale: Boolean,
         val refreshFailed: Boolean = false,
     ) : GameDetailState
@@ -85,7 +86,13 @@ class RoomGameMetadataRepository @Inject constructor(
         val initial = initialEntity?.decodeSnapshot()
         val initialStale = initialEntity?.isStale(clock.nowEpochMs()) ?: true
         if (initial != null) {
-            emit(GameDetailState.Content(initial, stale = initialStale))
+            emit(
+                GameDetailState.Content(
+                    metadata = initial.metadata,
+                    provider = initial.provider,
+                    stale = initialStale,
+                ),
+            )
         } else {
             emit(GameDetailState.Loading)
         }
@@ -101,7 +108,8 @@ class RoomGameMetadataRepository @Inject constructor(
                     if (initial != null) {
                         emit(
                             GameDetailState.Content(
-                                metadata = initial,
+                                metadata = initial.metadata,
+                                provider = initial.provider,
                                 stale = true,
                                 refreshFailed = true,
                             ),
@@ -118,11 +126,12 @@ class RoomGameMetadataRepository @Inject constructor(
             locale = locale.normalizedLocale,
             country = locale.normalizedCountry,
         ).collect { entity ->
-            val metadata = entity?.decodeSnapshot() ?: return@collect
+            val snapshot = entity?.decodeSnapshot() ?: return@collect
             val isNewerThanInitial = initialEntity == null || entity.fetchedAt > initialEntity.fetchedAt
             emit(
                 GameDetailState.Content(
-                    metadata = metadata,
+                    metadata = snapshot.metadata,
+                    provider = snapshot.provider,
                     stale = entity.isStale(clock.nowEpochMs()),
                     refreshFailed = refreshFailed && !isNewerThanInitial,
                 ),
@@ -225,13 +234,18 @@ class RoomGameMetadataRepository @Inject constructor(
         }
     }
 
-    private fun GameDetailSnapshotEntity.decodeSnapshot(): CanonicalGameMetadata? {
+    private fun GameDetailSnapshotEntity.decodeSnapshot(): DecodedMetadataSnapshot? {
         return try {
             val provenance = JSON.decodeFromString<GameMetadataProvenance>(provenanceJson)
             if (!provenance.matchesSourceRevision(sourceRevision)) return null
-            JSON.decodeFromString<CanonicalGameMetadata>(payloadJson)
+            val metadata = JSON.decodeFromString<CanonicalGameMetadata>(payloadJson)
                 .sanitizedForPersistence()
                 .takeIf { it.title.isNotBlank() }
+                ?: return null
+            DecodedMetadataSnapshot(
+                metadata = metadata,
+                provider = provenance.provider,
+            )
         } catch (_: SerializationException) {
             null
         } catch (_: IllegalArgumentException) {
@@ -280,6 +294,11 @@ class RoomGameMetadataRepository @Inject constructor(
             fields = fields,
         )
     }
+
+    private data class DecodedMetadataSnapshot(
+        val metadata: CanonicalGameMetadata,
+        val provider: MetadataProvider,
+    )
 
     private companion object {
         const val SOURCE_REVISION = "steam_appdetails_v2"
