@@ -3,7 +3,6 @@ package app.gamenative.library.canonical
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalGameId
-import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.dao.CanonicalLibraryAggregate
@@ -301,14 +300,8 @@ class CanonicalLibraryRepository @Inject constructor(
         val match: StoreMatchEntity,
         val key: OwnedCopyKey,
     ) {
-        fun cardKey(): CanonicalCardKey =
-            if (match.confidence == MatchConfidence.VERIFIED ||
-                match.confidence == MatchConfidence.HIGH
-            ) {
-                CanonicalCardKey.Grouped(CanonicalGameId.parse(match.canonicalId))
-            } else {
-                CanonicalCardKey.Independent(key)
-            }
+        fun cardKey(): CanonicalCardKey.Grouped =
+            CanonicalCardKey.Grouped(CanonicalGameId.parse(match.canonicalId))
     }
 
     private data class VisibleRelationship(

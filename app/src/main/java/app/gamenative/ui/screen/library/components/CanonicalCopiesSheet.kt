@@ -318,7 +318,7 @@ private fun CanonicalCopyRow(
                 }
             }
 
-            val canReset = card.key is CanonicalCardKey.Independent &&
+            val canReset = card.key is CanonicalCardKey.Grouped &&
                 copy.source != GameSource.STEAM &&
                 copy.confidence == MatchConfidence.REJECTED &&
                 copy.decisionSource == MatchDecisionSource.USER

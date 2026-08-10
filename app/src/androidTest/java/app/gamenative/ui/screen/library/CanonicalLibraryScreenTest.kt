@@ -777,8 +777,7 @@ class CanonicalLibraryScreenTest {
             decisionSource = MatchDecisionSource.USER,
             decisionRevision = 321L,
         )
-        val independent = canonicalCard().copy(
-            key = CanonicalCardKey.Independent(gogKey),
+        val grouped = canonicalCard().copy(
             copies = listOf(rejectedCopy),
             ownedSources = setOf(GameSource.GOG),
             preferredCopy = null,
@@ -786,11 +785,11 @@ class CanonicalLibraryScreenTest {
         setLibraryScreen(
             state = {
                 LibraryState(
-                    cards = listOf(presentation(independent, 0)),
+                    cards = listOf(presentation(grouped, 0)),
                     canonicalSnapshotRevision = 1L,
                 )
             },
-            canonicalCards = { mapOf(independent.key to independent) },
+            canonicalCards = { mapOf(grouped.key to grouped) },
             onRoute = { _, _, _, _ ->
                 OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
             },

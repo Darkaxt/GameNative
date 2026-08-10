@@ -186,23 +186,11 @@ internal object CanonicalLibraryCardValidator {
                 return CanonicalPublicFailure.INVALID_CARD_STATE
             }
             when (val key = card.key) {
-                is CanonicalCardKey.Grouped -> if (
-                    key.canonicalId != card.canonicalId ||
-                    card.copies.any { copy ->
-                        copy.confidence != MatchConfidence.VERIFIED &&
-                            copy.confidence != MatchConfidence.HIGH
-                    }
-                ) {
+                is CanonicalCardKey.Grouped -> if (key.canonicalId != card.canonicalId) {
                     return CanonicalPublicFailure.INVALID_CARD_STATE
                 }
-                is CanonicalCardKey.Independent -> if (
-                    card.copies.size != 1 ||
-                    card.copies.single().key != key.copyKey ||
-                    card.copies.single().confidence == MatchConfidence.VERIFIED ||
-                    card.copies.single().confidence == MatchConfidence.HIGH
-                ) {
+                is CanonicalCardKey.Independent ->
                     return CanonicalPublicFailure.INVALID_CARD_STATE
-                }
             }
         }
         return null
@@ -1079,18 +1067,18 @@ class LibraryViewModel @Inject constructor(
         if (!canonicalPublicLibraryGate.isEnabled()) {
             return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
         }
-        val independent = cardKey as? CanonicalCardKey.Independent
+        val grouped = cardKey as? CanonicalCardKey.Grouped
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST
-        if (independent.copyKey != copyKey || copyKey.source == GameSource.STEAM) {
+        if (copyKey.source == GameSource.STEAM) {
             return CanonicalCopyChangeResult.INVALID_REQUEST
         }
         val card = canonicalCard(cardKey)
+            ?.takeIf { it.canonicalId == grouped.canonicalId }
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST
         val summary = card.copies
-            .singleOrNull()
+            .singleOrNull { copy -> copy.key == copyKey }
             ?.takeIf { copy ->
-                copy.key == copyKey &&
-                    copy.confidence == MatchConfidence.REJECTED &&
+                copy.confidence == MatchConfidence.REJECTED &&
                     copy.decisionSource == MatchDecisionSource.USER
             }
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST

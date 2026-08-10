@@ -104,7 +104,7 @@ class CanonicalLibraryRepositoryTest {
     }
 
     @Test
-    fun reviewRejectedAndUnmatchedRelationshipsRemainIndependentWithOwnTitles() = runTest {
+    fun mixedConfidenceRelationshipsShareOneCanonicalCard() = runTest {
         val game = game(ID_A, displayName = "Canonical Sibling", appType = CanonicalAppType.APPLICATION)
         val grouped = match(game, GameSource.AMAZON, "product", MatchConfidence.VERIFIED)
         val review = match(
@@ -135,10 +135,10 @@ class CanonicalLibraryRepositoryTest {
                 relationship.key() to available(
                     relationship.key(),
                     nativeTitle = when (relationship) {
-                        review -> "Independent Runtime Title"
+                        review -> "Review Runtime Title"
                         rejected -> "Rejected Runtime Title"
                         unmatched -> "Unmatched Runtime Title"
-                        else -> "Grouped Runtime Title"
+                        else -> "Verified Runtime Title"
                     },
                 )
             },
@@ -146,25 +146,31 @@ class CanonicalLibraryRepositoryTest {
 
         val cards = harness.repository.observeCards().first()
 
-        assertEquals(4, cards.size)
-        assertTrue(cards.any { it.key == CanonicalCardKey.Grouped(CanonicalGameId.parse(ID_A)) })
-        val reviewCard = cards.single { it.key == CanonicalCardKey.Independent(review.key()) }
-        assertEquals("Independent Runtime Title", reviewCard.displayName)
-        assertEquals(CanonicalAppType.DEMO, reviewCard.appType)
-        assertFalse(reviewCard.displayName.contains("Canonical Sibling"))
-        assertFalse("Canonical Sibling" in reviewCard.aliases)
+        assertEquals(1, cards.size)
+        val card = cards.single()
+        assertEquals(CanonicalCardKey.Grouped(CanonicalGameId.parse(ID_A)), card.key)
+        assertEquals("Canonical Sibling", card.displayName)
+        assertEquals(CanonicalAppType.APPLICATION, card.appType)
         assertEquals(
-            setOf(
-                CanonicalCardKey.Independent(review.key()),
-                CanonicalCardKey.Independent(rejected.key()),
-                CanonicalCardKey.Independent(unmatched.key()),
-            ),
-            cards.map { it.key }.filterIsInstance<CanonicalCardKey.Independent>().toSet(),
+            listOf(GameSource.STEAM, GameSource.GOG, GameSource.EPIC, GameSource.AMAZON),
+            card.copies.map { it.source },
         )
+        assertEquals(
+            listOf(
+                MatchConfidence.REVIEW_REQUIRED,
+                MatchConfidence.REJECTED,
+                MatchConfidence.UNMATCHED,
+                MatchConfidence.VERIFIED,
+            ),
+            card.copies.map { it.confidence },
+        )
+        assertTrue("Review Runtime Title" in card.aliases)
+        assertTrue("Rejected Runtime Title" in card.aliases)
+        assertTrue("Unmatched Runtime Title" in card.aliases)
     }
 
     @Test
-    fun independentAliasesExcludeCanonicalTitleAndHiddenTrustedSiblingEvidence() = runTest {
+    fun visibleUntrustedCopyUsesCanonicalPresentationWithoutHiddenSiblingEvidence() = runTest {
         val game = game(ID_A, displayName = "Hidden Trusted Canonical")
         val hiddenTrusted = match(
             game,
@@ -173,33 +179,38 @@ class CanonicalLibraryRepositoryTest {
             MatchConfidence.VERIFIED,
             evidenceName = "Hidden Trusted Evidence",
         )
-        val independent = match(
+        val visibleUntrusted = match(
             game,
             GameSource.GOG,
             "13",
             MatchConfidence.REVIEW_REQUIRED,
-            evidenceName = "Independent Evidence",
+            evidenceName = "Visible Evidence",
         )
         val harness = harness(
-            listOf(aggregate(game, listOf(hiddenTrusted, independent))),
+            listOf(aggregate(game, listOf(hiddenTrusted, visibleUntrusted))),
             mapOf(
                 hiddenTrusted.key() to OwnedCopyRuntimeResult.Hidden,
-                independent.key() to available(
-                    independent.key(),
-                    nativeTitle = "Independent Native",
-                    aliases = setOf("Independent Runtime Alias"),
+                visibleUntrusted.key() to available(
+                    visibleUntrusted.key(),
+                    nativeTitle = "Visible Native",
+                    aliases = setOf("Visible Runtime Alias"),
                 ),
             ),
         )
 
         val card = harness.repository.observeCards().first().single()
 
-        assertEquals(CanonicalCardKey.Independent(independent.key()), card.key)
+        assertEquals(CanonicalCardKey.Grouped(CanonicalGameId.parse(ID_A)), card.key)
+        assertEquals("Hidden Trusted Canonical", card.displayName)
         assertEquals(
-            setOf("Independent Native", "Independent Evidence", "Independent Runtime Alias"),
+            setOf(
+                "Hidden Trusted Canonical",
+                "Visible Evidence",
+                "Visible Native",
+                "Visible Runtime Alias",
+            ),
             card.aliases,
         )
-        assertFalse("Hidden Trusted Canonical" in card.aliases)
         assertFalse("Hidden Trusted Evidence" in card.aliases)
     }
 
@@ -965,15 +976,7 @@ class CanonicalLibraryRepositoryTest {
         OwnedCopyRuntime(
             key = key,
             reference = reference(key),
-            libraryItem = if (libraryItemPresent) {
-                LibraryItem(
-                    appId = "${key.source.name}_${key.stableSourceId}",
-                    name = nativeTitle,
-                    gameSource = key.source,
-                )
-            } else {
-                null
-            },
+            libraryItem = if (libraryItemPresent) runtimeLibraryItem(key, nativeTitle) else null,
             nativeTitle = nativeTitle,
             aliases = aliases,
             developerKey = "developer",
@@ -1001,13 +1004,33 @@ class CanonicalLibraryRepositoryTest {
         ),
     )
 
+    private fun runtimeLibraryItem(key: OwnedCopyKey, nativeTitle: String): LibraryItem? {
+        val runtimeId = when (key.source) {
+            GameSource.STEAM -> key.stableSourceId
+            GameSource.GOG -> key.stableSourceId.takeIf { it.toIntOrNull()?.toString() == it }
+                ?: return null
+            GameSource.EPIC,
+            GameSource.AMAZON,
+            -> "1"
+            GameSource.CUSTOM_GAME -> key.stableSourceId
+        }
+        return LibraryItem(
+            appId = "${key.source.name}_$runtimeId",
+            name = nativeTitle,
+            gameSource = key.source,
+        )
+    }
+
     private fun reference(key: OwnedCopyKey): SourceOwnedCopyReference = when (key.source) {
         GameSource.STEAM -> SourceOwnedCopyReference.Steam(
             key,
             key.stableSourceId.toIntOrNull()?.takeIf { it > 0 } ?: 1,
         )
         GameSource.GOG -> SourceOwnedCopyReference.Gog(key, key.stableSourceId)
-        GameSource.EPIC -> SourceOwnedCopyReference.Epic(key, 1, "namespace", "catalog")
+        GameSource.EPIC -> {
+            val (namespace, catalogId) = EpicStableSourceId.decode(key.stableSourceId)
+            SourceOwnedCopyReference.Epic(key, 1, namespace, catalogId)
+        }
         GameSource.AMAZON -> SourceOwnedCopyReference.Amazon(
             key,
             1,
