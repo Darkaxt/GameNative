@@ -13,6 +13,8 @@ confidence=SOURCE_ONLY
 
 It never represents Epic metadata as a Steam identity or invents a Steam AppID.
 
+The provider-specific `sourcePresentation` is now also projected into a separate `canonicalGameMetadata` object whose field names, nullability representation, collection shapes, platform enum names, and nested movie fields match GameNative's current `CanonicalGameMetadata` display input. Epic identity and evidence remain outside that canonical presentation object rather than being mislabeled as Steam provenance.
+
 ## Public endpoint and input
 
 The implementation uses only the verified unauthenticated endpoint:
@@ -55,19 +57,21 @@ The CMS parser requires:
 - Catalog-ID agreement when CMS supplies one; omission remains explicit as `catalogIdCorroboratedByCms=false`.
 - HTTPS media hosted only under `epicgames.com` or `unrealengine.com`.
 
-The bounded presentation includes title, short description, about text, header image, up to 20 screenshots, up to 10 movies with HLS/DASH/poster URLs, developer, publisher, reliable release date/year, Windows/macOS/Linux flags, structured and raw languages, canonical Epic store URL, and empty genre/tag/feature lists when absent. Unreliable release labels do not become dates.
+The bounded source presentation includes title, short description, about text, header image, up to 20 screenshots, up to 10 movies with HLS/DASH/poster URLs, developer, publisher, reliable release date/year, Windows/macOS/Linux flags, structured and raw languages, canonical Epic store URL, and empty genre/tag/feature lists when absent. Unreliable release labels do not become dates.
+
+The canonical projection uses GameNative's exact display contract: `headerImageUrl`; `developers`/`publishers` lists; `GameMovie` objects with `name`, `previewImageUrl`, and one preferred `streamUrl`; serialized `WINDOWS`/`MACOS`/`LINUX` platform enums; plain language-name lists; mapped Windows minimum/recommended requirements; nullable unavailable achievement/DLC values; and a local `fetchedAtEpochMs`. The deterministic test asserts the complete object, so an added, missing, or renamed field fails the contract.
 
 ## Deterministic TDD proof
 
 The focused pre-implementation test run was RED because `steam_resolver.epic` did not exist. The completed isolated suite is GREEN:
 
 ```text
-84 passed
+85 passed
 ```
 
 Required deterministic cases cover:
 
-- Valid Alan Wake-style CMS response.
+- Valid Alan Wake-style CMS response and exact GameNative `CanonicalGameMetadata`/`GameMovie` projection.
 - Missing explicit slug plus derived 404 to `SLUG_REQUIRED`.
 - Namespace mismatch.
 - Wrong input store host and wrong media host.
@@ -101,6 +105,11 @@ The fresh live run completed Steam search without a plausible Steam game, then f
 - Screenshots: 9
 - HLS/DASH/poster movies: 4
 - Structured languages: 14
+- Canonical developers/publishers: one list entry each
+- Canonical platform enums: `["WINDOWS"]`
+- Canonical movies: 4 exact `GameMovie` objects using HLS as `streamUrl`
+- Canonical requirements: mapped minimum and recommended Windows specifications
+- Canonical field set: exact match for all 17 current `CanonicalGameMetadata` properties
 - Platforms: Windows true; macOS/Linux false
 - Raw release label: `Coming Soon`
 - Release date/year: null/null
@@ -125,4 +134,6 @@ The live Steam regression recorded 44 successful storesearch parses, 59 verified
 
 Full machine-readable evidence is in `reports/epic-fallback-validation.json`. Consolidated 30-case evidence remains in `reports/live-validation-summary.json`.
 
-No GameNative app/source/test/docs file, community POC file, device, adb session, credential, commit, or push was used for this implementation.
+The exact presentation shape resolves the POC defect but does not pretend the frozen GameNative integration already supports Epic. Integration must add source-aware snapshot persistence that does not require a Steam AppID, truthful `EPIC_CMS` provenance, and a validated Epic/Unreal media policy; otherwise the current Steam-only repository and media transport would still reject the correctly shaped data.
+
+No GameNative app/source/test/docs file, community POC file, device, adb session, or credential was used for this correction.

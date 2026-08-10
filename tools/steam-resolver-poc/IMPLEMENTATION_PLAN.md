@@ -1,10 +1,10 @@
 # Standalone Steam Resolver POC Implementation Plan
 
-> **For agentic workers:** Execute inline in this session. The user explicitly prohibited subagents, commits, and changes outside `tools/steam-resolver-poc/**`.
+> **For agentic workers:** Execute inline in this session. Keep all implementation changes inside `tools/steam-resolver-poc/**`; GameNative production integration remains frozen until the feature reports are validated.
 
 **Goal:** Build and live-evaluate a standalone Python 3 CLI that resolves GOG, Epic, and Amazon owned-copy evidence to Steam catalog candidates without using expected Steam AppIDs during resolution.
 
-**Architecture:** Keep immutable input/output models, source-ID validation, normalization/scoring, HTTP providers, resolution orchestration, corpus validation, and CLI wiring in focused modules. Candidate retrieval uses public Steam `storesearch`; every candidate is verified through `appdetails`. A key-gated `IStoreService/GetAppList/v1` refresh path may populate a local candidate-name index, sending the key only through `x-webapi-key`. A presentation-only Epic CMS provider may run only after a complete, nonpartial Steam `UNMATCHED` with no plausible candidate; it preserves source identity and never emits a Steam AppID.
+**Architecture:** Keep immutable input/output models, source-ID validation, normalization/scoring, HTTP providers, resolution orchestration, corpus validation, and CLI wiring in focused modules. Candidate retrieval uses public Steam `storesearch`; every candidate is verified through `appdetails`. A key-gated `IStoreService/GetAppList/v1` refresh path may populate a local candidate-name index, sending the key only through `x-webapi-key`. A presentation-only Epic CMS provider may run only after a complete, nonpartial Steam `UNMATCHED` with no plausible candidate; it preserves source identity, never emits a Steam AppID, and separately projects source data into GameNative's exact `CanonicalGameMetadata` display shape.
 
 **Tech Stack:** Python 3.11+, standard-library HTTP/JSON/dataclasses/argparse, pytest as the only test dependency.
 
@@ -21,6 +21,7 @@
 - `src/steam_resolver/steam.py`: live storesearch/appdetails provider and optional cached IStoreService index.
 - `src/steam_resolver/epic_input.py`: canonical Epic slug/store-URL validation and one-shot derived location.
 - `src/steam_resolver/epic.py`: bounded unauthenticated Epic CMS client, identity/media validation, and source presentation parsing.
+- `src/steam_resolver/canonical_metadata.py`: exact Epic-to-GameNative `CanonicalGameMetadata` display projection.
 - `src/steam_resolver/resolver.py`: query, verification, ranking, Steam decision, guarded Epic fallback, and provider-failure orchestration.
 - `src/steam_resolver/corpus.py`: authoritative 30-case contract, public source corroboration, evaluation metrics.
 - `src/steam_resolver/cli.py`, `__main__.py`, `__init__.py`: JSON CLI.
@@ -94,7 +95,7 @@
 - [x] Accept one canonical Epic product slug or store product URL; otherwise derive and try exactly one normalized title slug.
 - [x] Fetch only unauthenticated `store-content.ak.epicgames.com`, apply the shared four-attempt 429 policy, and enforce a 1 MiB JSON body bound.
 - [x] Validate root/page/offer namespace, strict normalized title, canonical slug/offer identity, optional catalog-ID agreement, and HTTPS Epic/Unreal media.
-- [x] Emit bounded source presentation with preserved identity and `SOURCE_CATALOG_FALLBACK/SOURCE_CATALOG/SOURCE_ONLY`, never a Steam AppID.
+- [x] Emit bounded provider-specific source presentation plus an exact `CanonicalGameMetadata`/`GameMovie` projection, while preserving `SOURCE_CATALOG_FALLBACK/SOURCE_CATALOG/SOURCE_ONLY` and never inventing a Steam AppID.
 - [x] Prove live with Alan Wake 2 and record stale `Coming Soon` as null date/year plus warning.
 - [x] Re-run deterministic, offline 30-case, live source, and live 30-case Steam validation; write dedicated Markdown and JSON reports.
 
@@ -104,4 +105,4 @@
 - [ ] Run offline corpus validation/evaluation using recorded fixtures and verify deterministic output byte-for-byte across two runs.
 - [ ] Run `git status --short` and verify every new/modified path from this work is under `tools/steam-resolver-poc/**`; do not alter pre-existing unrelated worktree changes.
 - [ ] Scan POC files/reports for `STEAM_WEB_API_KEY`, key values, headers, or personal data and verify no secret was recorded.
-- [ ] Do not commit or push.
+- [ ] Commit and push only the verified POC paths; leave pre-existing unrelated worktree changes untouched.

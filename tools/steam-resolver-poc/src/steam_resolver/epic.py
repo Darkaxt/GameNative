@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+from .canonical_metadata import epic_presentation_to_canonical_metadata
 from .epic_input import EpicProductLocation, resolve_epic_product_location
 from .http import UrllibTransport, diagnostic, ensure_retrying_transport
 from .models import AppType, OwnedCopy, Source
@@ -59,6 +60,7 @@ class EpicCmsValidationError(RuntimeError):
 @dataclass(frozen=True)
 class EpicCatalogResult:
     presentation: dict[str, Any]
+    canonical_metadata: dict[str, Any]
     evidence: dict[str, Any]
     warnings: tuple[str, ...]
     diagnostics: tuple[dict[str, Any], ...]
@@ -79,6 +81,7 @@ class EpicCatalogProvider:
             transport or UrllibTransport(), sleeper=sleeper, clock=clock
         )
         self.timeout = timeout
+        self.clock = clock
 
     def retrieve(self, owned_copy: OwnedCopy) -> EpicCatalogResult:
         if owned_copy.source is not Source.EPIC or owned_copy.app_type is not AppType.GAME:
@@ -129,8 +132,13 @@ class EpicCatalogProvider:
             catalog_id=catalog_id,
             location=location,
         )
+        canonical_metadata = epic_presentation_to_canonical_metadata(
+            presentation,
+            fetched_at_epoch_ms=int(self.clock() * 1_000),
+        )
         return EpicCatalogResult(
             presentation=presentation,
+            canonical_metadata=canonical_metadata,
             evidence=evidence,
             warnings=tuple(warnings),
             diagnostics=(
@@ -234,6 +242,7 @@ def _parse_cms_payload(
     screenshots, movies, media_warnings = _presentation_media(
         data.get("carousel"), location.locale
     )
+    requirements = _game_requirements(data.get("requirements"))
     platforms = _platforms(data.get("requirements"))
     raw_languages, languages = _languages(data.get("requirements"))
     release_date, release_year, release_warnings = _release_date(data.get("meta"))
@@ -257,6 +266,7 @@ def _parse_cms_payload(
         "releaseDate": release_date,
         "releaseYear": release_year,
         "platforms": platforms,
+        "requirements": requirements,
         "languages": languages,
         "rawLanguages": raw_languages,
         "genres": [],
@@ -437,6 +447,47 @@ def _movie_from_recipes(value: Any, locale: str, item_index: int) -> dict[str, s
                         _media_url(output.get("url"), f"movie {target}")
                     )
     return movie if "hls" in movie or "dash" in movie else None
+
+
+def _game_requirements(requirements_value: Any) -> dict[str, str | None] | None:
+    requirements = _optional_mapping(requirements_value, "requirements")
+    systems = requirements.get("systems", [])
+    if not isinstance(systems, list) or len(systems) > 20:
+        raise EpicCmsValidationError(
+            "Epic CMS requirements systems must be a bounded list"
+        )
+
+    minimum_lines: list[str] = []
+    recommended_lines: list[str] = []
+    for raw_system in systems:
+        system = _mapping(raw_system, "requirements system")
+        system_type = system.get("systemType")
+        if not isinstance(system_type, str) or system_type.strip().casefold() != "windows":
+            continue
+        details = system.get("details", [])
+        if not isinstance(details, list) or len(details) > 50:
+            raise EpicCmsValidationError(
+                "Epic CMS Windows requirement details must be a bounded list"
+            )
+        for raw_detail in details:
+            detail = _mapping(raw_detail, "Windows requirement detail")
+            title = _required_text(detail.get("title"), "requirement title", 512)
+            minimum = _optional_text(
+                detail.get("minimum"), "minimum requirement", 5_000
+            )
+            recommended = _optional_text(
+                detail.get("recommended"), "recommended requirement", 5_000
+            )
+            if minimum is not None:
+                minimum_lines.append(f"{title}: {minimum}")
+            if recommended is not None:
+                recommended_lines.append(f"{title}: {recommended}")
+
+    minimum_text = "\n".join(minimum_lines) or None
+    recommended_text = "\n".join(recommended_lines) or None
+    if minimum_text is None and recommended_text is None:
+        return None
+    return {"minimum": minimum_text, "recommended": recommended_text}
 
 
 def _platforms(requirements_value: Any) -> dict[str, bool]:

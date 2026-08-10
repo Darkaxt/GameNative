@@ -167,7 +167,11 @@ class CountingEpicProvider:
 
 def test_valid_epic_cms_becomes_source_only_presentation_fallback():
     transport = FakeTransport([response(cms_payload())])
-    epic = EpicCatalogProvider(transport=transport, sleeper=lambda _: None)
+    epic = EpicCatalogProvider(
+        transport=transport,
+        sleeper=lambda _: None,
+        clock=lambda: 1_700_000_000.0,
+    )
 
     result = SteamResolver(
         SteamProvider(ProviderBatch()), source_catalog_provider=epic
@@ -217,11 +221,64 @@ def test_valid_epic_cms_becomes_source_only_presentation_fallback():
     assert presentation["storeUrl"] == (
         "https://store.epicgames.com/en-US/p/alan-wake-2"
     )
+    assert result["canonicalGameMetadata"] == {
+        "title": "Alan Wake 2",
+        "shortDescription": "A supernatural survival-horror sequel.",
+        "about": "Saga Anderson and Alan Wake confront a dark story.",
+        "headerImageUrl": HERO,
+        "screenshots": [SCREENSHOT],
+        "movies": [
+            {
+                "name": None,
+                "previewImageUrl": POSTER,
+                "streamUrl": HLS,
+            }
+        ],
+        "developers": ["Remedy Entertainment"],
+        "publishers": ["Epic Games Publishing"],
+        "releaseDate": None,
+        "platforms": ["WINDOWS"],
+        "languages": ["English", "German", "French"],
+        "requirements": None,
+        "genres": [],
+        "features": [],
+        "achievementCount": None,
+        "dlcCount": None,
+        "fetchedAtEpochMs": 1_700_000_000_000,
+    }
     assert any("Coming Soon" in warning for warning in result["warnings"])
     assert result["diagnostics"][-1]["parser"] == "EPIC_CMS_OK"
     assert transport.calls[0]["url"].endswith(
         "/api/en-US/content/products/alan-wake-2"
     )
+
+
+def test_epic_requirements_map_to_game_native_minimum_recommended_shape():
+    payload = cms_payload()
+    payload["pages"][0]["data"]["requirements"]["systems"][0]["details"] = [
+        {
+            "title": "Windows OS",
+            "minimum": "Windows 10 64-bit",
+            "recommended": "Windows 11 64-bit",
+        },
+        {
+            "title": "Windows Memory",
+            "minimum": "16 GB",
+            "recommended": "16 GB",
+        },
+    ]
+    provider = EpicCatalogProvider(
+        transport=FakeTransport([response(payload)]),
+        sleeper=lambda _: None,
+        clock=lambda: 1_700_000_000.0,
+    )
+
+    result = provider.retrieve(epic_copy())
+
+    assert result.canonical_metadata["requirements"] == {
+        "minimum": "Windows OS: Windows 10 64-bit\nWindows Memory: 16 GB",
+        "recommended": "Windows OS: Windows 11 64-bit\nWindows Memory: 16 GB",
+    }
 
 
 def test_absent_explicit_slug_tries_one_derived_slug_and_404_is_slug_required():

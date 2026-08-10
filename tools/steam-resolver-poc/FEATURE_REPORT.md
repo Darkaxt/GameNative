@@ -26,17 +26,17 @@ A complete, nonpartial Steam `UNMATCHED` for an Epic `GAME` with no plausible St
 
 The fallback never runs after `REVIEW_REQUIRED`, provider failure, partial results, timeout, HTTP 429 exhaustion, or malformed Steam data. CMS validation is fail-closed: status 200 JSON at most 1 MiB, exactly one `productHome`, matching root/page/offer namespace, strict normalized title and slug agreement, canonical offer identity, and only validated HTTPS Epic/Unreal media. It preserves the decoded stable namespace/catalog ID, requested slug, offer ID, and whether CMS independently supplied the catalog ID.
 
-A successful presentation is explicitly not a Steam match: `decision=SOURCE_CATALOG_FALLBACK`, `matchMethod=SOURCE_CATALOG`, `candidateSteamAppId=null`, and `confidence=SOURCE_ONLY`. Output is bounded and includes title, descriptions, hero image, screenshots, HLS/DASH/poster movies, developer, publisher, reliable release metadata, platforms, structured/raw languages, empty absent genre/tag/feature lists, and the canonical Epic store URL. Alan Wake 2's stale raw `Coming Soon` label is retained in a warning while `releaseDate` and `releaseYear` remain null.
+A successful presentation is explicitly not a Steam match: `decision=SOURCE_CATALOG_FALLBACK`, `matchMethod=SOURCE_CATALOG`, `candidateSteamAppId=null`, and `confidence=SOURCE_ONLY`. Provider-specific output remains under `sourcePresentation`; a separate `canonicalGameMetadata` object now matches all 17 fields and nested `GameMovie` shape consumed by GameNative's current `CanonicalGameMetadata` display model. It maps header, developer/publisher lists, movies, platform enums, language names, nullable unsupported values, and local fetch time without putting Epic identity into Steam fields. Alan Wake 2's stale raw `Coming Soon` label is retained in a warning while `releaseDate` and `releaseYear` remain null.
 
 ## TDD and deterministic validation
 
 Tests were written before the package implementation. The isolated initial run observed RED with eight collection errors caused by the absent `steam_resolver` package. The current deterministic suite is GREEN:
 
 ```text
-84 passed
+85 passed
 ```
 
-Additional defects were reproduced with focused RED tests before fixes: escaped apostrophes in GOG JSON, Windows console Unicode encoding, missing normalized search queries, edition-conflict review behavior, minimal-input false `UNMATCHED`, partial-provider false certainty, conflated automatic metrics, cross-store release-year vetoes, HTTP 429 leaking into match outcomes, later-release candidates displacing eligible prior-year games, and the absence of a guarded Epic-exclusive presentation path. Epic fallback tests cover all required trigger exclusions, strict identity/media validation, derived-slug 404 handling, and typed 429 exhaustion.
+Additional defects were reproduced with focused RED tests before fixes: escaped apostrophes in GOG JSON, Windows console Unicode encoding, missing normalized search queries, edition-conflict review behavior, minimal-input false `UNMATCHED`, partial-provider false certainty, conflated automatic metrics, cross-store release-year vetoes, HTTP 429 leaking into match outcomes, later-release candidates displacing eligible prior-year games, the absence of a guarded Epic-exclusive presentation path, and Epic output that was only Steam-like rather than compatible with GameNative's actual display model. Epic fallback tests cover all required trigger exclusions, strict identity/media validation, derived-slug 404 handling, typed 429 exhaustion, and exact canonical display-field projection.
 
 The minimal required input contract is now proven independently: a verified exact-title game with no developer, release year, or app type returns `REVIEW_REQUIRED`, exposes AppID `870780`, and scores `0.56`. It cannot auto-accept without developer/year corroboration and known compatible type.
 
@@ -67,7 +67,7 @@ KOTOR II now resolves `AUTO_ACCEPT/HIGH` to AppID `208580` at score `0.86`. Its 
 
 The newest Steam run recorded 44 successful storesearch parses, 59 verified game details, 51 verified non-game exclusions, and 154 HTTP 200 responses. All completed on attempt one, so no live retry delay was needed; deterministic tests cover both successful retry and exhaustion. Full per-case evidence, attempt histories, retry/ambiguity contracts, separate automatic metrics, minimal-input proof, and sanitized endpoint/status/content-type/body-size/parser diagnostics are in `reports/live-validation-summary.json`.
 
-The live Alan Wake 2 proof first completed Steam search as `UNMATCHED` with no plausible game candidate, then returned `SOURCE_CATALOG_FALLBACK/SOURCE_ONLY` from Epic CMS. Namespace `c4763f236d08423eb47b4c3008779c84` and offer `a7364ebfa54147f1b90f78a81c8093f7` matched, CMS catalog-ID omission was explicitly recorded as `false` corroboration, the stale release label yielded null date/year plus warning, and the bounded presentation contained nine screenshots and four HLS/DASH/poster movies. Full evidence is in `reports/epic-fallback-validation.json` and `EPIC_FALLBACK_REPORT.md`.
+The live Alan Wake 2 proof first completed Steam search as `UNMATCHED` with no plausible game candidate, then returned `SOURCE_CATALOG_FALLBACK/SOURCE_ONLY` from Epic CMS. Namespace `c4763f236d08423eb47b4c3008779c84` and offer `a7364ebfa54147f1b90f78a81c8093f7` matched, CMS catalog-ID omission was explicitly recorded as `false` corroboration, the stale release label yielded null date/year plus warning, and the bounded source presentation contained nine screenshots and four HLS/DASH/poster movies. The same live result now includes an exact 17-field `canonicalGameMetadata` projection: one developer, one publisher, 14 language names, `WINDOWS`, mapped minimum/recommended requirements, nine screenshots, and four `GameMovie` objects. Full evidence is in `reports/epic-fallback-validation.json` and `EPIC_FALLBACK_REPORT.md`.
 
 ## Commands
 
@@ -89,4 +89,4 @@ python -m steam_resolver steam-index refresh --cache-dir .cache
 python -m steam_resolver corpus evaluate --file tests/corpus/real-30.json --candidate-provider cached-index --cache-dir .cache
 ```
 
-The public Steam Store and Epic CMS endpoints are undocumented and can rate-limit; bounded retries and typed exhaustion keep that transport condition outside resolution outcomes. No app, app-test, app-doc, community-POC, adb/device, commit, or push operation was performed for this POC.
+The public Steam Store and Epic CMS endpoints are undocumented and can rate-limit; bounded retries and typed exhaustion keep that transport condition outside resolution outcomes. Exact canonical shape does not by itself change GameNative's frozen Steam-only persistence, provenance, or media policy; those source-aware integration changes remain required after report validation. No app, app-test, app-doc, community-POC, or adb/device operation was performed for this correction.

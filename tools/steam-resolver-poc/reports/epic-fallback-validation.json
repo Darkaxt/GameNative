@@ -9,9 +9,10 @@
   ],
   "deterministicTests": {
     "offlineEvaluationByteDeterministic": true,
-    "passed": 84,
+    "passed": 85,
     "requiredContracts": [
       "valid Alan Wake-style response",
+      "exact GameNative CanonicalGameMetadata field and nested GameMovie shape",
       "missing explicit slug plus derived 404 emits SLUG_REQUIRED",
       "namespace mismatch rejected",
       "wrong input or media host rejected",
@@ -56,7 +57,12 @@
       "staleReleaseWarningPreserved": true,
       "staleReleaseYearIsNull": true,
       "steamAppIdIsNull": true,
-      "titleMatches": true
+      "titleMatches": true,
+      "canonicalFieldSetMatchesCurrentModel": true,
+      "canonicalMoviesMatchGameMovie": true,
+      "canonicalPlatformEnumsMatch": true,
+      "canonicalSourceListsMatch": true,
+      "canonicalRequirementsMapped": true
     },
     "expected": {
       "namespace": "c4763f236d08423eb47b4c3008779c84",
@@ -73,6 +79,80 @@
       "candidateProvider": "storesearch",
       "candidateSteamAppId": null,
       "candidates": [],
+      "canonicalGameMetadata": {
+        "about": "A string of ritualistic murders threatens Bright Falls, a small-town community surrounded by Pacific Northwest wilderness. Saga Anderson, an accomplished FBI agent with a reputation for solving impossible cases arrives to investigate the murders. Anderson’s case spirals into a nightmare when she discovers pages of a horror story that starts to come true around her.\n\nAlan Wake, a lost writer trapped in a nightmare beyond our world, writes a dark story in an attempt to shape the reality around him and escape his prison. With a dark horror hunting him, Wake is trying to retain his sanity and beat the devil at his own game. \n\nAnderson and Wake are two heroes on two desperate journeys in two separate realities, connected at heart in ways neither of them can understand: reflecting each other, echoing each other, and      affecting the worlds around them. \n\nFueled by the horror story, supernatural darkness invades Bright Falls, corrupting the locals and threatening the loved ones of both Anderson and Wake. Light is their weapon—and their safe haven — against the darkness they face. Trapped in a sinister horror story where there are only victims and monsters, can they break out to be the heroes they need to be? \n\n# Solve a Deadly Mystery \nWhat begins as a small-town murder investigation rapidly spirals into a nightmare journey. Uncover the source of the supernatural darkness in this psychological horror story filled with intense suspense and unexpected twists. \n\n# Play As Two Characters \nExperience both Alan Wake’s and Saga Anderson’s stories and see events unfold from different perspectives. Switch between Anderson’s life-or-death race to solve the case and Wake’s desperate attempts to rewrite his reality to escape the depths of the Dark Place. \n \n# Explore Two Worlds \nExperience two beautiful yet terrifying worlds, each with its own rich cast of characters and deadly threats. Discover majestic landscapes of Cauldron Lake in the Pacific Northwest and the idyllic towns of Bright Falls and Watery. Contrasting sharply, attempt to escape the nightmarish cityscape of the Dark Place. \n \n# Survive With Light \nWith limited resources, take on powerful supernatural enemies in desperate close-combat situations. It takes more than just a gun to survive: light is the ultimate weapon in the fight against the darkness and will be your refuge when enemies threaten to overwhelm you.",
+        "achievementCount": null,
+        "developers": [
+          "Remedy Entertainment"
+        ],
+        "dlcCount": null,
+        "features": [],
+        "fetchedAtEpochMs": 1786353312906,
+        "genres": [],
+        "headerImageUrl": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-s1-2560x1440-309c7412b7bc.jpg",
+        "languages": [
+          "English",
+          "German",
+          "Spanish - Spain",
+          "Japanese",
+          "French",
+          "Spanish - Latin America",
+          "Italian",
+          "Chinese - Simplified",
+          "Chinese - Traditional",
+          "Russian",
+          "Ukrainian",
+          "Polish",
+          "Korean",
+          "Portuguese - Brazil"
+        ],
+        "movies": [
+          {
+            "name": null,
+            "previewImageUrl": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1c-00-accolades-1920x1080-3736878f492c.jpg",
+            "streamUrl": "https://media-cdn.epicgames.com/7286954a134143a28fa585f195589268/7286954a134143a28fa585f195589268.m3u8"
+          },
+          {
+            "name": null,
+            "previewImageUrl": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1c-00-launchtrailer-thumbnail-1920x1080-8bee37fca294.jpg",
+            "streamUrl": "https://media-cdn.epicgames.com/fc19e8726d0b4a4ab427276828f0c59e/fc19e8726d0b4a4ab427276828f0c59e.m3u8"
+          },
+          {
+            "name": null,
+            "previewImageUrl": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1c-00-1920x1080-cc2e0448df74.jpg",
+            "streamUrl": "https://media-cdn.epicgames.com/6a6eb71fa87b4b6ab5b154d23db5e5ef/6a6eb71fa87b4b6ab5b154d23db5e5ef.m3u8"
+          },
+          {
+            "name": null,
+            "previewImageUrl": "https://cdn2.unrealengine.com/bigfish-s1-announce-green-2560x1440-2c5aaf482b5d.png",
+            "streamUrl": "https://media-cdn.epicgames.com/bbcd6a8dc2c641d1b88319094d666299/bbcd6a8dc2c641d1b88319094d666299.m3u8"
+          }
+        ],
+        "platforms": [
+          "WINDOWS"
+        ],
+        "publishers": [
+          "Epic Games Publishing"
+        ],
+        "releaseDate": null,
+        "requirements": {
+          "minimum": "Windows OS: Windows 10/11 64-bit\nWindows Processor: Intel i5-7600K or AMD equivalent\nWindows Memory: 16 GB\nWindows Storage: SSD with 90 GB free space\nWindows Graphics: GeForce GTX 1070 / Radeon RX 5600 XT",
+          "recommended": "Windows OS: Windows 10/11 64-bit\nWindows Processor: Ryzen 7 3700X or Intel equivalent\nWindows Memory: 16 GB\nWindows Storage: SSD with 90 GB free space\nWindows Graphics: GeForce RTX 3060 / Radeon RX 6600 XT"
+        },
+        "screenshots": [
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-03-award-1920x1080-9e0de20157f9.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-02-1920x1080-cee72a709dc4.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-03-1920x1080-321a6753e674.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-04-1920x1080-9fb3ea8f2ac3.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-05-1920x1080-c89a4844a26f.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-06-1920x1080-3117083b6aa9.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-07-1920x1080-1758ef0edb57.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-08-1920x1080-c92bfbd09bcd.jpg",
+          "https://cdn2.unrealengine.com/aw2-specs-1920x1080-45be10247f7e.jpg"
+        ],
+        "shortDescription": "Saga Anderson arrives to investigate ritualistic murders in a small town. Alan Wake pens a dark story to shape the reality around him. These two heroes are somehow connected. Can they become the heroes they need to be?",
+        "title": "Alan Wake 2"
+      },
       "confidence": "SOURCE_ONLY",
       "decision": "SOURCE_CATALOG_FALLBACK",
       "decisionSource": "AUTOMATIC",
@@ -155,7 +235,7 @@
       "score": null,
       "sourceCatalogProvider": "epic-cms",
       "sourcePresentation": {
-        "about": "A string of ritualistic murders threatens Bright Falls, a small-town community surrounded by Pacific Northwest wilderness. Saga Anderson, an accomplished FBI agent with a reputation for solving impossible cases arrives to investigate the murders. Anderson\u2019s case spirals into a nightmare when she discovers pages of a horror story that starts to come true around her.\n\nAlan Wake, a lost writer trapped in a nightmare beyond our world, writes a dark story in an attempt to shape the reality around him and escape his prison. With a dark horror hunting him, Wake is trying to retain his sanity and beat the devil at his own game. \n\nAnderson and Wake are two heroes on two desperate journeys in two separate realities, connected at heart in ways neither of them can understand: reflecting each other, echoing each other, and      affecting the worlds around them. \n\nFueled by the horror story, supernatural darkness invades Bright Falls, corrupting the locals and threatening the loved ones of both Anderson and Wake. Light is their weapon\u2014and their safe haven \u2014 against the darkness they face. Trapped in a sinister horror story where there are only victims and monsters, can they break out to be the heroes they need to be? \n\n# Solve a Deadly Mystery \nWhat begins as a small-town murder investigation rapidly spirals into a nightmare journey. Uncover the source of the supernatural darkness in this psychological horror story filled with intense suspense and unexpected twists. \n\n# Play As Two Characters \nExperience both Alan Wake\u2019s and Saga Anderson\u2019s stories and see events unfold from different perspectives. Switch between Anderson\u2019s life-or-death race to solve the case and Wake\u2019s desperate attempts to rewrite his reality to escape the depths of the Dark Place. \n \n# Explore Two Worlds \nExperience two beautiful yet terrifying worlds, each with its own rich cast of characters and deadly threats. Discover majestic landscapes of Cauldron Lake in the Pacific Northwest and the idyllic towns of Bright Falls and Watery. Contrasting sharply, attempt to escape the nightmarish cityscape of the Dark Place. \n \n# Survive With Light \nWith limited resources, take on powerful supernatural enemies in desperate close-combat situations. It takes more than just a gun to survive: light is the ultimate weapon in the fight against the darkness and will be your refuge when enemies threaten to overwhelm you.",
+        "about": "A string of ritualistic murders threatens Bright Falls, a small-town community surrounded by Pacific Northwest wilderness. Saga Anderson, an accomplished FBI agent with a reputation for solving impossible cases arrives to investigate the murders. Anderson’s case spirals into a nightmare when she discovers pages of a horror story that starts to come true around her.\n\nAlan Wake, a lost writer trapped in a nightmare beyond our world, writes a dark story in an attempt to shape the reality around him and escape his prison. With a dark horror hunting him, Wake is trying to retain his sanity and beat the devil at his own game. \n\nAnderson and Wake are two heroes on two desperate journeys in two separate realities, connected at heart in ways neither of them can understand: reflecting each other, echoing each other, and      affecting the worlds around them. \n\nFueled by the horror story, supernatural darkness invades Bright Falls, corrupting the locals and threatening the loved ones of both Anderson and Wake. Light is their weapon—and their safe haven — against the darkness they face. Trapped in a sinister horror story where there are only victims and monsters, can they break out to be the heroes they need to be? \n\n# Solve a Deadly Mystery \nWhat begins as a small-town murder investigation rapidly spirals into a nightmare journey. Uncover the source of the supernatural darkness in this psychological horror story filled with intense suspense and unexpected twists. \n\n# Play As Two Characters \nExperience both Alan Wake’s and Saga Anderson’s stories and see events unfold from different perspectives. Switch between Anderson’s life-or-death race to solve the case and Wake’s desperate attempts to rewrite his reality to escape the depths of the Dark Place. \n \n# Explore Two Worlds \nExperience two beautiful yet terrifying worlds, each with its own rich cast of characters and deadly threats. Discover majestic landscapes of Cauldron Lake in the Pacific Northwest and the idyllic towns of Bright Falls and Watery. Contrasting sharply, attempt to escape the nightmarish cityscape of the Dark Place. \n \n# Survive With Light \nWith limited resources, take on powerful supernatural enemies in desperate close-combat situations. It takes more than just a gun to survive: light is the ultimate weapon in the fight against the darkness and will be your refuge when enemies threaten to overwhelm you.",
         "catalogId": "93f2a8c3547846eda966cb3c152a026e",
         "catalogIdCorroboratedByCms": false,
         "developer": "Remedy Entertainment",
@@ -269,6 +349,10 @@
         ],
         "releaseDate": null,
         "releaseYear": null,
+        "requirements": {
+          "minimum": "Windows OS: Windows 10/11 64-bit\nWindows Processor: Intel i5-7600K or AMD equivalent\nWindows Memory: 16 GB\nWindows Storage: SSD with 90 GB free space\nWindows Graphics: GeForce GTX 1070 / Radeon RX 5600 XT",
+          "recommended": "Windows OS: Windows 10/11 64-bit\nWindows Processor: Ryzen 7 3700X or Intel equivalent\nWindows Memory: 16 GB\nWindows Storage: SSD with 90 GB free space\nWindows Graphics: GeForce RTX 3060 / Radeon RX 6600 XT"
+        },
         "screenshots": [
           "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-03-award-1920x1080-9e0de20157f9.jpg",
           "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-02-1920x1080-cee72a709dc4.jpg",
@@ -291,13 +375,45 @@
       "warnings": [
         "Ignored stale Epic release label: Coming Soon"
       ]
+    },
+    "canonicalMetadataCounts": {
+      "developers": 1,
+      "languages": 14,
+      "movies": 4,
+      "platforms": 1,
+      "publishers": 1,
+      "requirementSections": 2,
+      "screenshots": 9
     }
   },
   "outputContract": {
     "candidateSteamAppId": null,
     "confidence": "SOURCE_ONLY",
     "decision": "SOURCE_CATALOG_FALLBACK",
-    "matchMethod": "SOURCE_CATALOG"
+    "matchMethod": "SOURCE_CATALOG",
+    "canonicalGameMetadata": {
+      "exactFieldNames": [
+        "title",
+        "shortDescription",
+        "about",
+        "headerImageUrl",
+        "screenshots",
+        "movies",
+        "developers",
+        "publishers",
+        "releaseDate",
+        "platforms",
+        "languages",
+        "requirements",
+        "genres",
+        "features",
+        "achievementCount",
+        "dlcCount",
+        "fetchedAtEpochMs"
+      ],
+      "targetModel": "app.gamenative.library.metadata.CanonicalGameMetadata",
+      "shapeCompatible": true
+    }
   },
   "resolverVersion": 1,
   "schemaVersion": 1,
@@ -409,6 +525,17 @@
       "timeout",
       "HTTP 429 or RATE_LIMIT_EXHAUSTED",
       "malformed Steam data"
+    ]
+  },
+  "compatibilityContract": {
+    "providerSpecificEvidenceRetainedAt": "sourcePresentation",
+    "targetModel": "app.gamenative.library.metadata.CanonicalGameMetadata",
+    "shapeCompatible": true,
+    "currentGameNativeCodeChanged": false,
+    "integrationStillRequires": [
+      "source-aware metadata persistence that does not require a Steam AppID",
+      "EPIC_CMS metadata provenance",
+      "validated Epic/Unreal image and movie transport instead of the Steam-only media policy"
     ]
   }
 }

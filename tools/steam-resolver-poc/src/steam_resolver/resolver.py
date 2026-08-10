@@ -128,6 +128,7 @@ class SteamResolver:
                     },
                     "candidates": [],
                     "sourcePresentation": source_result.presentation,
+                    "canonicalGameMetadata": source_result.canonical_metadata,
                     "warnings": [*result["warnings"], *source_result.warnings],
                     "diagnostics": [
                         *result["diagnostics"],
