@@ -56,17 +56,17 @@ def test_resolver_auto_accepts_high_confidence_verified_candidate():
     assert provider.queries == ("Control Ultimate Edition",)
 
 
-def test_resolver_requires_review_for_ambiguous_close_candidates():
+def test_resolver_requires_review_for_ambiguous_candidates_without_source_year():
     provider = FakeProvider(
         ProviderBatch(candidates=(game(20), game(10, release_year=2021)))
     )
 
-    result = SteamResolver(provider).resolve(copy())
+    result = SteamResolver(provider).resolve(copy(release_year=None))
 
     assert result["decision"] == "REVIEW_REQUIRED"
     assert result["confidence"] == "REVIEW_REQUIRED"
-    assert [item["steamAppId"] for item in result["candidates"]] == [20, 10]
-    assert result["margin"] == 0.04
+    assert [item["steamAppId"] for item in result["candidates"]] == [10, 20]
+    assert result["margin"] == 0.0
 
 
 def test_resolver_returns_unmatched_only_after_complete_provider_no_match():
@@ -80,7 +80,7 @@ def test_resolver_returns_unmatched_only_after_complete_provider_no_match():
 def test_resolver_distinguishes_provider_unavailable():
     batch = ProviderBatch(
         provider_unavailable=True,
-        diagnostics=({"endpoint": "storesearch", "status": 429, "parser": "HTTP_ERROR"},),
+        diagnostics=({"endpoint": "storesearch", "status": 503, "parser": "HTTP_ERROR"},),
     )
 
     result = SteamResolver(FakeProvider(batch)).resolve(copy())
@@ -88,7 +88,7 @@ def test_resolver_distinguishes_provider_unavailable():
     assert result["decision"] == "PROVIDER_UNAVAILABLE"
     assert result["confidence"] == "PROVIDER_UNAVAILABLE"
     assert result["candidateSteamAppId"] is None
-    assert result["diagnostics"][0]["status"] == 429
+    assert result["diagnostics"][0]["status"] == 503
 
 
 def test_resolver_keeps_partial_exact_search_hit_for_review_but_never_accepts_it():
@@ -139,6 +139,97 @@ def test_partial_provider_without_candidates_is_provider_unavailable():
     assert result["decision"] == "PROVIDER_UNAVAILABLE"
     assert result["confidence"] == "PROVIDER_UNAVAILABLE"
     assert result["candidateSteamAppId"] is None
+
+
+def test_ambiguity_selects_closest_verified_candidate_at_or_before_source_year():
+    source = copy(
+        display_name="Shared Game",
+        developer="Shared Studio",
+        release_year=2015,
+    )
+    candidates = (
+        game(100, title="Shared Game", developer="Shared Studio", release_year=2010),
+        game(150, title="Shared Game", developer="Shared Studio", release_year=2012),
+        game(300, title="Shared Game", developer="Shared Studio", release_year=2020),
+    )
+
+    result = SteamResolver(FakeProvider(ProviderBatch(candidates=candidates))).resolve(source)
+
+    assert result["decision"] == "AUTO_ACCEPT"
+    assert result["confidence"] == "HIGH"
+    assert result["candidateSteamAppId"] == 150
+    assert [item["steamAppId"] for item in result["candidates"]] == [150, 100, 300]
+    assert result["evidence"]["ambiguity"] == {
+        "kind": "AMBIGUITY_RESOLVED_BY_PRIOR_YEAR",
+        "sourceYear": 2015,
+        "selectedSteamAppId": 150,
+        "eligibleCandidates": [
+            {"steamAppId": 150, "releaseYear": 2012, "yearDelta": 3},
+            {"steamAppId": 100, "releaseYear": 2010, "yearDelta": 5},
+        ],
+    }
+
+
+def test_same_year_candidate_wins_and_later_remaster_cannot_displace_base():
+    source = copy(
+        display_name="Shared Game",
+        developer="Shared Studio",
+        release_year=2015,
+    )
+    candidates = (
+        game(100, title="Shared Game", developer="Shared Studio", release_year=2015),
+        game(
+            300,
+            title="Shared Game Remastered",
+            developer="Shared Studio",
+            release_year=2020,
+        ),
+    )
+
+    result = SteamResolver(FakeProvider(ProviderBatch(candidates=candidates))).resolve(source)
+
+    assert result["decision"] == "AUTO_ACCEPT"
+    assert result["candidateSteamAppId"] == 100
+    assert result["evidence"]["ambiguity"]["kind"] == "AMBIGUITY_RESOLVED_BY_PRIOR_YEAR"
+    assert result["evidence"]["ambiguity"]["eligibleCandidates"] == [
+        {"steamAppId": 100, "releaseYear": 2015, "yearDelta": 0}
+    ]
+
+
+def test_year_ambiguity_remains_review_when_source_year_missing_or_no_prior_candidate():
+    candidates = (
+        game(100, title="Shared Game", developer="Shared Studio", release_year=2010),
+        game(300, title="Shared Game", developer="Shared Studio", release_year=2020),
+    )
+    missing_year = SteamResolver(
+        FakeProvider(ProviderBatch(candidates=candidates))
+    ).resolve(
+        copy(display_name="Shared Game", developer="Shared Studio", release_year=None)
+    )
+    no_prior = SteamResolver(FakeProvider(ProviderBatch(candidates=candidates))).resolve(
+        copy(display_name="Shared Game", developer="Shared Studio", release_year=2005)
+    )
+
+    assert missing_year["decision"] == "REVIEW_REQUIRED"
+    assert no_prior["decision"] == "REVIEW_REQUIRED"
+
+
+def test_year_ambiguity_remains_review_when_closest_prior_candidates_tie():
+    source = copy(
+        display_name="Shared Game",
+        developer="Shared Studio",
+        release_year=2015,
+    )
+    candidates = (
+        game(100, title="Shared Game", developer="Shared Studio", release_year=2012),
+        game(150, title="Shared Game", developer="Shared Studio", release_year=2012),
+        game(300, title="Shared Game", developer="Shared Studio", release_year=2020),
+    )
+
+    result = SteamResolver(FakeProvider(ProviderBatch(candidates=candidates))).resolve(source)
+
+    assert result["decision"] == "REVIEW_REQUIRED"
+    assert result["confidence"] == "REVIEW_REQUIRED"
 
 
 def test_resolver_output_candidates_are_deduplicated_sorted_and_bounded():

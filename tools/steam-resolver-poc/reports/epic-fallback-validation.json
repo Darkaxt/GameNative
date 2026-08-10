@@ -1,0 +1,414 @@
+{
+  "commands": [
+    "python -m pytest -q",
+    "python -m steam_resolver corpus validate-sources --file tests/corpus/real-30.json --offline",
+    "python -m steam_resolver corpus evaluate --file tests/corpus/real-30.json --candidate-provider fixture --fixture tests/fixtures/steam-catalog-30.json --require-recall-at5 30 --require-top1 30 --require-auto 30",
+    "python -m steam_resolver corpus validate-sources --file tests/corpus/real-30.json --live",
+    "python -m steam_resolver corpus evaluate --file tests/corpus/real-30.json --candidate-provider storesearch --max-search-candidates 5 --max-output-candidates 5 --timeout 15 --require-recall-at5 30 --require-top1 30 --require-auto 30",
+    "python -m steam_resolver resolve --candidate-provider storesearch --timeout 30 --input -"
+  ],
+  "deterministicTests": {
+    "offlineEvaluationByteDeterministic": true,
+    "passed": 84,
+    "requiredContracts": [
+      "valid Alan Wake-style response",
+      "missing explicit slug plus derived 404 emits SLUG_REQUIRED",
+      "namespace mismatch rejected",
+      "wrong input or media host rejected",
+      "multiple productHome pages rejected",
+      "partial Steam run does not trigger",
+      "review-required Steam result does not trigger",
+      "Steam provider failure does not trigger",
+      "malformed Steam data does not trigger",
+      "persistent Epic CMS 429 emits typed failure only"
+    ]
+  },
+  "endpointContract": {
+    "authentication": "NONE",
+    "graphqlUsed": false,
+    "maximumAttemptsOn429": 4,
+    "maximumBodyBytes": 1048576,
+    "method": "GET",
+    "template": "https://store-content.ak.epicgames.com/api/{locale}/content/products/{slug}"
+  },
+  "feature": "EPIC_SOURCE_CATALOG_PRESENTATION_FALLBACK",
+  "inputContract": {
+    "derived404Error": "SLUG_REQUIRED",
+    "derivedSlugAttempts": 1,
+    "optionalFields": [
+      "epicProductSlug",
+      "epicStoreUrl"
+    ],
+    "storeUrlTemplate": "https://store.epicgames.com/{locale}/p/{slug}"
+  },
+  "liveAlanWake2": {
+    "checks": {
+      "catalogIdOmissionIsExplicit": true,
+      "cmsDiagnosticSucceeded": true,
+      "confidenceIsSourceOnly": true,
+      "decisionIsSourceFallback": true,
+      "hasHlsDashPosterMovies": true,
+      "hasScreenshots": true,
+      "matchMethodIsSourceCatalog": true,
+      "namespaceMatches": true,
+      "offerMatches": true,
+      "staleReleaseDateIsNull": true,
+      "staleReleaseWarningPreserved": true,
+      "staleReleaseYearIsNull": true,
+      "steamAppIdIsNull": true,
+      "titleMatches": true
+    },
+    "expected": {
+      "namespace": "c4763f236d08423eb47b4c3008779c84",
+      "offerId": "a7364ebfa54147f1b90f78a81c8093f7",
+      "slug": "alan-wake-2"
+    },
+    "passed": true,
+    "presentationCounts": {
+      "languages": 14,
+      "movies": 4,
+      "screenshots": 9
+    },
+    "resolution": {
+      "candidateProvider": "storesearch",
+      "candidateSteamAppId": null,
+      "candidates": [],
+      "confidence": "SOURCE_ONLY",
+      "decision": "SOURCE_CATALOG_FALLBACK",
+      "decisionSource": "AUTOMATIC",
+      "diagnostics": [
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "delaySeconds": 0.0,
+              "status": 200
+            }
+          ],
+          "bodyBytes": 437,
+          "contentType": "application/json",
+          "endpoint": "https://store.steampowered.com/api/storesearch/?term=Alan+Wake+2&l=english&cc=US",
+          "error": null,
+          "parsedCandidates": 1,
+          "parser": "STORESEARCH_OK",
+          "query": "Alan Wake 2",
+          "status": 200
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "delaySeconds": 0.0,
+              "status": 200
+            }
+          ],
+          "bodyBytes": 6085,
+          "contentType": "application/json",
+          "endpoint": "https://store.steampowered.com/api/appdetails?appids=3274290&l=english&cc=US",
+          "error": null,
+          "parser": "APPDETAILS_NON_GAME",
+          "status": 200,
+          "steamAppId": 3274290
+        },
+        {
+          "attempts": [
+            {
+              "attempt": 1,
+              "delaySeconds": 0.0,
+              "status": 200
+            }
+          ],
+          "bodyBytes": 45723,
+          "contentType": "application/json",
+          "endpoint": "https://store-content.ak.epicgames.com/api/en-US/content/products/alan-wake-2",
+          "error": null,
+          "namespace": "c4763f236d08423eb47b4c3008779c84",
+          "offerId": "a7364ebfa54147f1b90f78a81c8093f7",
+          "parser": "EPIC_CMS_OK",
+          "slug": "alan-wake-2",
+          "status": 200
+        }
+      ],
+      "evidence": {
+        "catalogIdCorroboratedByCms": false,
+        "kind": "EPIC_CMS_IDENTITY_VALIDATED",
+        "namespaceMatched": true,
+        "offerNamespaceMatched": true,
+        "slugSource": "EXPLICIT",
+        "steamDecision": "UNMATCHED",
+        "titleMatched": true
+      },
+      "input": {
+        "appType": "GAME",
+        "developer": null,
+        "displayName": "Alan Wake 2",
+        "epicProductSlug": "alan-wake-2",
+        "epicStoreUrl": null,
+        "releaseYear": null,
+        "source": "EPIC",
+        "stableSourceId": "YzQ3NjNmMjM2ZDA4NDIzZWI0N2I0YzMwMDg3NzljODQ.OTNmMmE4YzM1NDc4NDZlZGE5NjZjYjNjMTUyYTAyNmU"
+      },
+      "margin": null,
+      "matchMethod": "SOURCE_CATALOG",
+      "resolverVersion": 1,
+      "schemaVersion": 1,
+      "score": null,
+      "sourceCatalogProvider": "epic-cms",
+      "sourcePresentation": {
+        "about": "A string of ritualistic murders threatens Bright Falls, a small-town community surrounded by Pacific Northwest wilderness. Saga Anderson, an accomplished FBI agent with a reputation for solving impossible cases arrives to investigate the murders. Anderson\u2019s case spirals into a nightmare when she discovers pages of a horror story that starts to come true around her.\n\nAlan Wake, a lost writer trapped in a nightmare beyond our world, writes a dark story in an attempt to shape the reality around him and escape his prison. With a dark horror hunting him, Wake is trying to retain his sanity and beat the devil at his own game. \n\nAnderson and Wake are two heroes on two desperate journeys in two separate realities, connected at heart in ways neither of them can understand: reflecting each other, echoing each other, and      affecting the worlds around them. \n\nFueled by the horror story, supernatural darkness invades Bright Falls, corrupting the locals and threatening the loved ones of both Anderson and Wake. Light is their weapon\u2014and their safe haven \u2014 against the darkness they face. Trapped in a sinister horror story where there are only victims and monsters, can they break out to be the heroes they need to be? \n\n# Solve a Deadly Mystery \nWhat begins as a small-town murder investigation rapidly spirals into a nightmare journey. Uncover the source of the supernatural darkness in this psychological horror story filled with intense suspense and unexpected twists. \n\n# Play As Two Characters \nExperience both Alan Wake\u2019s and Saga Anderson\u2019s stories and see events unfold from different perspectives. Switch between Anderson\u2019s life-or-death race to solve the case and Wake\u2019s desperate attempts to rewrite his reality to escape the depths of the Dark Place. \n \n# Explore Two Worlds \nExperience two beautiful yet terrifying worlds, each with its own rich cast of characters and deadly threats. Discover majestic landscapes of Cauldron Lake in the Pacific Northwest and the idyllic towns of Bright Falls and Watery. Contrasting sharply, attempt to escape the nightmarish cityscape of the Dark Place. \n \n# Survive With Light \nWith limited resources, take on powerful supernatural enemies in desperate close-combat situations. It takes more than just a gun to survive: light is the ultimate weapon in the fight against the darkness and will be your refuge when enemies threaten to overwhelm you.",
+        "catalogId": "93f2a8c3547846eda966cb3c152a026e",
+        "catalogIdCorroboratedByCms": false,
+        "developer": "Remedy Entertainment",
+        "features": [],
+        "genres": [],
+        "headerImage": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-s1-2560x1440-309c7412b7bc.jpg",
+        "languages": [
+          {
+            "audio": true,
+            "name": "English",
+            "text": true
+          },
+          {
+            "audio": true,
+            "name": "German",
+            "text": true
+          },
+          {
+            "audio": true,
+            "name": "Spanish - Spain",
+            "text": true
+          },
+          {
+            "audio": true,
+            "name": "Japanese",
+            "text": true
+          },
+          {
+            "audio": true,
+            "name": "French",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Spanish - Latin America",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Italian",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Chinese - Simplified",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Chinese - Traditional",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Russian",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Ukrainian",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Polish",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Korean",
+            "text": true
+          },
+          {
+            "audio": false,
+            "name": "Portuguese - Brazil",
+            "text": true
+          }
+        ],
+        "movies": [
+          {
+            "dash": "https://media-cdn.epicgames.com/0ca6d8b0c2e34303800a135825248e67/0ca6d8b0c2e34303800a135825248e67.mpd",
+            "hls": "https://media-cdn.epicgames.com/7286954a134143a28fa585f195589268/7286954a134143a28fa585f195589268.m3u8",
+            "poster": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1c-00-accolades-1920x1080-3736878f492c.jpg"
+          },
+          {
+            "dash": "https://media-cdn.epicgames.com/614e7c4ac7d841adb0c3c6b5e93d6cc2/614e7c4ac7d841adb0c3c6b5e93d6cc2.mpd",
+            "hls": "https://media-cdn.epicgames.com/fc19e8726d0b4a4ab427276828f0c59e/fc19e8726d0b4a4ab427276828f0c59e.m3u8",
+            "poster": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1c-00-launchtrailer-thumbnail-1920x1080-8bee37fca294.jpg"
+          },
+          {
+            "dash": "https://media-cdn.epicgames.com/95296df31fb142039f1cfee2b8623f67/95296df31fb142039f1cfee2b8623f67.mpd",
+            "hls": "https://media-cdn.epicgames.com/6a6eb71fa87b4b6ab5b154d23db5e5ef/6a6eb71fa87b4b6ab5b154d23db5e5ef.m3u8",
+            "poster": "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1c-00-1920x1080-cc2e0448df74.jpg"
+          },
+          {
+            "dash": "https://media-cdn.epicgames.com/de190a0b729442c7822f35de48a39d2e/de190a0b729442c7822f35de48a39d2e.mpd",
+            "hls": "https://media-cdn.epicgames.com/bbcd6a8dc2c641d1b88319094d666299/bbcd6a8dc2c641d1b88319094d666299.m3u8",
+            "poster": "https://cdn2.unrealengine.com/bigfish-s1-announce-green-2560x1440-2c5aaf482b5d.png"
+          }
+        ],
+        "namespace": "c4763f236d08423eb47b4c3008779c84",
+        "offerId": "a7364ebfa54147f1b90f78a81c8093f7",
+        "platforms": {
+          "linux": false,
+          "mac": false,
+          "windows": true
+        },
+        "publisher": "Epic Games Publishing",
+        "rawLanguages": [
+          "AUDIO: English, German, Spanish - Spain, Japanese, French | TEXT: English, German, French, Spanish - Spain, Spanish - Latin America, Japanese, Italian, Chinese - Simplified, Chinese - Traditional, Russian, Ukrainian, Polish, Korean, Portuguese - Brazil"
+        ],
+        "releaseDate": null,
+        "releaseYear": null,
+        "screenshots": [
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-03-award-1920x1080-9e0de20157f9.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-02-1920x1080-cee72a709dc4.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-03-1920x1080-321a6753e674.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-04-1920x1080-9fb3ea8f2ac3.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-05-1920x1080-c89a4844a26f.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-06-1920x1080-3117083b6aa9.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-07-1920x1080-1758ef0edb57.jpg",
+          "https://cdn2.unrealengine.com/egs-alanwake2-remedyentertainment-g1a-08-1920x1080-c92bfbd09bcd.jpg",
+          "https://cdn2.unrealengine.com/aw2-specs-1920x1080-45be10247f7e.jpg"
+        ],
+        "shortDescription": "Saga Anderson arrives to investigate ritualistic murders in a small town. Alan Wake pens a dark story to shape the reality around him. These two heroes are somehow connected. Can they become the heroes they need to be?",
+        "slug": "alan-wake-2",
+        "source": "EPIC",
+        "stableSourceId": "YzQ3NjNmMjM2ZDA4NDIzZWI0N2I0YzMwMDg3NzljODQ.OTNmMmE4YzM1NDc4NDZlZGE5NjZjYjNjMTUyYTAyNmU",
+        "storeUrl": "https://store.epicgames.com/en-US/p/alan-wake-2",
+        "tags": [],
+        "title": "Alan Wake 2"
+      },
+      "warnings": [
+        "Ignored stale Epic release label: Coming Soon"
+      ]
+    }
+  },
+  "outputContract": {
+    "candidateSteamAppId": null,
+    "confidence": "SOURCE_ONLY",
+    "decision": "SOURCE_CATALOG_FALLBACK",
+    "matchMethod": "SOURCE_CATALOG"
+  },
+  "resolverVersion": 1,
+  "schemaVersion": 1,
+  "security": {
+    "acceptedMediaRegistrableDomains": [
+      "epicgames.com",
+      "unrealengine.com"
+    ],
+    "acceptedMediaSchemes": [
+      "https"
+    ],
+    "authenticatedEpicApisUsed": false,
+    "credentialsUsed": false,
+    "graphqlUsed": false,
+    "reportsContainCredentials": false
+  },
+  "thirtyCaseRegression": {
+    "live": {
+      "autoAcceptedCount": 30,
+      "autoAcceptedRate": 1.0,
+      "automaticCorrectCount": 30,
+      "automaticCorrectRate": 1.0,
+      "caseCount": 30,
+      "recallAt5": 1.0,
+      "recallAt5Count": 30,
+      "top1": 1.0,
+      "top1Count": 30
+    },
+    "livePerStore": {
+      "AMAZON": {
+        "autoAcceptedCount": 10,
+        "autoAcceptedRate": 1.0,
+        "automaticCorrectCount": 10,
+        "automaticCorrectRate": 1.0,
+        "caseCount": 10,
+        "recallAt5": 1.0,
+        "recallAt5Count": 10,
+        "top1": 1.0,
+        "top1Count": 10
+      },
+      "EPIC": {
+        "autoAcceptedCount": 10,
+        "autoAcceptedRate": 1.0,
+        "automaticCorrectCount": 10,
+        "automaticCorrectRate": 1.0,
+        "caseCount": 10,
+        "recallAt5": 1.0,
+        "recallAt5Count": 10,
+        "top1": 1.0,
+        "top1Count": 10
+      },
+      "GOG": {
+        "autoAcceptedCount": 10,
+        "autoAcceptedRate": 1.0,
+        "automaticCorrectCount": 10,
+        "automaticCorrectRate": 1.0,
+        "caseCount": 10,
+        "recallAt5": 1.0,
+        "recallAt5Count": 10,
+        "top1": 1.0,
+        "top1Count": 10
+      }
+    },
+    "offline": {
+      "autoAcceptedCount": 30,
+      "autoAcceptedRate": 1.0,
+      "automaticCorrectCount": 30,
+      "automaticCorrectRate": 1.0,
+      "caseCount": 30,
+      "recallAt5": 1.0,
+      "recallAt5Count": 30,
+      "top1": 1.0,
+      "top1Count": 30
+    },
+    "sourceCorroboration": {
+      "failed": 0,
+      "httpStatuses": {
+        "200": 40
+      },
+      "valid": true,
+      "validated": 30
+    },
+    "steamDiagnostics": {
+      "attemptNumbers": {
+        "1": 154
+      },
+      "httpStatuses": {
+        "200": 154
+      },
+      "parsers": {
+        "APPDETAILS_NON_GAME": 51,
+        "APPDETAILS_OK": 59,
+        "STORESEARCH_OK": 44
+      }
+    }
+  },
+  "triggerContract": {
+    "allRequired": [
+      "source=EPIC",
+      "appType=GAME",
+      "Steam provider run complete and nonpartial",
+      "Steam decision=UNMATCHED",
+      "no plausible Steam candidate"
+    ],
+    "neverAfter": [
+      "REVIEW_REQUIRED",
+      "provider failure",
+      "partial provider run",
+      "timeout",
+      "HTTP 429 or RATE_LIMIT_EXHAUSTED",
+      "malformed Steam data"
+    ]
+  }
+}

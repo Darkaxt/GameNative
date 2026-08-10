@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from .models import AppType, OwnedCopy, SteamCandidate
@@ -22,6 +23,13 @@ class ScoredCandidate:
     corroborated: bool
     edition_conflict: bool
     edition_base_match: bool
+
+
+@dataclass(frozen=True)
+class AmbiguityResolution:
+    ranked: tuple[ScoredCandidate, ...]
+    resolved: bool = False
+    force_review: bool = False
 
 
 def score_candidate(source: OwnedCopy, candidate: SteamCandidate) -> ScoredCandidate:
@@ -54,6 +62,14 @@ def score_candidate(source: OwnedCopy, candidate: SteamCandidate) -> ScoredCandi
         developer_kind = "UNKNOWN"
         developer_weight = 0.0
 
+    type_compatible = source.app_type is AppType.GAME and candidate.app_type is AppType.GAME
+    strong_cross_store_identity = (
+        candidate.verified
+        and title_kind == "EXACT"
+        and developer_kind == "EXACT"
+        and type_compatible
+    )
+
     year_delta: int | None = None
     if source.release_year is not None and candidate.release_year is not None:
         year_delta = abs(source.release_year - candidate.release_year)
@@ -63,6 +79,9 @@ def score_candidate(source: OwnedCopy, candidate: SteamCandidate) -> ScoredCandi
         elif year_delta == 1:
             year_kind = "NEAR"
             year_weight = 0.10
+        elif strong_cross_store_identity and candidate.release_year > source.release_year:
+            year_kind = "CROSS_STORE_RELEASE_VARIANCE"
+            year_weight = 0.0
         else:
             year_kind = "CONFLICT"
             year_weight = -0.10
@@ -70,7 +89,6 @@ def score_candidate(source: OwnedCopy, candidate: SteamCandidate) -> ScoredCandi
         year_kind = "UNKNOWN"
         year_weight = 0.0
 
-    type_compatible = source.app_type is AppType.GAME and candidate.app_type is AppType.GAME
     type_weight = 0.10 if type_compatible else 0.0
     source_editions = edition_tokens(source.display_name)
     candidate_editions = edition_tokens(candidate.title)
@@ -145,6 +163,79 @@ def rank_candidates(
         key=lambda item: (-item.score, item.candidate.steam_app_id),
     )
     return ranked if limit is None else ranked[:limit]
+
+
+def resolve_prior_year_ambiguity(
+    source: OwnedCopy, ranked: list[ScoredCandidate]
+) -> AmbiguityResolution:
+    family = [
+        item
+        for item in ranked
+        if item.candidate.verified
+        and item.evidence["appType"]["compatible"]
+        and item.evidence["developer"]["kind"] == "EXACT"
+        and (item.strong_title or item.edition_base_match)
+    ]
+    if len(family) < 2:
+        return AmbiguityResolution(tuple(ranked))
+    if source.release_year is None:
+        return AmbiguityResolution(tuple(ranked), force_review=True)
+
+    eligible = [
+        item
+        for item in family
+        if item.strong_title
+        and not item.edition_conflict
+        and item.candidate.release_year is not None
+        and item.candidate.release_year <= source.release_year
+    ]
+    if not eligible:
+        return AmbiguityResolution(tuple(ranked), force_review=True)
+
+    eligible.sort(
+        key=lambda item: (-int(item.candidate.release_year), item.candidate.steam_app_id)
+    )
+    closest_year = eligible[0].candidate.release_year
+    closest = [
+        item for item in eligible if item.candidate.release_year == closest_year
+    ]
+    if len(closest) != 1:
+        return AmbiguityResolution(tuple(ranked), force_review=True)
+
+    selected = closest[0]
+    evidence = deepcopy(selected.evidence)
+    eligible_evidence = [
+        {
+            "steamAppId": item.candidate.steam_app_id,
+            "releaseYear": item.candidate.release_year,
+            "yearDelta": source.release_year - int(item.candidate.release_year),
+        }
+        for item in eligible
+    ]
+    evidence["ambiguity"] = {
+        "kind": "AMBIGUITY_RESOLVED_BY_PRIOR_YEAR",
+        "sourceYear": source.release_year,
+        "selectedSteamAppId": selected.candidate.steam_app_id,
+        "eligibleCandidates": eligible_evidence,
+    }
+    selected_score = selected.score
+    if evidence["releaseYear"]["weight"] == -0.10:
+        evidence["releaseYear"]["kind"] = "CROSS_STORE_PRIOR_RELEASE_VARIANCE"
+        evidence["releaseYear"]["weight"] = 0.0
+        selected_score = round(min(1.0, selected_score + 0.10), 4)
+    selected = replace(selected, score=selected_score, evidence=evidence)
+
+    eligible_ids = {item.candidate.steam_app_id for item in eligible}
+    ordered = [selected]
+    ordered.extend(
+        item
+        for item in eligible
+        if item.candidate.steam_app_id != selected.candidate.steam_app_id
+    )
+    ordered.extend(
+        item for item in ranked if item.candidate.steam_app_id not in eligible_ids
+    )
+    return AmbiguityResolution(tuple(ordered), resolved=True)
 
 
 def select_decision(

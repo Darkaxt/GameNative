@@ -11,7 +11,7 @@ from typing import Any, Callable, Sequence
 from .bounds import MAX_PAGES_PER_KIND, MAX_SAMPLED_THREADS
 from .collector import CollectorConfig, SteamCommunityCollector
 from .http import BoundedHttpClient
-from .models import NetworkError, ParseError, PocError, ValidationError
+from .models import NetworkError, ParseError, PocError, RateLimitError, ValidationError
 from .routes import parse_positive_app_id
 from .schema import validate_result
 
@@ -73,6 +73,8 @@ def _error_type(error: PocError) -> str:
         return "validation"
     if isinstance(error, ParseError):
         return "parser"
+    if isinstance(error, RateLimitError):
+        return "rate_limit"
     if isinstance(error, NetworkError):
         return "http"
     return "validation"

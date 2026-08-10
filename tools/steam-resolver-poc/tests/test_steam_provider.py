@@ -1,6 +1,8 @@
 import json
 
-from steam_resolver.http import HttpResponse
+import pytest
+
+from steam_resolver.http import HttpResponse, RateLimitExhausted
 from steam_resolver.steam import CachedIndexProvider, SteamStoreProvider, refresh_istore_index
 
 
@@ -88,33 +90,65 @@ def test_appdetails_requires_matching_key_and_game_type():
     assert any(diagnostic["parser"] == "APPDETAILS_KEY_MISMATCH" for diagnostic in batch.diagnostics)
 
 
-def test_malformed_json_and_429_are_provider_unavailable_not_unmatched():
+def test_malformed_json_is_provider_unavailable_not_unmatched():
     malformed = FakeTransport([response(b"{not json")])
-    limited = FakeTransport([response({"error": "limited"}, status=429)])
 
     malformed_batch = SteamStoreProvider(transport=malformed).retrieve(("Control",))
-    limited_batch = SteamStoreProvider(transport=limited).retrieve(("Control",))
 
     assert malformed_batch.provider_unavailable is True
-    assert limited_batch.provider_unavailable is True
     assert malformed_batch.diagnostics[0]["parser"] == "MALFORMED_JSON"
-    assert limited_batch.diagnostics[0]["status"] == 429
 
 
-def test_partial_query_outage_without_any_hits_is_provider_unavailable():
+def test_exhausted_appdetails_rate_limit_aborts_before_other_candidates():
+    search = {
+        "total": 2,
+        "items": [
+            {"type": "app", "id": 870780, "name": "Control Ultimate Edition"},
+            {"type": "app", "id": 111, "name": "Control Soundtrack"},
+        ],
+    }
+    sleeps = []
     transport = FakeTransport(
         [
-            response({"total": 0, "items": []}),
-            response({"error": "limited"}, status=429),
+            response(search),
+            *[response({"error": "limited"}, status=429) for _ in range(4)],
+            response(appdetails(111)),
         ]
     )
-
-    batch = SteamStoreProvider(transport=transport).retrieve(
-        ("Disco Elysium - The Final Cut", "disco elysium the final cut")
+    provider = SteamStoreProvider(
+        transport=transport,
+        max_search_candidates=2,
+        sleeper=sleeps.append,
+        clock=lambda: 0.0,
     )
 
-    assert batch.provider_unavailable is True
-    assert batch.partial is True
+    with pytest.raises(RateLimitExhausted):
+        provider.retrieve(("Control Ultimate Edition",))
+
+    assert sleeps == [1.0, 2.0, 4.0]
+    assert len(transport.calls) == 5
+    assert all(
+        call["params"].get("appids") == 870780 for call in transport.calls[1:]
+    )
+    assert len(transport.responses) == 1
+
+
+def test_exhausted_storesearch_rate_limit_aborts_instead_of_partial_outcome():
+    sleeps = []
+    transport = FakeTransport(
+        [response({"error": "limited"}, status=429) for _ in range(4)]
+    )
+    provider = SteamStoreProvider(
+        transport=transport,
+        sleeper=sleeps.append,
+        clock=lambda: 0.0,
+    )
+
+    with pytest.raises(RateLimitExhausted):
+        provider.retrieve(("Disco Elysium - The Final Cut",))
+
+    assert len(transport.calls) == 4
+    assert sleeps == [1.0, 2.0, 4.0]
 
 
 def test_timeout_is_reported_without_body_or_false_no_match():

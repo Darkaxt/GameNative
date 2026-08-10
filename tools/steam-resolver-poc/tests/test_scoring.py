@@ -79,6 +79,37 @@ def test_year_conflict_penalizes_and_edition_conflict_blocks_auto_accept():
     assert select_decision([conflicted]) == ("REVIEW_REQUIRED", "REVIEW_REQUIRED")
 
 
+def test_cross_store_original_year_does_not_veto_exact_verified_kotor_match():
+    source = source_copy(
+        source=Source.AMAZON,
+        stable_source_id="amzn1.adg.product.bc8c2cf6-ded7-42fb-91d9-d0865af9e57a",
+        display_name="Star Wars: Knights of the Old Republic II - The Sith Lords",
+        developer="Obsidian Entertainment",
+        release_year=2005,
+    )
+    steam = candidate(
+        steam_app_id=208580,
+        title="STAR WARS™ Knights of the Old Republic™ II - The Sith Lords™",
+        developer="Obsidian Entertainment",
+        publisher="LucasArts",
+        release_year=2012,
+    )
+
+    scored = score_candidate(source, steam)
+
+    assert scored.evidence["title"]["kind"] == "EXACT"
+    assert scored.evidence["developer"]["kind"] == "EXACT"
+    assert scored.evidence["releaseYear"] == {
+        "source": 2005,
+        "candidate": 2012,
+        "delta": 7,
+        "kind": "CROSS_STORE_RELEASE_VARIANCE",
+        "weight": 0.0,
+    }
+    assert scored.score == 0.86
+    assert select_decision([scored]) == ("AUTO_ACCEPT", "HIGH")
+
+
 def test_margin_below_eight_hundredths_requires_review():
     first = score_candidate(source_copy(), candidate(steam_app_id=20))
     second = score_candidate(source_copy(), candidate(steam_app_id=10, release_year=2021))

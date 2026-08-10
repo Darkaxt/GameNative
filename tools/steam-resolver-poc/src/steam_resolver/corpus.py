@@ -5,7 +5,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-from .http import HttpResponse, UrllibTransport, diagnostic
+from .http import (
+    HttpResponse,
+    UrllibTransport,
+    diagnostic,
+    ensure_retrying_transport,
+)
 from .models import OwnedCopy, Source
 from .normalization import normalize_title
 from .source_ids import encode_epic_stable_id
@@ -130,7 +135,7 @@ def validate_sources(
             "diagnostics": diagnostics,
         }
 
-    active_transport = transport or UrllibTransport()
+    active_transport = ensure_retrying_transport(transport or UrllibTransport())
     response_cache: dict[str, HttpResponse] = {}
     for case, owned_copy in valid_cases:
         label = case["caseId"]

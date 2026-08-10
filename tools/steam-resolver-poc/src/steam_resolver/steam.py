@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable
 
-from .http import HttpResponse, UrllibTransport, diagnostic
+from .http import (
+    HttpResponse,
+    UrllibTransport,
+    diagnostic,
+    ensure_retrying_transport,
+)
 from .models import AppType, ProviderBatch, SteamCandidate
 from .normalization import normalize_title
 
@@ -140,10 +146,14 @@ class SteamStoreProvider:
         transport: Any | None = None,
         max_search_candidates: int = 15,
         timeout: float = 10.0,
+        sleeper: Any = time.sleep,
+        clock: Any = time.time,
     ) -> None:
         if not 1 <= max_search_candidates <= 50:
             raise ValueError("max_search_candidates must be between 1 and 50")
-        self.transport = transport or UrllibTransport()
+        self.transport = ensure_retrying_transport(
+            transport or UrllibTransport(), sleeper=sleeper, clock=clock
+        )
         self.max_search_candidates = max_search_candidates
         self.timeout = timeout
 
@@ -235,9 +245,13 @@ class CachedIndexProvider:
         transport: Any | None = None,
         max_search_candidates: int = 15,
         timeout: float = 10.0,
+        sleeper: Any = time.sleep,
+        clock: Any = time.time,
     ) -> None:
         self.index_path = Path(index_path)
-        self.transport = transport or UrllibTransport()
+        self.transport = ensure_retrying_transport(
+            transport or UrllibTransport(), sleeper=sleeper, clock=clock
+        )
         self.max_search_candidates = max_search_candidates
         self.timeout = timeout
 
@@ -339,9 +353,14 @@ def refresh_istore_index(
     api_key: str,
     timeout: float = 30.0,
     max_pages: int = 100,
+    sleeper: Any = time.sleep,
+    clock: Any = time.time,
 ) -> dict[str, Any]:
     if not api_key:
         raise ValueError("STEAM_WEB_API_KEY is required")
+    active_transport = ensure_retrying_transport(
+        transport, sleeper=sleeper, clock=clock
+    )
     apps_by_id: dict[int, str] = {}
     last_appid = 0
     pages = 0
@@ -352,7 +371,7 @@ def refresh_istore_index(
         }
         if last_appid:
             params["last_appid"] = last_appid
-        response = transport.get(
+        response = active_transport.get(
             ISTORE_APPLIST_URL,
             params=params,
             headers={"x-webapi-key": api_key},

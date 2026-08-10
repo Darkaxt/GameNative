@@ -168,10 +168,17 @@ def parse_review_page(body: str, *, page_number: int = 1) -> dict[str, Any]:
     }
 
 
-def _safe_text(element: Tag | None, limit: int) -> str | None:
+def _safe_text(
+    element: Tag | None, limit: int, *, preserve_emoticons: bool = False
+) -> str | None:
     if element is None:
         return None
     clone = copy.copy(element)
+    if preserve_emoticons:
+        for emoticon in clone.select("img.emoticon[alt]"):
+            alt = emoticon.get("alt")
+            if isinstance(alt, str):
+                emoticon.replace_with(f" {alt} ")
     for unwanted in clone.select("script, style, iframe, img, video, audio, object, embed"):
         unwanted.decompose()
     text = _WHITESPACE.sub(" ", clone.get_text(" ", strip=True)).strip()
@@ -212,6 +219,19 @@ def _paging_total_pages(soup: BeautifulSoup, current_page: int) -> int | None:
 def _raise_for_known_steam_error(soup: BeautifulSoup) -> None:
     if soup.select_one(".error_ctn, .community_home_error, #error_box, [data-steam-error]"):
         raise ParseError("steam_error_html", "Steam returned an error or blocked HTML page")
+    client_root = soup.select_one("#application_root")
+    community_bundle = soup.select_one(
+        "script[src*='/javascript/applications/community/main.js']"
+    )
+    server_forum_content = soup.select_one(
+        ".forum_topic, .forum_op, .forum_post, .commentthread_comment"
+    )
+    if client_root is not None and community_bundle is not None and server_forum_content is None:
+        raise ParseError(
+            "steam_client_rendered_shell",
+            "Steam returned a client-rendered application shell without forum content",
+            context={"representation": "client_rendered"},
+        )
 
 
 def parse_discussion_listing(body: str, app_id: int, route: str) -> dict[str, Any]:
@@ -295,6 +315,13 @@ def _stable_post_identity(element: Tag) -> dict[str, str] | None:
     return None
 
 
+def _is_blank_post_content(element: Tag) -> bool:
+    clone = copy.copy(element)
+    for line_break in clone.select("br"):
+        line_break.decompose()
+    return clone.find(True) is None and not clone.get_text(" ", strip=True)
+
+
 def parse_discussion_thread(body: str, app_id: int, route: str) -> dict[str, Any]:
     canonical_route = validate_discussion_route(app_id, route, RouteKind.THREAD)
     if canonical_route is None:
@@ -341,12 +368,22 @@ def parse_discussion_thread(body: str, app_id: int, route: str) -> dict[str, Any
             context={"postContainerCount": len(containers)},
         )
     posts: list[dict[str, Any]] = []
+    blank_post_count = 0
     skipped = 0
+    skipped_reasons: dict[str, int] = {}
     identity_fallbacks = 0
     for element_index, candidate in enumerate(candidates[:MAX_DISCUSSION_ITEMS], start=1):
-        text = _safe_text(candidate, MAX_POST_TEXT_CHARS)
+        text = _safe_text(
+            candidate, MAX_POST_TEXT_CHARS, preserve_emoticons=True
+        )
         if text is None:
-            skipped += 1
+            if _is_blank_post_content(candidate):
+                blank_post_count += 1
+            else:
+                skipped += 1
+                skipped_reasons["unmapped_post_content"] = (
+                    skipped_reasons.get("unmapped_post_content", 0) + 1
+                )
         else:
             identity = _stable_post_identity(candidate)
             if identity is None:
@@ -360,7 +397,12 @@ def parse_discussion_thread(body: str, app_id: int, route: str) -> dict[str, Any
         raise ParseError(
             "thread_selector_drift",
             "Steam post content selectors matched but yielded no bounded plain text",
-            context={"candidateCount": len(candidates), "skippedItemCount": skipped},
+            context={
+                "candidateCount": len(candidates),
+                "blankPostCount": blank_post_count,
+                "skippedItemCount": skipped,
+                "skippedItemReasons": skipped_reasons,
+            },
         )
     return {
         "title": title,
@@ -372,5 +414,7 @@ def parse_discussion_thread(body: str, app_id: int, route: str) -> dict[str, Any
             _paging_total_pages(soup, route_page(canonical_route, RouteKind.THREAD)),
         ),
         "skippedItems": skipped,
+        "skippedItemReasons": skipped_reasons,
+        "blankPostCount": blank_post_count,
         "identityFallbacks": identity_fallbacks,
     }

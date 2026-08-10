@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from .collector import CollectorConfig, SteamCommunityCollector
 from .http import BoundedHttpClient
-from .models import NetworkError, ParseError, PocError, ValidationError
+from .models import NetworkError, ParseError, PocError, RateLimitError, ValidationError
 from .schema import validate_result
 
 _TARGETS = (
@@ -148,6 +148,8 @@ def _error_type(error: PocError) -> str:
         return "validation"
     if isinstance(error, ParseError):
         return "parser"
+    if isinstance(error, RateLimitError):
+        return "rate_limit"
     if isinstance(error, NetworkError):
         return "http"
     return "validation"

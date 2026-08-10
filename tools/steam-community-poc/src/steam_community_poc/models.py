@@ -28,6 +28,10 @@ class NetworkError(PocError):
     pass
 
 
+class RateLimitError(NetworkError):
+    """Steam persisted with HTTP 429 after bounded idempotent retries."""
+
+
 @dataclass(frozen=True)
 class Diagnostic:
     type: str

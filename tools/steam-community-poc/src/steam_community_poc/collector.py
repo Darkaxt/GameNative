@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urlsplit
 
 from .bounds import MAX_PAGES_PER_KIND, MAX_SAMPLED_THREADS
 from .http import HttpResult, RequestPurpose
-from .models import Diagnostic, NetworkError, ParseError, PocError, ValidationError
+from .models import Diagnostic, NetworkError, ParseError, PocError, RateLimitError, ValidationError
 from .parsers import (
     parse_app_details,
     parse_discussion_listing,
@@ -165,6 +165,8 @@ class SteamCommunityCollector:
                     url, RequestPurpose.REVIEWS, diagnostics, app_id=app_id, page=page
                 )
                 parsed = parse_review_page(response.body, page_number=page)
+            except RateLimitError:
+                raise
             except PocError as error:
                 failed = True
                 self._append_error(diagnostics, error, page=page, purpose="reviews")
@@ -279,6 +281,8 @@ class SteamCommunityCollector:
                 )
                 parser_route = self._response_route(response, app_id, RouteKind.LISTING, route)
                 parsed = parse_discussion_listing(response.body, app_id, parser_route)
+            except RateLimitError:
+                raise
             except PocError as error:
                 failed = True
                 self._append_error(diagnostics, error, page=page, purpose="discussion_listing")
@@ -341,10 +345,45 @@ class SteamCommunityCollector:
             ),
             reverse=True,
         )
-        sampled = [
-            self._collect_thread(app_id, summary, thread_pages, diagnostics)
-            for summary in sampling_candidates[:sample_threads]
+        minimum_reply_count = max(0, (thread_pages - 1) * 15)
+        depth_candidates = [
+            summary
+            for summary in sampling_candidates
+            if summary["replyCount"] is None
+            or summary["replyCount"] >= minimum_reply_count
         ]
+        if not depth_candidates:
+            depth_candidates = sampling_candidates[:sample_threads]
+
+        sampled: list[dict[str, Any]] = []
+        shallow_fallbacks: list[dict[str, Any]] = []
+        for summary in depth_candidates[:MAX_SAMPLED_THREADS]:
+            thread = self._collect_thread(app_id, summary, thread_pages, diagnostics)
+            fetched_pages = thread["pagination"]["fetchedPages"]
+            if fetched_pages >= thread_pages:
+                sampled.append(thread)
+                if len(sampled) == sample_threads:
+                    break
+                continue
+            shallow_fallbacks.append(thread)
+            diagnostics.append(
+                Diagnostic(
+                    "pagination",
+                    "info",
+                    "thread_candidate_too_shallow",
+                    "Sampled thread paging did not prove the requested depth",
+                    {
+                        "route": thread["route"],
+                        "requestedPages": thread_pages,
+                        "fetchedPages": fetched_pages,
+                    },
+                ).as_dict()
+            )
+        if len(sampled) < sample_threads:
+            shallow_fallbacks.sort(
+                key=lambda thread: thread["pagination"]["fetchedPages"], reverse=True
+            )
+            sampled.extend(shallow_fallbacks[: sample_threads - len(sampled)])
         return {
             "sectionState": self._listing_state(items, fetched, continuation, failed),
             "items": items,
@@ -393,6 +432,8 @@ class SteamCommunityCollector:
                 )
                 parser_route = self._response_route(response, app_id, RouteKind.THREAD, route)
                 parsed = parse_discussion_thread(response.body, app_id, parser_route)
+            except RateLimitError:
+                raise
             except PocError as error:
                 failed = True
                 self._append_error(
@@ -411,6 +452,8 @@ class SteamCommunityCollector:
                         "page": page,
                         "itemCount": len(parsed["posts"]),
                         "skippedItemCount": parsed["skippedItems"],
+                        "skippedItemReasons": parsed["skippedItemReasons"],
+                        "blankPostCount": parsed["blankPostCount"],
                         "identityFallbackCount": parsed["identityFallbacks"],
                         "route": parser_route,
                     },
@@ -510,6 +553,7 @@ class SteamCommunityCollector:
                     "bodyBytes": result.body_bytes,
                     "contentType": result.content_type,
                     "redirectCount": len(result.redirects),
+                    "attempts": result.attempts,
                 },
             ).as_dict()
         )

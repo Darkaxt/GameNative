@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-09T23:46:06.938677+00:00",
+  "generatedAt": "2026-08-10T01:31:40.837433+00:00",
   "configuration": {
     "reviewPages": 3,
     "discussionPages": 3,
@@ -102,7 +102,13 @@
               "statusCode": 200,
               "bodyBytes": 3072,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -116,9 +122,15 @@
               "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
               "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
               "statusCode": 200,
-              "bodyBytes": 44260,
+              "bodyBytes": 30199,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -129,12 +141,18 @@
             "context": {
               "purpose": "reviews",
               "page": 2,
-              "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZhheAAAAAFP%2BDDDUAAAAB%2F0OvxBg%3D%3D",
-              "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZhheAAAAAFP%2BDDDUAAAAB%2F0OvxBg%3D%3D",
+              "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZhheAAAAAFP%2BDDDUAAAABz6dXxBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZhheAAAAAFP%2BDDDUAAAABz6dXxBg%3D%3D",
               "statusCode": 200,
-              "bodyBytes": 27314,
+              "bodyBytes": 28204,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -145,12 +163,18 @@
             "context": {
               "purpose": "reviews",
               "page": 3,
-              "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZpA%2BAAAAAFP%2BCTGoAAAAB6%2BpfuBg%3D%3D",
-              "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZpA%2BAAAAAFP%2BCTGoAAAAB6%2BpfuBg%3D%3D",
+              "requestedUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZ2iSAAAAAFP%2BA8kmAAAAB9n7TuBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/1562430?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFZ2iSAAAAAFP%2BA8kmAAAAB9n7TuBg%3D%3D",
               "statusCode": 200,
-              "bodyBytes": 25010,
+              "bodyBytes": 24216,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -166,7 +190,13 @@
               "statusCode": 200,
               "bodyBytes": 73295,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -182,7 +212,13 @@
               "statusCode": 200,
               "bodyBytes": 74359,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -198,7 +234,13 @@
               "statusCode": 200,
               "bodyBytes": 73026,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -212,9 +254,15 @@
               "requestedUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/",
               "finalUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/",
               "statusCode": 200,
-              "bodyBytes": 123877,
+              "bodyBytes": 123878,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -228,9 +276,15 @@
               "requestedUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/?ctp=2",
               "finalUrl": "https://steamcommunity.com/app/1562430/discussions/0/596268676749997442/?ctp=2",
               "statusCode": 200,
-              "bodyBytes": 122019,
+              "bodyBytes": 122016,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           }
         ],
@@ -316,6 +370,8 @@
               "page": 1,
               "itemCount": 16,
               "skippedItemCount": 0,
+              "skippedItemReasons": {},
+              "blankPostCount": 0,
               "identityFallbackCount": 0,
               "route": "/app/1562430/discussions/0/596268676749997442/"
             }
@@ -329,6 +385,8 @@
               "page": 2,
               "itemCount": 15,
               "skippedItemCount": 0,
+              "skippedItemReasons": {},
+              "blankPostCount": 0,
               "identityFallbackCount": 0,
               "route": "/app/1562430/discussions/0/596268676749997442/?ctp=2"
             }
@@ -428,7 +486,13 @@
               "statusCode": 200,
               "bodyBytes": 1202,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -442,9 +506,15 @@
               "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
               "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
               "statusCode": 200,
-              "bodyBytes": 32053,
+              "bodyBytes": 35492,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -455,12 +525,18 @@
             "context": {
               "purpose": "reviews",
               "page": 2,
-              "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFV6ssAAAAAFP%2BaIVMAAAAB196fwBg%3D%3D",
-              "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFV6ssAAAAAFP%2BaIVMAAAAB196fwBg%3D%3D",
+              "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFV8ikAAAAAFP%2BZ8iwAAAAB12u%2FvBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFV8ikAAAAAFP%2BZ8iwAAAAB12u%2FvBg%3D%3D",
               "statusCode": 200,
-              "bodyBytes": 29676,
+              "bodyBytes": 26249,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -471,12 +547,18 @@
             "context": {
               "purpose": "reviews",
               "page": 3,
-              "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYUlmAAAAAFP%2BKvcKAAAAB7gOvtBg%3D%3D",
-              "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYUlmAAAAAFP%2BKvcKAAAAB7gOvtBg%3D%3D",
+              "requestedUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYVVYAAAAAFP%2BKqqgAAAAB1nJv0Bg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/570?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYVVYAAAAAFP%2BKqqgAAAAB1nJv0Bg%3D%3D",
               "statusCode": 200,
-              "bodyBytes": 34900,
+              "bodyBytes": 35224,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -490,9 +572,15 @@
               "requestedUrl": "https://steamcommunity.com/app/570/discussions/",
               "finalUrl": "https://steamcommunity.com/app/570/discussions/",
               "statusCode": 200,
-              "bodyBytes": 76571,
+              "bodyBytes": 75228,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -506,9 +594,15 @@
               "requestedUrl": "https://steamcommunity.com/app/570/discussions/?fp=2",
               "finalUrl": "https://steamcommunity.com/app/570/discussions/?fp=2",
               "statusCode": 200,
-              "bodyBytes": 71219,
+              "bodyBytes": 71967,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -522,9 +616,15 @@
               "requestedUrl": "https://steamcommunity.com/app/570/discussions/?fp=3",
               "finalUrl": "https://steamcommunity.com/app/570/discussions/?fp=3",
               "statusCode": 200,
-              "bodyBytes": 71711,
+              "bodyBytes": 72005,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -538,9 +638,15 @@
               "requestedUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/",
               "finalUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/",
               "statusCode": 200,
-              "bodyBytes": 146338,
+              "bodyBytes": 146364,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -554,9 +660,15 @@
               "requestedUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/?ctp=2",
               "finalUrl": "https://steamcommunity.com/app/570/discussions/0/1696040635904700731/?ctp=2",
               "statusCode": 200,
-              "bodyBytes": 130773,
+              "bodyBytes": 130799,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           }
         ],
@@ -642,6 +754,8 @@
               "page": 1,
               "itemCount": 16,
               "skippedItemCount": 0,
+              "skippedItemReasons": {},
+              "blankPostCount": 0,
               "identityFallbackCount": 0,
               "route": "/app/570/discussions/0/1696040635904700731/"
             }
@@ -655,6 +769,8 @@
               "page": 2,
               "itemCount": 15,
               "skippedItemCount": 0,
+              "skippedItemReasons": {},
+              "blankPostCount": 0,
               "identityFallbackCount": 0,
               "route": "/app/570/discussions/0/1696040635904700731/?ctp=2"
             }
@@ -754,7 +870,13 @@
               "statusCode": 200,
               "bodyBytes": 710,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -768,9 +890,15 @@
               "requestedUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
               "finalUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20",
               "statusCode": 200,
-              "bodyBytes": 36022,
+              "bodyBytes": 36021,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -784,9 +912,15 @@
               "requestedUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFWIkIAAAAAFP%2BYvlmAAAABwgqbvBg%3D%3D",
               "finalUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFWIkIAAAAAFP%2BYvlmAAAABwgqbvBg%3D%3D",
               "statusCode": 200,
-              "bodyBytes": 48347,
+              "bodyBytes": 46704,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -797,12 +931,18 @@
             "context": {
               "purpose": "reviews",
               "page": 3,
-              "requestedUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYshcAAAAAFP%2BIWQgAAAAB8vLfxBg%3D%3D",
-              "finalUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYshcAAAAAFP%2BIWQgAAAAB8vLfxBg%3D%3D",
+              "requestedUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYshcAAAAAFP%2BIWQgAAAABz4MjwBg%3D%3D",
+              "finalUrl": "https://store.steampowered.com/appreviews/413150?json=1&filter=all&language=all&review_type=all&purchase_type=all&num_per_page=20&cursor=AoMFQFYshcAAAAAFP%2BIWQgAAAABz4MjwBg%3D%3D",
               "statusCode": 200,
-              "bodyBytes": 30313,
+              "bodyBytes": 30210,
               "contentType": "application/json",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -816,9 +956,15 @@
               "requestedUrl": "https://steamcommunity.com/app/413150/discussions/",
               "finalUrl": "https://steamcommunity.com/app/413150/discussions/",
               "statusCode": 200,
-              "bodyBytes": 74335,
+              "bodyBytes": 74348,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -834,7 +980,13 @@
               "statusCode": 200,
               "bodyBytes": 78556,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -850,7 +1002,13 @@
               "statusCode": 200,
               "bodyBytes": 70649,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -866,7 +1024,13 @@
               "statusCode": 200,
               "bodyBytes": 130381,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           },
           {
@@ -880,9 +1044,15 @@
               "requestedUrl": "https://steamcommunity.com/app/413150/discussions/0/574921762383389282/?ctp=2",
               "finalUrl": "https://steamcommunity.com/app/413150/discussions/0/574921762383389282/?ctp=2",
               "statusCode": 200,
-              "bodyBytes": 99575,
+              "bodyBytes": 99576,
               "contentType": "text/html",
-              "redirectCount": 0
+              "redirectCount": 0,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "statusCode": 200
+                }
+              ]
             }
           }
         ],
@@ -968,6 +1138,8 @@
               "page": 1,
               "itemCount": 16,
               "skippedItemCount": 0,
+              "skippedItemReasons": {},
+              "blankPostCount": 0,
               "identityFallbackCount": 0,
               "route": "/app/413150/discussions/0/574921762383389282/"
             }
@@ -981,6 +1153,8 @@
               "page": 2,
               "itemCount": 9,
               "skippedItemCount": 0,
+              "skippedItemReasons": {},
+              "blankPostCount": 0,
               "identityFallbackCount": 0,
               "route": "/app/413150/discussions/0/574921762383389282/?ctp=2"
             }

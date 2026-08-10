@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from enum import Enum
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urljoin, urlsplit
@@ -10,7 +13,7 @@ from urllib.parse import parse_qsl, urljoin, urlsplit
 import requests
 
 from .bounds import MAX_BODY_BYTES, MAX_CURSOR_CHARS, MAX_NETWORK_HOPS, MAX_REVIEW_ITEMS
-from .models import NetworkError
+from .models import NetworkError, RateLimitError
 from .routes import RouteKind, validate_discussion_route
 
 _REDIRECT_CODES = {301, 302, 303, 307, 308}
@@ -33,6 +36,7 @@ class HttpResult:
     body_bytes: int
     redirects: list[dict[str, Any]]
     content_type: str = "unknown"
+    attempts: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _safe_https_url(url: str, host: str) -> Any | None:
@@ -151,15 +155,45 @@ def _validated_content_type(response: Any, purpose: RequestPurpose) -> str:
     return media_type
 
 
+def _retry_delay(
+    retry_after: str | None,
+    fallback_index: int,
+    clock: Callable[[], datetime],
+) -> tuple[float, str]:
+    if retry_after is not None:
+        value = retry_after.strip()
+        if value.isascii() and value.isdecimal():
+            normalized = value.lstrip("0") or "0"
+            if len(normalized) > 2:
+                return 30.0, "seconds"
+            return min(30.0, float(normalized)), "seconds"
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            now = clock()
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=UTC)
+            delay = max(0.0, (retry_at - now).total_seconds())
+            return min(30.0, delay), "http_date"
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return float((1, 2, 4)[min(fallback_index, 2)]), "fallback"
+
+
 class BoundedHttpClient:
     def __init__(
         self,
         *,
         session_factory: Callable[[], Any] = requests.Session,
         timeout_seconds: float = 20.0,
+        sleeper: Callable[[float], None] = time.sleep,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._session_factory = session_factory
         self._timeout_seconds = timeout_seconds
+        self._sleeper = sleeper
+        self._clock = clock
 
     def get(
         self,
@@ -172,8 +206,11 @@ class BoundedHttpClient:
             raise NetworkError("request_rejected", "Initial request URL was rejected")
         current_url = url
         redirects: list[dict[str, Any]] = []
+        attempts: list[dict[str, Any]] = []
+        rate_limit_retries = 0
 
-        for _ in range(MAX_NETWORK_HOPS):
+        for attempt_number in range(1, MAX_NETWORK_HOPS + 1):
+            retry_delay: float | None = None
             session = self._session_factory()
             response = None
             try:
@@ -187,11 +224,38 @@ class BoundedHttpClient:
                     headers={
                         "Accept": "application/json,text/html;q=0.9,*/*;q=0.1",
                         "Cache-Control": "no-store",
-                        "User-Agent": "GameNative-Steam-Community-POC/0.1",
                     },
                 )
                 status = response.status_code
-                if status in _REDIRECT_CODES:
+                if status == 429:
+                    delay, source = _retry_delay(
+                        response.headers.get("Retry-After"),
+                        rate_limit_retries,
+                        self._clock,
+                    )
+                    rate_limit_retries += 1
+                    attempts.append(
+                        {
+                            "attempt": attempt_number,
+                            "statusCode": 429,
+                            "retryDelaySeconds": delay,
+                            "retryAfterSource": source,
+                        }
+                    )
+                    if attempt_number == MAX_NETWORK_HOPS:
+                        raise RateLimitError(
+                            "steam_rate_limited",
+                            "Steam rate limit persisted after four GET attempts",
+                            context={
+                                "url": current_url,
+                                "purpose": purpose.value,
+                                "attemptCount": attempt_number,
+                                "attempts": attempts.copy(),
+                            },
+                        )
+                    retry_delay = delay
+                elif status in _REDIRECT_CODES:
+                    attempts.append({"attempt": attempt_number, "statusCode": status})
                     location = response.headers.get("Location")
                     next_url = urljoin(current_url, location) if location else None
                     if next_url is None or not validate_request_url(
@@ -207,22 +271,26 @@ class BoundedHttpClient:
                     )
                     current_url = next_url
                     continue
-                if not 200 <= status < 300:
+                elif not 200 <= status < 300:
+                    attempts.append({"attempt": attempt_number, "statusCode": status})
                     raise NetworkError(
                         "http_status",
                         f"Steam returned HTTP {status}",
                         context={"url": current_url, "statusCode": status},
                     )
-                content_type = _validated_content_type(response, purpose)
-                body, body_bytes = self._read_bounded(response)
-                return HttpResult(
-                    body=body,
-                    status_code=status,
-                    final_url=current_url,
-                    body_bytes=body_bytes,
-                    redirects=redirects,
-                    content_type=content_type,
-                )
+                else:
+                    attempts.append({"attempt": attempt_number, "statusCode": status})
+                    content_type = _validated_content_type(response, purpose)
+                    body, body_bytes = self._read_bounded(response)
+                    return HttpResult(
+                        body=body,
+                        status_code=status,
+                        final_url=current_url,
+                        body_bytes=body_bytes,
+                        redirects=redirects,
+                        content_type=content_type,
+                        attempts=attempts,
+                    )
             except requests.RequestException as error:
                 raise NetworkError(
                     "network_failure",
@@ -234,6 +302,8 @@ class BoundedHttpClient:
                     response.close()
                 session.cookies.clear()
                 session.close()
+            if retry_delay is not None:
+                self._sleeper(retry_delay)
 
         raise NetworkError(
             "redirect_limit",

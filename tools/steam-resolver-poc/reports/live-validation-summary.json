@@ -1,22 +1,101 @@
 {
+  "ambiguityContract": {
+    "evidence": {
+      "eligibleCandidates": [
+        {
+          "releaseYear": 2012,
+          "steamAppId": 150,
+          "yearDelta": 3
+        },
+        {
+          "releaseYear": 2010,
+          "steamAppId": 100,
+          "yearDelta": 5
+        }
+      ],
+      "kind": "AMBIGUITY_RESOLVED_BY_PRIOR_YEAR",
+      "selectedSteamAppId": 150,
+      "sourceYear": 2015
+    },
+    "policy": "Among multiple verified title-family/developer/type candidates, select the unique candidate with max(releaseYear <= sourceYear); later remasters/remakes are ineligible to displace it.",
+    "result": {
+      "candidateSteamAppId": 150,
+      "confidence": "HIGH",
+      "decision": "AUTO_ACCEPT",
+      "margin": 1.0,
+      "score": 0.86
+    },
+    "reviewRequiredWhen": [
+      "source release year absent",
+      "no candidate at or before source year",
+      "closest eligible year tied",
+      "edition identity conflict unresolved",
+      "provider result partial"
+    ]
+  },
   "commands": [
     "python -m pytest -q",
-    "python -m steam_resolver resolve --input .cache/minimal-input.json --candidate-provider fixture --fixture tests/fixtures/store-control.json",
-    "python -m steam_resolver corpus validate-sources --file tests/corpus/real-30.json --live --output .cache/latest-live-source-validation.json",
-    "python -m steam_resolver corpus evaluate --file tests/corpus/real-30.json --candidate-provider storesearch --max-search-candidates 5 --max-output-candidates 5 --timeout 15 --output .cache/latest-live-resolver-evaluation.json"
+    "python -m steam_resolver corpus validate-sources --file tests/corpus/real-30.json --offline",
+    "python -m steam_resolver corpus evaluate --file tests/corpus/real-30.json --candidate-provider fixture --fixture tests/fixtures/steam-catalog-30.json --require-recall-at5 30 --require-top1 30 --require-auto 30",
+    "python -m steam_resolver corpus validate-sources --file tests/corpus/real-30.json --live",
+    "python -m steam_resolver corpus evaluate --file tests/corpus/real-30.json --candidate-provider storesearch --max-search-candidates 5 --max-output-candidates 5 --timeout 15 --require-recall-at5 30 --require-top1 30 --require-auto 30",
+    "python -m steam_resolver resolve --candidate-provider storesearch --timeout 30 --input -"
   ],
+  "crossStoreReleaseYearContract": {
+    "appTypeCompatible": true,
+    "caseId": "amazon-kotor-ii",
+    "developerEvidenceKind": "EXACT",
+    "editionConflict": false,
+    "policy": "A later Steam release year is neutral evidence, not a veto, only when the candidate is verified and already has exact normalized title, exact developer or publisher, compatible game type, clear margin, and no edition conflict.",
+    "releaseYearEvidence": {
+      "candidate": 2012,
+      "delta": 7,
+      "kind": "CROSS_STORE_RELEASE_VARIANCE",
+      "source": 2005,
+      "weight": 0.0
+    },
+    "result": {
+      "candidateSteamAppId": 208580,
+      "confidence": "HIGH",
+      "decision": "AUTO_ACCEPT",
+      "margin": 1.0,
+      "score": 0.86
+    },
+    "titleEvidenceKind": "EXACT"
+  },
   "deterministicTests": {
     "focusedContracts": [
-      "minimal exact verified input without optional metadata returns REVIEW_REQUIRED with candidateSteamAppId",
-      "partial provider with candidates returns REVIEW_REQUIRED",
-      "partial provider without candidates returns PROVIDER_UNAVAILABLE",
-      "wrong AUTO_ACCEPT is separated from automatic correctness"
+      "429 then 200 retries and records attempt/status/delay",
+      "persistent 429 aborts after four total attempts and three bounded sleeps",
+      "numeric and HTTP-date Retry-After are honored with a 30-second cap",
+      "exhausted rate limiting emits only RATE_LIMIT_EXHAUSTED on stderr with nonzero CLI exit",
+      "minimal exact verified input without optional metadata remains REVIEW_REQUIRED",
+      "partial providers cannot auto-accept or emit unmatched",
+      "automatic acceptance correctness is reported separately",
+      "KOTOR cross-store year variance is neutral for established identity",
+      "multi-candidate ambiguity selects the unique closest release year at or before source year",
+      "missing/no-prior/tied/edition-conflicting/partial ambiguity remains reviewable",
+      "Epic input accepts only a canonical product slug or canonical store.epicgames.com product URL",
+      "Epic CMS enforces a 1 MiB JSON body, unique productHome, namespace/title/offer identity, and validated HTTPS media",
+      "Epic fallback triggers only after complete nonpartial Steam UNMATCHED with no plausible candidate",
+      "partial/review/provider-failure/malformed/rate-limited Steam outcomes never trigger Epic fallback",
+      "derived Epic slug 404 emits typed SLUG_REQUIRED",
+      "persistent Epic CMS 429 emits only typed RATE_LIMIT_EXHAUSTED",
+      "Alan Wake 2 stale Coming Soon release label produces null date/year and preserves a warning"
     ],
-    "passed": 59
+    "offlineEvaluationByteDeterministic": true,
+    "passed": 84
   },
   "endpointDiagnostics": {
     "sourceCorroboration": [
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2638,
         "caseId": "gog-disco-elysium",
         "contentType": "application/json",
@@ -27,6 +106,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2199,
         "caseId": "gog-cyberpunk-2077",
         "contentType": "application/json",
@@ -37,6 +123,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2466,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -47,6 +140,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2702,
         "caseId": "gog-baldurs-gate-3",
         "contentType": "application/json",
@@ -57,6 +157,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2250,
         "caseId": "gog-stardew-valley",
         "contentType": "application/json",
@@ -67,6 +174,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2253,
         "caseId": "gog-no-mans-sky",
         "contentType": "application/json",
@@ -77,6 +191,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2075,
         "caseId": "gog-control-ultimate",
         "contentType": "application/json",
@@ -87,6 +208,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2360,
         "caseId": "gog-hollow-knight",
         "contentType": "application/json",
@@ -97,6 +225,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2834,
         "caseId": "gog-divinity-original-sin-2",
         "contentType": "application/json",
@@ -107,6 +242,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1842,
         "caseId": "gog-terraria",
         "contentType": "application/json",
@@ -117,6 +259,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 14154,
         "caseId": "epic-celeste",
         "contentType": "application/json",
@@ -127,6 +276,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 16075,
         "caseId": "epic-subnautica",
         "contentType": "application/json",
@@ -137,6 +293,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 16482,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -147,6 +310,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13310,
         "caseId": "epic-the-witness",
         "contentType": "application/json",
@@ -157,6 +327,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 16818,
         "caseId": "epic-oxenfree",
         "contentType": "application/json",
@@ -167,6 +344,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 33955,
         "caseId": "epic-slime-rancher",
         "contentType": "application/json",
@@ -177,6 +361,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 10565,
         "caseId": "epic-super-meat-boy",
         "contentType": "application/json",
@@ -187,6 +378,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 14881,
         "caseId": "epic-enter-the-gungeon",
         "contentType": "application/json",
@@ -197,6 +395,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13213,
         "caseId": "epic-world-of-goo",
         "contentType": "application/json",
@@ -207,6 +412,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 14808,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -217,6 +429,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6143,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "text/plain",
@@ -227,6 +446,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "text/plain",
@@ -237,6 +463,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6483,
         "caseId": "amazon-baldurs-gate-ii-ee",
         "contentType": "text/plain",
@@ -247,6 +480,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-baldurs-gate-ii-ee",
         "contentType": "text/plain",
@@ -257,6 +497,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4362,
         "caseId": "amazon-clouds-and-sheep-2",
         "contentType": "text/plain",
@@ -267,6 +514,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-clouds-and-sheep-2",
         "contentType": "text/plain",
@@ -277,6 +531,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5858,
         "caseId": "amazon-endling",
         "contentType": "text/plain",
@@ -287,6 +548,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-endling",
         "contentType": "text/plain",
@@ -297,6 +565,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5090,
         "caseId": "amazon-genesis-noir",
         "contentType": "text/plain",
@@ -307,6 +582,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-genesis-noir",
         "contentType": "text/plain",
@@ -317,6 +599,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5093,
         "caseId": "amazon-grime",
         "contentType": "text/plain",
@@ -327,6 +616,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-grime",
         "contentType": "text/plain",
@@ -337,6 +633,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4260,
         "caseId": "amazon-scarf",
         "contentType": "text/plain",
@@ -347,6 +650,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-scarf",
         "contentType": "text/plain",
@@ -357,6 +667,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5843,
         "caseId": "amazon-kotor-ii",
         "contentType": "text/plain",
@@ -367,6 +684,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-kotor-ii",
         "contentType": "text/plain",
@@ -377,6 +701,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5474,
         "caseId": "amazon-forgotten-city",
         "contentType": "text/plain",
@@ -387,6 +718,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-forgotten-city",
         "contentType": "text/plain",
@@ -397,6 +735,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5546,
         "caseId": "amazon-wall-world",
         "contentType": "text/plain",
@@ -407,6 +752,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 93287,
         "caseId": "amazon-wall-world",
         "contentType": "text/plain",
@@ -419,6 +771,13 @@
     ],
     "steamResolution": [
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "gog-disco-elysium",
         "contentType": "application/json",
@@ -431,6 +790,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 787,
         "caseId": "gog-disco-elysium",
         "contentType": "application/json",
@@ -443,6 +809,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 24539,
         "caseId": "gog-disco-elysium",
         "contentType": "application/json",
@@ -454,6 +827,13 @@
         "steamAppId": 632470
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6137,
         "caseId": "gog-disco-elysium",
         "contentType": "application/json",
@@ -465,6 +845,13 @@
         "steamAppId": 1233220
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1799,
         "caseId": "gog-cyberpunk-2077",
         "contentType": "application/json",
@@ -477,6 +864,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 35870,
         "caseId": "gog-cyberpunk-2077",
         "contentType": "application/json",
@@ -488,6 +882,13 @@
         "steamAppId": 1091500
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 21634,
         "caseId": "gog-cyberpunk-2077",
         "contentType": "application/json",
@@ -499,6 +900,13 @@
         "steamAppId": 2138330
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6984,
         "caseId": "gog-cyberpunk-2077",
         "contentType": "application/json",
@@ -510,6 +918,13 @@
         "steamAppId": 2060310
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 10067,
         "caseId": "gog-cyberpunk-2077",
         "contentType": "application/json",
@@ -521,6 +936,13 @@
         "steamAppId": 1495710
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3980,
         "caseId": "gog-cyberpunk-2077",
         "contentType": "application/json",
@@ -532,6 +954,13 @@
         "steamAppId": 3217460
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3726,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -544,6 +973,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3726,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -556,6 +992,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22843,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -567,6 +1010,13 @@
         "steamAppId": 292030
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5450,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -578,6 +1028,13 @@
         "steamAppId": 1229320
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13595,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -589,6 +1046,13 @@
         "steamAppId": 378648
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13988,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -600,6 +1064,13 @@
         "steamAppId": 378649
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 11656,
         "caseId": "gog-witcher-3",
         "contentType": "application/json",
@@ -611,6 +1082,13 @@
         "steamAppId": 355880
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1094,
         "caseId": "gog-baldurs-gate-3",
         "contentType": "application/json",
@@ -623,6 +1101,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "gog-baldurs-gate-3",
         "contentType": "application/json",
@@ -635,6 +1120,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 42221,
         "caseId": "gog-baldurs-gate-3",
         "contentType": "application/json",
@@ -646,6 +1138,13 @@
         "steamAppId": 1086940
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 15885,
         "caseId": "gog-baldurs-gate-3",
         "contentType": "application/json",
@@ -657,6 +1156,13 @@
         "steamAppId": 2378500
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 9718,
         "caseId": "gog-baldurs-gate-3",
         "contentType": "application/json",
@@ -668,6 +1174,13 @@
         "steamAppId": 2956320
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 710,
         "caseId": "gog-stardew-valley",
         "contentType": "application/json",
@@ -680,6 +1193,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 23341,
         "caseId": "gog-stardew-valley",
         "contentType": "application/json",
@@ -691,6 +1211,13 @@
         "steamAppId": 413150
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3703,
         "caseId": "gog-stardew-valley",
         "contentType": "application/json",
@@ -702,6 +1229,13 @@
         "steamAppId": 440820
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 417,
         "caseId": "gog-no-mans-sky",
         "contentType": "application/json",
@@ -714,6 +1248,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 417,
         "caseId": "gog-no-mans-sky",
         "contentType": "application/json",
@@ -726,6 +1267,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 113992,
         "caseId": "gog-no-mans-sky",
         "contentType": "application/json",
@@ -737,6 +1285,13 @@
         "steamAppId": 275850
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 429,
         "caseId": "gog-control-ultimate",
         "contentType": "application/json",
@@ -749,6 +1304,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 25437,
         "caseId": "gog-control-ultimate",
         "contentType": "application/json",
@@ -760,6 +1322,13 @@
         "steamAppId": 870780
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1967,
         "caseId": "gog-hollow-knight",
         "contentType": "application/json",
@@ -772,6 +1341,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 32828,
         "caseId": "gog-hollow-knight",
         "contentType": "application/json",
@@ -783,6 +1359,13 @@
         "steamAppId": 367520
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22185,
         "caseId": "gog-hollow-knight",
         "contentType": "application/json",
@@ -794,6 +1377,13 @@
         "steamAppId": 1030300
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6555,
         "caseId": "gog-hollow-knight",
         "contentType": "application/json",
@@ -805,6 +1395,13 @@
         "steamAppId": 598190
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 7325,
         "caseId": "gog-hollow-knight",
         "contentType": "application/json",
@@ -816,6 +1413,13 @@
         "steamAppId": 3928720
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6594,
         "caseId": "gog-hollow-knight",
         "contentType": "application/json",
@@ -827,6 +1431,13 @@
         "steamAppId": 916000
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "gog-divinity-original-sin-2",
         "contentType": "application/json",
@@ -839,6 +1450,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 450,
         "caseId": "gog-divinity-original-sin-2",
         "contentType": "application/json",
@@ -851,6 +1469,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 26049,
         "caseId": "gog-divinity-original-sin-2",
         "contentType": "application/json",
@@ -862,6 +1487,13 @@
         "steamAppId": 435150
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1057,
         "caseId": "gog-terraria",
         "contentType": "application/json",
@@ -874,6 +1506,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22403,
         "caseId": "gog-terraria",
         "contentType": "application/json",
@@ -885,6 +1524,13 @@
         "steamAppId": 105600
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13550,
         "caseId": "gog-terraria",
         "contentType": "application/json",
@@ -896,6 +1542,13 @@
         "steamAppId": 409210
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4797,
         "caseId": "gog-terraria",
         "contentType": "application/json",
@@ -907,6 +1560,13 @@
         "steamAppId": 1323320
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3307,
         "caseId": "epic-celeste",
         "contentType": "application/json",
@@ -919,6 +1579,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 15887,
         "caseId": "epic-celeste",
         "contentType": "application/json",
@@ -930,6 +1597,13 @@
         "steamAppId": 504230
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 7144,
         "caseId": "epic-celeste",
         "contentType": "application/json",
@@ -941,6 +1615,13 @@
         "steamAppId": 1092840
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3783,
         "caseId": "epic-celeste",
         "contentType": "application/json",
@@ -952,6 +1633,13 @@
         "steamAppId": 411401
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 15343,
         "caseId": "epic-celeste",
         "contentType": "application/json",
@@ -963,6 +1651,13 @@
         "steamAppId": 3779560
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 9172,
         "caseId": "epic-celeste",
         "contentType": "application/json",
@@ -974,6 +1669,13 @@
         "steamAppId": 4140930
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2211,
         "caseId": "epic-subnautica",
         "contentType": "application/json",
@@ -986,6 +1688,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 24952,
         "caseId": "epic-subnautica",
         "contentType": "application/json",
@@ -997,6 +1706,13 @@
         "steamAppId": 1962700
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 34243,
         "caseId": "epic-subnautica",
         "contentType": "application/json",
@@ -1008,6 +1724,13 @@
         "steamAppId": 264710
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 20217,
         "caseId": "epic-subnautica",
         "contentType": "application/json",
@@ -1019,17 +1742,13 @@
         "steamAppId": 848450
       },
       {
-        "bodyBytes": 5210,
-        "caseId": "epic-subnautica",
-        "contentType": "application/json",
-        "endpoint": "https://store.steampowered.com/api/appdetails?appids=3803320&l=english&cc=US",
-        "error": null,
-        "parser": "APPDETAILS_NON_GAME",
-        "source": "EPIC",
-        "status": 200,
-        "steamAppId": 3803320
-      },
-      {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3624,
         "caseId": "epic-subnautica",
         "contentType": "application/json",
@@ -1041,6 +1760,31 @@
         "steamAppId": 1619300
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
+        "bodyBytes": 5210,
+        "caseId": "epic-subnautica",
+        "contentType": "application/json",
+        "endpoint": "https://store.steampowered.com/api/appdetails?appids=3803320&l=english&cc=US",
+        "error": null,
+        "parser": "APPDETAILS_NON_GAME",
+        "source": "EPIC",
+        "status": 200,
+        "steamAppId": 3803320
+      },
+      {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -1053,6 +1797,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3612,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -1065,6 +1816,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -1077,17 +1835,13 @@
         "status": 200
       },
       {
-        "bodyBytes": 21307,
-        "caseId": "epic-inside",
-        "contentType": "application/json",
-        "endpoint": "https://store.steampowered.com/api/appdetails?appids=3609750&l=english&cc=US",
-        "error": null,
-        "parser": "APPDETAILS_OK",
-        "source": "EPIC",
-        "status": 200,
-        "steamAppId": 3609750
-      },
-      {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 17015,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -1099,6 +1853,31 @@
         "steamAppId": 4474080
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
+        "bodyBytes": 21307,
+        "caseId": "epic-inside",
+        "contentType": "application/json",
+        "endpoint": "https://store.steampowered.com/api/appdetails?appids=3609750&l=english&cc=US",
+        "error": null,
+        "parser": "APPDETAILS_OK",
+        "source": "EPIC",
+        "status": 200,
+        "steamAppId": 3609750
+      },
+      {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 38503,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -1110,6 +1889,13 @@
         "steamAppId": 1987080
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 16840,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -1121,6 +1907,13 @@
         "steamAppId": 304430
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 31344,
         "caseId": "epic-inside",
         "contentType": "application/json",
@@ -1132,7 +1925,14 @@
         "steamAppId": 3478920
       },
       {
-        "bodyBytes": 3530,
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
+        "bodyBytes": 3528,
         "caseId": "epic-the-witness",
         "contentType": "application/json",
         "endpoint": "https://store.steampowered.com/api/storesearch/?term=The+Witness&l=english&cc=US",
@@ -1144,6 +1944,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 10069,
         "caseId": "epic-the-witness",
         "contentType": "application/json",
@@ -1155,6 +1962,13 @@
         "steamAppId": 210970
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 12488,
         "caseId": "epic-the-witness",
         "contentType": "application/json",
@@ -1166,6 +1980,13 @@
         "steamAppId": 2926180
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 8607,
         "caseId": "epic-the-witness",
         "contentType": "application/json",
@@ -1177,6 +1998,13 @@
         "steamAppId": 2926480
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4353,
         "caseId": "epic-the-witness",
         "contentType": "application/json",
@@ -1188,17 +2016,31 @@
         "steamAppId": 2984060
       },
       {
-        "bodyBytes": 16952,
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
+        "bodyBytes": 17557,
         "caseId": "epic-the-witness",
         "contentType": "application/json",
-        "endpoint": "https://store.steampowered.com/api/appdetails?appids=4947540&l=english&cc=US",
+        "endpoint": "https://store.steampowered.com/api/appdetails?appids=4483120&l=english&cc=US",
         "error": null,
         "parser": "APPDETAILS_OK",
         "source": "EPIC",
         "status": 200,
-        "steamAppId": 4947540
+        "steamAppId": 4483120
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1058,
         "caseId": "epic-oxenfree",
         "contentType": "application/json",
@@ -1211,6 +2053,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4316,
         "caseId": "epic-oxenfree",
         "contentType": "application/json",
@@ -1222,6 +2071,13 @@
         "steamAppId": 433430
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 21030,
         "caseId": "epic-oxenfree",
         "contentType": "application/json",
@@ -1233,6 +2089,13 @@
         "steamAppId": 388880
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 26706,
         "caseId": "epic-oxenfree",
         "contentType": "application/json",
@@ -1244,6 +2107,13 @@
         "steamAppId": 1574310
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3507,
         "caseId": "epic-slime-rancher",
         "contentType": "application/json",
@@ -1256,6 +2126,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 16392,
         "caseId": "epic-slime-rancher",
         "contentType": "application/json",
@@ -1267,6 +2144,13 @@
         "steamAppId": 1657630
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 33624,
         "caseId": "epic-slime-rancher",
         "contentType": "application/json",
@@ -1278,6 +2162,13 @@
         "steamAppId": 433340
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3007,
         "caseId": "epic-slime-rancher",
         "contentType": "application/json",
@@ -1289,6 +2180,13 @@
         "steamAppId": 2117970
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4064,
         "caseId": "epic-slime-rancher",
         "contentType": "application/json",
@@ -1300,6 +2198,13 @@
         "steamAppId": 3922910
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 12159,
         "caseId": "epic-slime-rancher",
         "contentType": "application/json",
@@ -1311,6 +2216,13 @@
         "steamAppId": 1079180
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1846,
         "caseId": "epic-super-meat-boy",
         "contentType": "application/json",
@@ -1323,6 +2235,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 16214,
         "caseId": "epic-super-meat-boy",
         "contentType": "application/json",
@@ -1334,6 +2253,13 @@
         "steamAppId": 40800
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 19819,
         "caseId": "epic-super-meat-boy",
         "contentType": "application/json",
@@ -1345,6 +2271,13 @@
         "steamAppId": 3288210
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 18464,
         "caseId": "epic-super-meat-boy",
         "contentType": "application/json",
@@ -1356,6 +2289,13 @@
         "steamAppId": 581660
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 7104,
         "caseId": "epic-super-meat-boy",
         "contentType": "application/json",
@@ -1367,6 +2307,13 @@
         "steamAppId": 969710
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4410,
         "caseId": "epic-super-meat-boy",
         "contentType": "application/json",
@@ -1378,6 +2325,13 @@
         "steamAppId": 1872150
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1751,
         "caseId": "epic-enter-the-gungeon",
         "contentType": "application/json",
@@ -1390,6 +2344,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 25866,
         "caseId": "epic-enter-the-gungeon",
         "contentType": "application/json",
@@ -1401,6 +2362,13 @@
         "steamAppId": 311690
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 7609,
         "caseId": "epic-enter-the-gungeon",
         "contentType": "application/json",
@@ -1412,6 +2380,13 @@
         "steamAppId": 2339840
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4826,
         "caseId": "epic-enter-the-gungeon",
         "contentType": "application/json",
@@ -1423,6 +2398,13 @@
         "steamAppId": 457840
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2880,
         "caseId": "epic-enter-the-gungeon",
         "contentType": "application/json",
@@ -1434,6 +2416,13 @@
         "steamAppId": 457841
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3322,
         "caseId": "epic-enter-the-gungeon",
         "contentType": "application/json",
@@ -1445,6 +2434,13 @@
         "steamAppId": 457842
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1647,
         "caseId": "epic-world-of-goo",
         "contentType": "application/json",
@@ -1457,6 +2453,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 12593,
         "caseId": "epic-world-of-goo",
         "contentType": "application/json",
@@ -1468,6 +2471,13 @@
         "steamAppId": 22000
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 24196,
         "caseId": "epic-world-of-goo",
         "contentType": "application/json",
@@ -1479,6 +2489,13 @@
         "steamAppId": 3385670
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5276,
         "caseId": "epic-world-of-goo",
         "contentType": "application/json",
@@ -1490,6 +2507,13 @@
         "steamAppId": 3681380
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 10585,
         "caseId": "epic-world-of-goo",
         "contentType": "application/json",
@@ -1501,6 +2525,13 @@
         "steamAppId": 1271470
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2017,
         "caseId": "epic-world-of-goo",
         "contentType": "application/json",
@@ -1512,6 +2543,13 @@
         "steamAppId": 22010
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1524,6 +2562,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3153,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1536,6 +2581,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1548,6 +2600,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13465,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1559,6 +2618,13 @@
         "steamAppId": 48000
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6902,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1570,6 +2636,13 @@
         "steamAppId": 568400
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 10325,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1581,6 +2654,13 @@
         "steamAppId": 1389260
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 23888,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1592,6 +2672,13 @@
         "steamAppId": 1051900
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 10481,
         "caseId": "epic-limbo",
         "contentType": "application/json",
@@ -1603,6 +2690,13 @@
         "steamAppId": 2476430
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1888,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "application/json",
@@ -1615,6 +2709,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 744,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "application/json",
@@ -1627,6 +2728,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 23692,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "application/json",
@@ -1638,6 +2746,13 @@
         "steamAppId": 228280
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6544,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "application/json",
@@ -1649,6 +2764,13 @@
         "steamAppId": 459280
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13421,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "application/json",
@@ -1660,6 +2782,13 @@
         "steamAppId": 428520
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 24741,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "application/json",
@@ -1671,6 +2800,13 @@
         "steamAppId": 257350
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6537,
         "caseId": "amazon-baldurs-gate-ee",
         "contentType": "application/json",
@@ -1682,6 +2818,13 @@
         "steamAppId": 467620
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 773,
         "caseId": "amazon-baldurs-gate-ii-ee",
         "contentType": "application/json",
@@ -1694,6 +2837,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 384,
         "caseId": "amazon-baldurs-gate-ii-ee",
         "contentType": "application/json",
@@ -1706,6 +2856,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 24741,
         "caseId": "amazon-baldurs-gate-ii-ee",
         "contentType": "application/json",
@@ -1717,6 +2874,13 @@
         "steamAppId": 257350
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6537,
         "caseId": "amazon-baldurs-gate-ii-ee",
         "contentType": "application/json",
@@ -1728,6 +2892,13 @@
         "steamAppId": 467620
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 374,
         "caseId": "amazon-clouds-and-sheep-2",
         "contentType": "application/json",
@@ -1740,6 +2911,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 374,
         "caseId": "amazon-clouds-and-sheep-2",
         "contentType": "application/json",
@@ -1752,6 +2930,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 14176,
         "caseId": "amazon-clouds-and-sheep-2",
         "contentType": "application/json",
@@ -1763,6 +2948,13 @@
         "steamAppId": 439800
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1148,
         "caseId": "amazon-endling",
         "contentType": "application/json",
@@ -1775,6 +2967,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1148,
         "caseId": "amazon-endling",
         "contentType": "application/json",
@@ -1787,6 +2986,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 28215,
         "caseId": "amazon-endling",
         "contentType": "application/json",
@@ -1798,6 +3004,13 @@
         "steamAppId": 898890
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 12809,
         "caseId": "amazon-endling",
         "contentType": "application/json",
@@ -1809,6 +3022,13 @@
         "steamAppId": 2025890
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 6790,
         "caseId": "amazon-endling",
         "contentType": "application/json",
@@ -1820,6 +3040,13 @@
         "steamAppId": 2081531
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1416,
         "caseId": "amazon-genesis-noir",
         "contentType": "application/json",
@@ -1832,6 +3059,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 28251,
         "caseId": "amazon-genesis-noir",
         "contentType": "application/json",
@@ -1843,6 +3077,13 @@
         "steamAppId": 735290
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 7942,
         "caseId": "amazon-genesis-noir",
         "contentType": "application/json",
@@ -1854,6 +3095,13 @@
         "steamAppId": 1550160
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 8047,
         "caseId": "amazon-genesis-noir",
         "contentType": "application/json",
@@ -1865,6 +3113,13 @@
         "steamAppId": 1550161
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5774,
         "caseId": "amazon-genesis-noir",
         "contentType": "application/json",
@@ -1876,6 +3131,13 @@
         "steamAppId": 1530730
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3505,
         "caseId": "amazon-grime",
         "contentType": "application/json",
@@ -1888,6 +3150,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 25111,
         "caseId": "amazon-grime",
         "contentType": "application/json",
@@ -1899,6 +3168,13 @@
         "steamAppId": 2529790
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 37271,
         "caseId": "amazon-grime",
         "contentType": "application/json",
@@ -1910,6 +3186,13 @@
         "steamAppId": 1123050
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 9475,
         "caseId": "amazon-grime",
         "contentType": "application/json",
@@ -1921,6 +3204,13 @@
         "steamAppId": 4958410
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 10773,
         "caseId": "amazon-grime",
         "contentType": "application/json",
@@ -1932,6 +3222,13 @@
         "steamAppId": 4103630
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5764,
         "caseId": "amazon-grime",
         "contentType": "application/json",
@@ -1943,6 +3240,13 @@
         "steamAppId": 1701310
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3399,
         "caseId": "amazon-scarf",
         "contentType": "application/json",
@@ -1955,6 +3259,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 16593,
         "caseId": "amazon-scarf",
         "contentType": "application/json",
@@ -1966,6 +3277,13 @@
         "steamAppId": 650330
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 23274,
         "caseId": "amazon-scarf",
         "contentType": "application/json",
@@ -1977,6 +3295,13 @@
         "steamAppId": 4272460
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 21540,
         "caseId": "amazon-scarf",
         "contentType": "application/json",
@@ -1988,6 +3313,13 @@
         "steamAppId": 645320
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 13536,
         "caseId": "amazon-scarf",
         "contentType": "application/json",
@@ -1999,6 +3331,13 @@
         "steamAppId": 3889980
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 4438,
         "caseId": "amazon-scarf",
         "contentType": "application/json",
@@ -2010,6 +3349,13 @@
         "steamAppId": 467036
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22,
         "caseId": "amazon-kotor-ii",
         "contentType": "application/json",
@@ -2022,6 +3368,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 396,
         "caseId": "amazon-kotor-ii",
         "contentType": "application/json",
@@ -2034,6 +3387,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 15408,
         "caseId": "amazon-kotor-ii",
         "contentType": "application/json",
@@ -2045,6 +3405,13 @@
         "steamAppId": 208580
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 1071,
         "caseId": "amazon-forgotten-city",
         "contentType": "application/json",
@@ -2057,6 +3424,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 17433,
         "caseId": "amazon-forgotten-city",
         "contentType": "application/json",
@@ -2068,6 +3442,13 @@
         "steamAppId": 874260
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3159,
         "caseId": "amazon-forgotten-city",
         "contentType": "application/json",
@@ -2079,6 +3460,13 @@
         "steamAppId": 1662400
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 5477,
         "caseId": "amazon-forgotten-city",
         "contentType": "application/json",
@@ -2090,6 +3478,13 @@
         "steamAppId": 1662430
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 2888,
         "caseId": "amazon-wall-world",
         "contentType": "application/json",
@@ -2102,6 +3497,13 @@
         "status": 200
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 22752,
         "caseId": "amazon-wall-world",
         "contentType": "application/json",
@@ -2113,6 +3515,13 @@
         "steamAppId": 2187290
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 28920,
         "caseId": "amazon-wall-world",
         "contentType": "application/json",
@@ -2124,6 +3533,13 @@
         "steamAppId": 3467710
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 3589,
         "caseId": "amazon-wall-world",
         "contentType": "application/json",
@@ -2135,6 +3551,13 @@
         "steamAppId": 4071020
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 27022,
         "caseId": "amazon-wall-world",
         "contentType": "application/json",
@@ -2146,6 +3569,13 @@
         "steamAppId": 4218360
       },
       {
+        "attempts": [
+          {
+            "attempt": 1,
+            "delaySeconds": 0.0,
+            "status": 200
+          }
+        ],
         "bodyBytes": 8994,
         "caseId": "amazon-wall-world",
         "contentType": "application/json",
@@ -2157,6 +3587,19 @@
         "steamAppId": 2474860
       }
     ]
+  },
+  "epicFallbackContract": {
+    "candidateSteamAppId": null,
+    "catalogIdCorroboratedByCms": false,
+    "confidence": "SOURCE_ONLY",
+    "decision": "SOURCE_CATALOG_FALLBACK",
+    "livePassed": true,
+    "matchMethod": "SOURCE_CATALOG",
+    "namespace": "c4763f236d08423eb47b4c3008779c84",
+    "offerId": "a7364ebfa54147f1b90f78a81c8093f7",
+    "releaseDate": null,
+    "releaseYear": null,
+    "report": "reports/epic-fallback-validation.json"
   },
   "minimalInputContract": {
     "autoAcceptanceRemainsCorroborationGated": true,
@@ -2173,6 +3616,25 @@
       "matchMethod": "STEAM_CATALOG",
       "score": 0.56
     }
+  },
+  "rateLimitContract": {
+    "cliExitCode": 4,
+    "continuesToOtherCandidatesAfterExhaustion": false,
+    "diagnosticFields": [
+      "attempt",
+      "status",
+      "delaySeconds"
+    ],
+    "exhaustedError": "RATE_LIMIT_EXHAUSTED",
+    "fallbackDelaySeconds": [
+      1.0,
+      2.0,
+      4.0
+    ],
+    "liveObservation": "The fresh 30-case Steam run completed 154 HTTP GETs at status 200 on attempt one; the live Epic fallback completed its Steam and CMS GETs at status 200 on attempt one. Deterministic tests cover retry and exhaustion paths.",
+    "matchJsonOnExhaustion": false,
+    "maxTotalAttempts": 4,
+    "retryAfterCapSeconds": 30.0
   },
   "resolverEvaluation": {
     "candidateProvider": "storesearch",
@@ -2243,6 +3705,74 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Disco+Elysium+-+The+Final+Cut&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "Disco Elysium - The Final Cut",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 787,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=disco+elysium+the+final+cut&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 2,
+              "parser": "STORESEARCH_OK",
+              "query": "disco elysium the final cut",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 24539,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=632470&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 632470
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6137,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1233220&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1233220
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -2288,6 +3818,8 @@
             "appType": "GAME",
             "developer": "ZA/UM",
             "displayName": "Disco Elysium - The Final Cut",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2019,
             "source": "GOG",
             "stableSourceId": "1771589310"
@@ -2365,6 +3897,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1799,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Cyberpunk+2077&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 5,
+              "parser": "STORESEARCH_OK",
+              "query": "Cyberpunk 2077",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 35870,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1091500&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1091500
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 21634,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2138330&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2138330
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6984,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2060310&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2060310
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 10067,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1495710&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1495710
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3980,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3217460&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 3217460
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -2406,6 +4037,8 @@
             "appType": "GAME",
             "developer": "CD PROJEKT RED",
             "displayName": "Cyberpunk 2077",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2020,
             "source": "GOG",
             "stableSourceId": "2093619782"
@@ -2483,6 +4116,122 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3726,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=The+Witcher+3%3A+Wild+Hunt&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 9,
+              "parser": "STORESEARCH_OK",
+              "query": "The Witcher 3: Wild Hunt",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3726,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=the+witcher+3+wild+hunt&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 9,
+              "parser": "STORESEARCH_OK",
+              "query": "the witcher 3 wild hunt",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22843,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=292030&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 292030
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 5450,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1229320&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1229320
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 13595,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=378648&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 378648
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 13988,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=378649&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 378649
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 11656,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=355880&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 355880
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -2524,6 +4273,8 @@
             "appType": "GAME",
             "developer": "CD PROJEKT RED",
             "displayName": "The Witcher 3: Wild Hunt",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2015,
             "source": "GOG",
             "stableSourceId": "1207664663"
@@ -2601,6 +4352,90 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1094,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Baldur%27s+Gate+3&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 3,
+              "parser": "STORESEARCH_OK",
+              "query": "Baldur's Gate 3",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=baldur+s+gate+3&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "baldur s gate 3",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 42221,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1086940&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1086940
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 15885,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2378500&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2378500
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 9718,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2956320&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2956320
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -2642,6 +4477,8 @@
             "appType": "GAME",
             "developer": "Larian Studios",
             "displayName": "Baldur's Gate 3",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2023,
             "source": "GOG",
             "stableSourceId": "1456460669"
@@ -2719,6 +4556,57 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 710,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Stardew+Valley&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 2,
+              "parser": "STORESEARCH_OK",
+              "query": "Stardew Valley",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 23341,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=413150&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 413150
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3703,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=440820&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 440820
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -2760,6 +4648,8 @@
             "appType": "GAME",
             "developer": "ConcernedApe",
             "displayName": "Stardew Valley",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2016,
             "source": "GOG",
             "stableSourceId": "1453375253"
@@ -2837,6 +4727,58 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 417,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=No+Man%27s+Sky&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "No Man's Sky",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 417,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=no+man+s+sky&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "no man s sky",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 113992,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=275850&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 275850
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -2878,6 +4820,8 @@
             "appType": "GAME",
             "developer": "Hello Games",
             "displayName": "No Man's Sky",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2016,
             "source": "GOG",
             "stableSourceId": "1446213994"
@@ -2959,6 +4903,41 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 429,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Control+Ultimate+Edition&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "Control Ultimate Edition",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 25437,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=870780&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 870780
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -3004,6 +4983,8 @@
             "appType": "GAME",
             "developer": "Remedy Entertainment",
             "displayName": "Control Ultimate Edition",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2020,
             "source": "GOG",
             "stableSourceId": "2049187585"
@@ -3128,6 +5109,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1967,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Hollow+Knight&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 5,
+              "parser": "STORESEARCH_OK",
+              "query": "Hollow Knight",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 32828,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=367520&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 367520
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22185,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1030300&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1030300
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6555,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=598190&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 598190
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 7325,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3928720&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 3928720
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6594,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=916000&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 916000
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -3169,6 +5249,8 @@
             "appType": "GAME",
             "developer": "Team Cherry",
             "displayName": "Hollow Knight",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2017,
             "source": "GOG",
             "stableSourceId": "1308320804"
@@ -3250,6 +5332,58 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Divinity%3A+Original+Sin+2+-+Definitive+Edition&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "Divinity: Original Sin 2 - Definitive Edition",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 450,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=divinity+original+sin+2+definitive+edition&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "divinity original sin 2 definitive edition",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 26049,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=435150&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 435150
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -3295,6 +5429,8 @@
             "appType": "GAME",
             "developer": "Larian Studios",
             "displayName": "Divinity: Original Sin 2 - Definitive Edition",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2017,
             "source": "GOG",
             "stableSourceId": "1584823040"
@@ -3372,6 +5508,73 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1057,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Terraria&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 3,
+              "parser": "STORESEARCH_OK",
+              "query": "Terraria",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22403,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=105600&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 105600
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 13550,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=409210&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 409210
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 4797,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1323320&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1323320
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -3413,6 +5616,8 @@
             "appType": "GAME",
             "developer": "Re-Logic",
             "displayName": "Terraria",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2011,
             "source": "GOG",
             "stableSourceId": "1207665503"
@@ -3538,6 +5743,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3307,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Celeste&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 9,
+              "parser": "STORESEARCH_OK",
+              "query": "Celeste",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 15887,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=504230&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 504230
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 7144,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1092840&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1092840
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3783,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=411401&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 411401
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 15343,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3779560&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 3779560
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 9172,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4140930&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 4140930
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -3579,6 +5883,8 @@
             "appType": "GAME",
             "developer": "Maddy Makes Games",
             "displayName": "Celeste",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2018,
             "source": "EPIC",
             "stableSourceId": "YjY3MWZiYzdiZTQyNGU4ODhjOTM0NmE5YTZkM2Q5ZGI.MzhjMDdhMDlkYzE3NGI2OWI3NTZhYTUxODkwYzNkZDQ"
@@ -3750,6 +6056,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 2211,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Subnautica&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 6,
+              "parser": "STORESEARCH_OK",
+              "query": "Subnautica",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 24952,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1962700&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1962700
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 34243,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=264710&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 264710
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 20217,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=848450&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 848450
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3624,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1619300&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1619300
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 5210,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3803320&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 3803320
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -3791,6 +6196,8 @@
             "appType": "GAME",
             "developer": "Unknown Worlds Entertainment",
             "displayName": "Subnautica",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2018,
             "source": "EPIC",
             "stableSourceId": "amFndWFy.MzI1N2UwNmMyODc2NDIzMWFjZDkzMDQ5ZjM3NzRlZDY"
@@ -4058,6 +6465,139 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Playdead%27s+INSIDE&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "Playdead's INSIDE",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3612,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=INSIDE&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 10,
+              "parser": "STORESEARCH_OK",
+              "query": "INSIDE",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=playdead+s+inside&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "playdead s inside",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 17015,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4474080&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 4474080
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 21307,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3609750&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 3609750
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 38503,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1987080&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1987080
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 16840,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=304430&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 304430
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 31344,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3478920&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 3478920
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -4099,6 +6639,8 @@
             "appType": "GAME",
             "developer": "Playdead",
             "displayName": "Playdead's INSIDE",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2016,
             "source": "EPIC",
             "stableSourceId": "MTNiYjU3NzZiOWUxNDI0ZDg0Y2U0MmQ5YmE2MWMwY2E.NmZkYjVmZWJhNjY4NDZjZDg2MjNhNmQxNWNhNjgwODA"
@@ -4174,53 +6716,6 @@
             },
             {
               "appType": "GAME",
-              "developer": "HUATY//OFFGRID",
-              "evidence": {
-                "appType": {
-                  "candidate": "GAME",
-                  "compatible": true,
-                  "source": "GAME",
-                  "weight": 0.1
-                },
-                "developer": {
-                  "candidateKeys": [
-                    "huaty offgrid"
-                  ],
-                  "kind": "CONFLICT",
-                  "sourceKey": "thekla",
-                  "weight": 0.0
-                },
-                "edition": {
-                  "baseTitleMatch": false,
-                  "candidateBaseKey": "dependent state the last witness",
-                  "candidateTokens": [],
-                  "conflict": false,
-                  "sourceBaseKey": "the witness",
-                  "sourceTokens": []
-                },
-                "releaseYear": {
-                  "candidate": null,
-                  "delta": null,
-                  "kind": "UNKNOWN",
-                  "source": 2016,
-                  "weight": 0.0
-                },
-                "title": {
-                  "candidateKey": "dependent state the last witness",
-                  "kind": "NONE",
-                  "sourceKey": "the witness",
-                  "weight": 0.0
-                }
-              },
-              "publisher": "HUATY//OFFGRID",
-              "releaseYear": null,
-              "score": 0.1,
-              "steamAppId": 4947540,
-              "title": "Dependent State: The Last Witness",
-              "verified": true
-            },
-            {
-              "appType": "GAME",
               "developer": "Do Games Limited",
               "evidence": {
                 "appType": {
@@ -4265,11 +6760,157 @@
               "steamAppId": 2926180,
               "title": "City Legends: The Witness in the Rye Collector's Edition",
               "verified": true
+            },
+            {
+              "appType": "GAME",
+              "developer": "616 GAMES",
+              "evidence": {
+                "appType": {
+                  "candidate": "GAME",
+                  "compatible": true,
+                  "source": "GAME",
+                  "weight": 0.1
+                },
+                "developer": {
+                  "candidateKeys": [
+                    "616 games"
+                  ],
+                  "kind": "CONFLICT",
+                  "sourceKey": "thekla",
+                  "weight": 0.0
+                },
+                "edition": {
+                  "baseTitleMatch": false,
+                  "candidateBaseKey": "tales beyond the tomb no witnesses",
+                  "candidateTokens": [],
+                  "conflict": false,
+                  "sourceBaseKey": "the witness",
+                  "sourceTokens": []
+                },
+                "releaseYear": {
+                  "candidate": 2026,
+                  "delta": 10,
+                  "kind": "CONFLICT",
+                  "source": 2016,
+                  "weight": -0.1
+                },
+                "title": {
+                  "candidateKey": "tales beyond the tomb no witnesses",
+                  "kind": "NONE",
+                  "sourceKey": "the witness",
+                  "weight": 0.0
+                }
+              },
+              "publisher": "616 GAMES",
+              "releaseYear": 2026,
+              "score": 0.0,
+              "steamAppId": 4483120,
+              "title": "Tales Beyond The Tomb - No Witnesses",
+              "verified": true
             }
           ],
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3528,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=The+Witness&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 10,
+              "parser": "STORESEARCH_OK",
+              "query": "The Witness",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 10069,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=210970&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 210970
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 12488,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2926180&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 2926180
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 8607,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2926480&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2926480
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 4353,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2984060&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2984060
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 17557,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4483120&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 4483120
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -4311,11 +6952,13 @@
             "appType": "GAME",
             "developer": "Thekla, Inc.",
             "displayName": "The Witness",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2016,
             "source": "EPIC",
             "stableSourceId": "bWFnbm9saWE.YTM3OWYwNTBmYTNkNDdlNGEwZmE2OTZiMGVmNzQ0ZDU"
           },
-          "margin": 0.9,
+          "margin": 1.0,
           "matchMethod": "STEAM_CATALOG",
           "resolverVersion": 1,
           "schemaVersion": 1,
@@ -4436,6 +7079,73 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1058,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Oxenfree&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 3,
+              "parser": "STORESEARCH_OK",
+              "query": "Oxenfree",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 4316,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=433430&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 433430
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 21030,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=388880&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 388880
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 26706,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1574310&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1574310
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -4477,6 +7187,8 @@
             "appType": "GAME",
             "developer": "Night School Studio",
             "displayName": "Oxenfree",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2016,
             "source": "EPIC",
             "stableSourceId": "aGliaXNjdXM.YTMyYjRmYzg1ZTI0NDBiZDlkYWUwZGFjZTc2ZjVjODY"
@@ -4601,6 +7313,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3507,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Slime+Rancher&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 10,
+              "parser": "STORESEARCH_OK",
+              "query": "Slime Rancher",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 16392,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1657630&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1657630
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 33624,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=433340&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 433340
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3007,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2117970&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2117970
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 4064,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3922910&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 3922910
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 12159,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1079180&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1079180
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -4642,6 +7453,8 @@
             "appType": "GAME",
             "developer": "Monomi Park",
             "displayName": "Slime Rancher",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2017,
             "source": "EPIC",
             "stableSourceId": "Y29yeWRhbGlz.MWUzOGI2MThkMTA2NDMwZGI5NGI0NzRhYmJmZWNjMTY"
@@ -4814,6 +7627,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1846,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Super+Meat+Boy&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 5,
+              "parser": "STORESEARCH_OK",
+              "query": "Super Meat Boy",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 16214,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=40800&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 40800
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 19819,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3288210&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 3288210
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 18464,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=581660&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 581660
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 7104,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=969710&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 969710
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 4410,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1872150&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1872150
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -4855,6 +7767,8 @@
             "appType": "GAME",
             "developer": "Team Meat",
             "displayName": "Super Meat Boy",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2010,
             "source": "EPIC",
             "stableSourceId": "YnVmZmFsbw.N2ViNWJjOWVjMTY1NDJjN2JiMzE4NzRjZWFhZDQxMGY"
@@ -4981,6 +7895,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1751,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Enter+the+Gungeon&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 5,
+              "parser": "STORESEARCH_OK",
+              "query": "Enter the Gungeon",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 25866,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=311690&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 311690
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 7609,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2339840&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 2339840
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 4826,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=457840&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 457840
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 2880,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=457841&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 457841
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3322,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=457842&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 457842
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -5023,6 +8036,8 @@
             "appType": "GAME",
             "developer": "Dodge Roll",
             "displayName": "Enter the Gungeon",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2016,
             "source": "EPIC",
             "stableSourceId": "YmUxM2Y2YzRmYjExNDI3ZmJmMzMxM2NlOTNiOTdjYzA.MjViNzcxZGIwMTU1NGIxYmI0MGM1NjE3YjY2M2QxN2U"
@@ -5147,6 +8162,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1647,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=World+of+Goo&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 5,
+              "parser": "STORESEARCH_OK",
+              "query": "World of Goo",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 12593,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=22000&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 22000
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 24196,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3385670&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 3385670
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 5276,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3681380&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 3681380
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 10585,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1271470&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1271470
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 2017,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=22010&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 22010
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -5188,6 +8302,8 @@
             "appType": "GAME",
             "developer": "2D BOY",
             "displayName": "World of Goo",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2008,
             "source": "EPIC",
             "stableSourceId": "YW5lbW9uZQ.NzE2MjQ1ZTQ0ZjY5NDkzN2I2ODc5MmRjZDA5MGExNWM"
@@ -5455,6 +8571,139 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Playdead%27s+LIMBO&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "Playdead's LIMBO",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3153,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=LIMBO&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 10,
+              "parser": "STORESEARCH_OK",
+              "query": "LIMBO",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=playdead+s+limbo&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "playdead s limbo",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 13465,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=48000&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 48000
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6902,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=568400&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 568400
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 10325,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1389260&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1389260
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 23888,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1051900&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1051900
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 10481,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2476430&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 2476430
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -5496,6 +8745,8 @@
             "appType": "GAME",
             "developer": "Playdead",
             "displayName": "Playdead's LIMBO",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2010,
             "source": "EPIC",
             "stableSourceId": "OTIwNTMwMDYwNjhlNGFhOWIxYWQ0MTNmNzIwOTBmNWU.OTM1NGNkOTJhMjFmNDJhMTg2YjczYzk4NDI5MGM5NDI"
@@ -5628,6 +8879,122 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1888,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Baldur%27s+Gate%3A+Enhanced+Edition&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 5,
+              "parser": "STORESEARCH_OK",
+              "query": "Baldur's Gate: Enhanced Edition",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 744,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=baldur+s+gate+enhanced+edition&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 2,
+              "parser": "STORESEARCH_OK",
+              "query": "baldur s gate enhanced edition",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 23692,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=228280&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 228280
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6544,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=459280&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 459280
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 13421,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=428520&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 428520
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 24741,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=257350&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 257350
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6537,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=467620&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 467620
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -5673,6 +9040,8 @@
             "appType": "GAME",
             "developer": "Beamdog",
             "displayName": "Baldur's Gate: Enhanced Edition",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2012,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.5d35cae7-39d1-4e53-ba92-36004c4a5211"
@@ -5754,6 +9123,74 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 773,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Baldur%27s+Gate+II%3A+Enhanced+Edition&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 2,
+              "parser": "STORESEARCH_OK",
+              "query": "Baldur's Gate II: Enhanced Edition",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 384,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=baldur+s+gate+ii+enhanced+edition&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "baldur s gate ii enhanced edition",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 24741,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=257350&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 257350
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6537,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=467620&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 467620
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -5799,6 +9236,8 @@
             "appType": "GAME",
             "developer": "Beamdog",
             "displayName": "Baldur's Gate II: Enhanced Edition",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2013,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.852e8b11-4233-42dc-be63-89f2ea9ce78f"
@@ -5876,6 +9315,58 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 374,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Clouds+%26+Sheep+2&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "Clouds & Sheep 2",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 374,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=clouds+and+sheep+2&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "clouds and sheep 2",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 14176,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=439800&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 439800
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -5917,6 +9408,8 @@
             "appType": "GAME",
             "developer": "HandyGames",
             "displayName": "Clouds & Sheep 2",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2015,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.2cbd524e-6778-4f53-b367-b3255aca792c"
@@ -5995,6 +9488,90 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1148,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Endling%3A+Extinction+is+Forever&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 3,
+              "parser": "STORESEARCH_OK",
+              "query": "Endling: Extinction is Forever",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1148,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=endling+extinction+is+forever&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 3,
+              "parser": "STORESEARCH_OK",
+              "query": "endling extinction is forever",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 28215,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=898890&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 898890
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 12809,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2025890&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2025890
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 6790,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2081531&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2081531
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -6037,6 +9614,8 @@
             "appType": "GAME",
             "developer": "Herobeat Studios",
             "displayName": "Endling: Extinction is Forever",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2022,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.21965245-d668-4a8f-818a-38133698587b"
@@ -6115,6 +9694,89 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1416,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Genesis+Noir&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 4,
+              "parser": "STORESEARCH_OK",
+              "query": "Genesis Noir",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 28251,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=735290&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 735290
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 7942,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1550160&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1550160
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 8047,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1550161&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1550161
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 5774,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1530730&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1530730
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -6157,6 +9819,8 @@
             "appType": "GAME",
             "developer": "Feral Cat Den",
             "displayName": "Genesis Noir",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2021,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.35fd4aba-910f-4f83-b4b8-5ef898a20ae1"
@@ -6378,6 +10042,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3505,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=GRIME&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 10,
+              "parser": "STORESEARCH_OK",
+              "query": "GRIME",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 25111,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2529790&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 2529790
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 37271,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1123050&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 1123050
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 9475,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4958410&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 4958410
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 10773,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4103630&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 4103630
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 5764,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1701310&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1701310
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -6420,6 +10183,8 @@
             "appType": "GAME",
             "developer": "Clover Bite",
             "displayName": "GRIME",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2021,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.a533b569-f163-4ad9-b0dc-e6c069695a72"
@@ -6628,7 +10393,7 @@
                   "weight": 0.0
                 }
               },
-              "publisher": "Ignis Sanat 🔥",
+              "publisher": "Ignis Sanat \ud83d\udd25",
               "releaseYear": 2019,
               "score": 0.0,
               "steamAppId": 650330,
@@ -6639,6 +10404,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3399,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=SCARF&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 10,
+              "parser": "STORESEARCH_OK",
+              "query": "SCARF",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 16593,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=650330&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 650330
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 23274,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4272460&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 4272460
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 21540,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=645320&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 645320
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 13536,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3889980&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 3889980
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 4438,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=467036&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 467036
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -6681,6 +10545,8 @@
             "appType": "GAME",
             "developer": "Uprising Studios",
             "displayName": "SCARF",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2021,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.bcce181d-9bb0-4feb-8cac-1aad48afb56b"
@@ -6697,8 +10563,8 @@
         "top1": true
       },
       {
-        "autoAccepted": false,
-        "automaticCorrect": false,
+        "autoAccepted": true,
+        "automaticCorrect": true,
         "caseId": "amazon-kotor-ii",
         "displayName": "Star Wars: Knights of the Old Republic II - The Sith Lords",
         "expectedSteamAppId": 208580,
@@ -6737,9 +10603,9 @@
                 "releaseYear": {
                   "candidate": 2012,
                   "delta": 7,
-                  "kind": "CONFLICT",
+                  "kind": "CROSS_STORE_RELEASE_VARIANCE",
                   "source": 2005,
-                  "weight": -0.1
+                  "weight": 0.0
                 },
                 "title": {
                   "candidateKey": "star wars knights of the old republic ii the sith lords",
@@ -6750,15 +10616,67 @@
               },
               "publisher": "LucasArts",
               "releaseYear": 2012,
-              "score": 0.76,
+              "score": 0.86,
               "steamAppId": 208580,
-              "title": "STAR WARS™ Knights of the Old Republic™ II - The Sith Lords™",
+              "title": "STAR WARS\u2122 Knights of the Old Republic\u2122 II - The Sith Lords\u2122",
               "verified": true
             }
           ],
-          "confidence": "REVIEW_REQUIRED",
-          "decision": "REVIEW_REQUIRED",
+          "confidence": "HIGH",
+          "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Star+Wars%3A+Knights+of+the+Old+Republic+II+-+The+Sith+Lords&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 0,
+              "parser": "STORESEARCH_OK",
+              "query": "Star Wars: Knights of the Old Republic II - The Sith Lords",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 396,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=star+wars+knights+of+the+old+republic+ii+the+sith+lords&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 1,
+              "parser": "STORESEARCH_OK",
+              "query": "star wars knights of the old republic ii the sith lords",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 15408,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=208580&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 208580
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -6786,9 +10704,9 @@
             "releaseYear": {
               "candidate": 2012,
               "delta": 7,
-              "kind": "CONFLICT",
+              "kind": "CROSS_STORE_RELEASE_VARIANCE",
               "source": 2005,
-              "weight": -0.1
+              "weight": 0.0
             },
             "title": {
               "candidateKey": "star wars knights of the old republic ii the sith lords",
@@ -6801,6 +10719,8 @@
             "appType": "GAME",
             "developer": "Obsidian Entertainment",
             "displayName": "Star Wars: Knights of the Old Republic II - The Sith Lords",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2005,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.bc8c2cf6-ded7-42fb-91d9-d0865af9e57a"
@@ -6809,7 +10729,7 @@
           "matchMethod": "STEAM_CATALOG",
           "resolverVersion": 1,
           "schemaVersion": 1,
-          "score": 0.76,
+          "score": 0.86,
           "warnings": []
         },
         "source": "AMAZON",
@@ -6879,6 +10799,73 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 1071,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=The+Forgotten+City&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 3,
+              "parser": "STORESEARCH_OK",
+              "query": "The Forgotten City",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 17433,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=874260&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 874260
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3159,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1662400&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1662400
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 5477,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=1662430&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 1662430
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -6921,6 +10908,8 @@
             "appType": "GAME",
             "developer": "Modern Storyteller",
             "displayName": "The Forgotten City",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2021,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.e31e4571-b8d9-444e-852f-93846749eb40"
@@ -7092,6 +11081,105 @@
           "confidence": "HIGH",
           "decision": "AUTO_ACCEPT",
           "decisionSource": "AUTOMATIC",
+          "diagnostics": [
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 2888,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/storesearch/?term=Wall+World&l=english&cc=US",
+              "error": null,
+              "parsedCandidates": 8,
+              "parser": "STORESEARCH_OK",
+              "query": "Wall World",
+              "status": 200
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 22752,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2187290&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 2187290
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 28920,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=3467710&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 3467710
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 3589,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4071020&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 4071020
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 27022,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=4218360&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_OK",
+              "status": 200,
+              "steamAppId": 4218360
+            },
+            {
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "delaySeconds": 0.0,
+                  "status": 200
+                }
+              ],
+              "bodyBytes": 8994,
+              "contentType": "application/json",
+              "endpoint": "https://store.steampowered.com/api/appdetails?appids=2474860&l=english&cc=US",
+              "error": null,
+              "parser": "APPDETAILS_NON_GAME",
+              "status": 200,
+              "steamAppId": 2474860
+            }
+          ],
           "evidence": {
             "appType": {
               "candidate": "GAME",
@@ -7133,6 +11221,8 @@
             "appType": "GAME",
             "developer": "Alawar",
             "displayName": "Wall World",
+            "epicProductSlug": null,
+            "epicStoreUrl": null,
             "releaseYear": 2023,
             "source": "AMAZON",
             "stableSourceId": "amzn1.adg.product.c25c2ac3-b318-4192-96b7-bafef73060b9"
@@ -7150,27 +11240,15 @@
       }
     ],
     "decisionCounts": {
-      "AUTO_ACCEPT": 29,
-      "REVIEW_REQUIRED": 1
+      "AUTO_ACCEPT": 30
     },
-    "failures": [
-      {
-        "caseId": "amazon-kotor-ii",
-        "decision": "REVIEW_REQUIRED",
-        "expectedSteamAppId": 208580,
-        "reasons": [
-          "NOT_AUTOMATIC"
-        ],
-        "source": "AMAZON",
-        "topCandidateSteamAppId": 208580
-      }
-    ],
+    "failures": [],
     "mode": "live",
     "overall": {
-      "autoAcceptedCount": 29,
-      "autoAcceptedRate": 0.9667,
-      "automaticCorrectCount": 29,
-      "automaticCorrectRate": 0.9667,
+      "autoAcceptedCount": 30,
+      "autoAcceptedRate": 1.0,
+      "automaticCorrectCount": 30,
+      "automaticCorrectRate": 1.0,
       "caseCount": 30,
       "recallAt5": 1.0,
       "recallAt5Count": 30,
@@ -7179,10 +11257,10 @@
     },
     "perStore": {
       "AMAZON": {
-        "autoAcceptedCount": 9,
-        "autoAcceptedRate": 0.9,
-        "automaticCorrectCount": 9,
-        "automaticCorrectRate": 0.9,
+        "autoAcceptedCount": 10,
+        "autoAcceptedRate": 1.0,
+        "automaticCorrectCount": 10,
+        "automaticCorrectRate": 1.0,
         "caseCount": 10,
         "recallAt5": 1.0,
         "recallAt5Count": 10,

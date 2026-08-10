@@ -24,8 +24,11 @@ class OwnedCopy:
     developer: str | None = None
     release_year: int | None = None
     app_type: AppType = AppType.UNKNOWN
+    epic_product_slug: str | None = None
+    epic_store_url: str | None = None
 
     def __post_init__(self) -> None:
+        from .epic_input import parse_epic_store_url, validate_epic_product_slug
         from .source_ids import validate_source_id
 
         validate_source_id(self.source, self.stable_source_id)
@@ -40,6 +43,16 @@ class OwnedCopy:
                 raise TypeError("releaseYear must be an integer")
             if not 1900 <= self.release_year <= 2100:
                 raise ValueError("releaseYear must be between 1900 and 2100")
+        if self.epic_product_slug is not None and self.epic_store_url is not None:
+            raise ValueError("provide epicProductSlug or epicStoreUrl, not both")
+        if (self.epic_product_slug is not None or self.epic_store_url is not None) and (
+            self.source is not Source.EPIC
+        ):
+            raise ValueError("Epic product location is valid only for source EPIC")
+        if self.epic_product_slug is not None:
+            validate_epic_product_slug(self.epic_product_slug)
+        if self.epic_store_url is not None:
+            parse_epic_store_url(self.epic_store_url)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> OwnedCopy:
@@ -52,6 +65,8 @@ class OwnedCopy:
             "developer",
             "releaseYear",
             "appType",
+            "epicProductSlug",
+            "epicStoreUrl",
         }
         unexpected = sorted(set(payload) - allowed)
         if unexpected:
@@ -65,6 +80,8 @@ class OwnedCopy:
             developer=payload.get("developer"),
             release_year=payload.get("releaseYear"),
             app_type=AppType(app_type_value),
+            epic_product_slug=payload.get("epicProductSlug"),
+            epic_store_url=payload.get("epicStoreUrl"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -75,6 +92,8 @@ class OwnedCopy:
             "developer": self.developer,
             "releaseYear": self.release_year,
             "appType": self.app_type.value,
+            "epicProductSlug": self.epic_product_slug,
+            "epicStoreUrl": self.epic_store_url,
         }
 
 

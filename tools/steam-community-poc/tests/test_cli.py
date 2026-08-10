@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from steam_community_poc.cli import build_parser, run
-from steam_community_poc.models import ParseError
+from steam_community_poc.models import ParseError, RateLimitError
 
 
 def valid_result() -> dict:
@@ -111,6 +111,32 @@ def test_cli_rejects_nonpositive_numeric_target_before_network(capsys: pytest.Ca
     assert collector.calls == []
     assert error["error"]["type"] == "validation"
     assert error["error"]["code"] == "invalid_app_id"
+
+
+def test_cli_rate_limit_exhaustion_writes_stderr_only_and_no_partial_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "must-not-exist.json"
+    collector = CapturingCollector(
+        RateLimitError(
+            "steam_rate_limited",
+            "Steam rate limit persisted after four GET attempts",
+            context={"attemptCount": 4},
+        )
+    )
+
+    status = run(
+        ["Public title", "--output", str(output)],
+        collector_factory=lambda: collector,
+    )
+
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)
+    assert status == 1
+    assert captured.out == ""
+    assert not output.exists()
+    assert error["error"]["type"] == "rate_limit"
+    assert error["error"]["code"] == "steam_rate_limited"
 
 
 def test_cli_emits_typed_unexpected_failure_without_sensitive_exception_text(

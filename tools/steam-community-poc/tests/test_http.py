@@ -1,10 +1,12 @@
 from collections import deque
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import pytest
 
 from steam_community_poc.bounds import MAX_BODY_BYTES
 from steam_community_poc.http import BoundedHttpClient, RequestPurpose, validate_request_url
-from steam_community_poc.models import NetworkError
+from steam_community_poc.models import NetworkError, RateLimitError
 
 
 class FakeCookies:
@@ -94,6 +96,19 @@ def test_manual_redirect_uses_fresh_cookie_free_session_for_every_hop() -> None:
         assert "Cookie" not in kwargs["headers"]
 
 
+def test_discussion_request_preserves_requests_server_rendered_user_agent() -> None:
+    factory = SessionFactory([FakeResponse(200, b"final")])
+
+    BoundedHttpClient(session_factory=factory).get(
+        "https://steamcommunity.com/app/42/discussions/",
+        RequestPurpose.DISCUSSION_LISTING,
+        app_id=42,
+    )
+
+    _, kwargs = factory.sessions[0].calls[0]
+    assert "User-Agent" not in kwargs["headers"]
+
+
 def test_redirect_must_preserve_listing_route_kind() -> None:
     factory = SessionFactory(
         [FakeResponse(302, headers={"Location": "/app/42/discussions/0/100/"})]
@@ -138,6 +153,132 @@ def test_declared_response_body_is_rejected_before_iteration() -> None:
             RequestPurpose.DISCUSSION_LISTING,
             app_id=42,
         )
+
+
+def test_rate_limit_retries_then_returns_attempt_and_delay_diagnostics() -> None:
+    factory = SessionFactory(
+        [
+            FakeResponse(429, headers={"Retry-After": "2"}),
+            FakeResponse(200, b"final"),
+        ]
+    )
+    delays: list[float] = []
+
+    result = BoundedHttpClient(
+        session_factory=factory, sleeper=delays.append
+    ).get(
+        "https://steamcommunity.com/app/42/discussions/",
+        RequestPurpose.DISCUSSION_LISTING,
+        app_id=42,
+    )
+
+    assert result.body == "final"
+    assert delays == [2.0]
+    assert result.attempts == [
+        {
+            "attempt": 1,
+            "statusCode": 429,
+            "retryDelaySeconds": 2.0,
+            "retryAfterSource": "seconds",
+        },
+        {"attempt": 2, "statusCode": 200},
+    ]
+    assert len(factory.sessions) == 2
+
+
+def test_very_large_numeric_retry_after_is_safely_capped() -> None:
+    factory = SessionFactory(
+        [
+            FakeResponse(429, headers={"Retry-After": "9" * 10_000}),
+            FakeResponse(200, b"final"),
+        ]
+    )
+    delays: list[float] = []
+
+    result = BoundedHttpClient(
+        session_factory=factory, sleeper=delays.append
+    ).get(
+        "https://steamcommunity.com/app/42/discussions/",
+        RequestPurpose.DISCUSSION_LISTING,
+        app_id=42,
+    )
+
+    assert delays == [30.0]
+    assert result.attempts[0]["retryAfterSource"] == "seconds"
+
+
+def test_http_date_retry_after_is_capped_at_thirty_seconds() -> None:
+    now = datetime(2026, 8, 10, tzinfo=UTC)
+    factory = SessionFactory(
+        [
+            FakeResponse(
+                429,
+                headers={"Retry-After": format_datetime(now + timedelta(seconds=90))},
+            ),
+            FakeResponse(200, b"final"),
+        ]
+    )
+    delays: list[float] = []
+
+    result = BoundedHttpClient(
+        session_factory=factory,
+        sleeper=delays.append,
+        clock=lambda: now,
+    ).get(
+        "https://steamcommunity.com/app/42/discussions/",
+        RequestPurpose.DISCUSSION_LISTING,
+        app_id=42,
+    )
+
+    assert delays == [30.0]
+    assert result.attempts[0]["retryAfterSource"] == "http_date"
+
+
+def test_missing_or_invalid_retry_after_uses_one_two_four_fallback() -> None:
+    factory = SessionFactory(
+        [
+            FakeResponse(429),
+            FakeResponse(429, headers={"Retry-After": "invalid"}),
+            FakeResponse(429),
+            FakeResponse(200, b"final"),
+        ]
+    )
+    delays: list[float] = []
+
+    result = BoundedHttpClient(
+        session_factory=factory, sleeper=delays.append
+    ).get(
+        "https://steamcommunity.com/app/42/discussions/",
+        RequestPurpose.DISCUSSION_LISTING,
+        app_id=42,
+    )
+
+    assert delays == [1.0, 2.0, 4.0]
+    assert [attempt.get("retryAfterSource") for attempt in result.attempts[:-1]] == [
+        "fallback",
+        "fallback",
+        "fallback",
+    ]
+    assert len(factory.sessions) == 4
+
+
+def test_persistent_rate_limit_exhausts_after_four_total_get_attempts() -> None:
+    factory = SessionFactory([FakeResponse(429) for _ in range(4)])
+    delays: list[float] = []
+
+    with pytest.raises(RateLimitError) as caught:
+        BoundedHttpClient(
+            session_factory=factory, sleeper=delays.append
+        ).get(
+            "https://steamcommunity.com/app/42/discussions/",
+            RequestPurpose.DISCUSSION_LISTING,
+            app_id=42,
+        )
+
+    assert caught.value.code == "steam_rate_limited"
+    assert delays == [1.0, 2.0, 4.0]
+    assert len(factory.sessions) == 4
+    assert len(caught.value.context["attempts"]) == 4
 
 
 def test_success_response_content_type_must_match_request_purpose() -> None:

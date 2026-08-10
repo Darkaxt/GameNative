@@ -1,0 +1,1010 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-10T01:33:15.943364+00:00",
+  "corpus": {
+    "source": "resolver corpus",
+    "group": "GOG",
+    "groupPosition": 1,
+    "groupSize": 10,
+    "statement": "The GOG group is the resolver corpus's first exact group of 10."
+  },
+  "configuration": {
+    "reviewPages": 1,
+    "discussionPages": 10,
+    "threadPages": 3,
+    "sampleThreads": 1,
+    "rawBodiesPersisted": false
+  },
+  "completedEndpointCounts": {
+    "app_details": 2,
+    "discussion_listing": 100,
+    "discussion_thread": 30,
+    "reviews": 10,
+    "store_search": 10
+  },
+  "allSucceeded": true,
+  "targets": [
+    {
+      "target": {
+        "input": "632470",
+        "appId": 632470,
+        "title": "Disco Elysium - The Final Cut",
+        "resolution": "app_id"
+      },
+      "expectedTitle": "Disco Elysium - The Final Cut",
+      "expectedAppId": 632470,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Disco Elysium - The Final Cut",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "Translations/Localizations",
+        "route": "/app/632470/discussions/0/1640927348810597572/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "app_details": 1,
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "fallbackCommand": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "632470",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "usedAppIdFallback": true,
+      "resolutionAttempts": [
+        {
+          "input": "Disco Elysium - The Final Cut",
+          "method": "exact_title",
+          "success": false,
+          "error": {
+            "type": "parser",
+            "severity": "error",
+            "code": "exact_title_not_found",
+            "message": "Steam search did not return exactly one exact title match",
+            "context": {
+              "title": "Disco Elysium - The Final Cut",
+              "matchCount": 0
+            }
+          }
+        },
+        {
+          "input": "632470",
+          "method": "app_id_fallback",
+          "success": true,
+          "appId": 632470,
+          "title": "Disco Elysium - The Final Cut"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "Cyberpunk 2077",
+        "appId": 1091500,
+        "title": "Cyberpunk 2077",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "Cyberpunk 2077",
+      "expectedAppId": 1091500,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Cyberpunk 2077",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "Русское обсуждение❗️",
+        "route": "/app/1091500/discussions/0/1638661595058266593/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "Cyberpunk 2077",
+          "method": "exact_title",
+          "success": true,
+          "appId": 1091500,
+          "title": "Cyberpunk 2077"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "The Witcher 3: Wild Hunt",
+        "appId": 292030,
+        "title": "The Witcher 3: Wild Hunt",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "The Witcher 3: Wild Hunt",
+      "expectedAppId": 292030,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "The Witcher 3: Wild Hunt",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "wtf are the new minimum specs, only specs that run win 11 can play witcher 3 songs of past?",
+        "route": "/app/292030/discussions/0/662737213850680204/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "The Witcher 3: Wild Hunt",
+          "method": "exact_title",
+          "success": true,
+          "appId": 292030,
+          "title": "The Witcher 3: Wild Hunt"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "Baldur's Gate 3",
+        "appId": 1086940,
+        "title": "Baldur's Gate 3",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "Baldur's Gate 3",
+      "expectedAppId": 1086940,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Baldur's Gate 3",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "Sticky Information/Media/FAQ",
+        "route": "/app/1086940/discussions/0/1750150402422718627/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "Baldur's Gate 3",
+          "method": "exact_title",
+          "success": true,
+          "appId": 1086940,
+          "title": "Baldur's Gate 3"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "Stardew Valley",
+        "appId": 413150,
+        "title": "Stardew Valley",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "Stardew Valley",
+      "expectedAppId": 413150,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Stardew Valley",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "Why does so many people hate animals?",
+        "route": "/app/413150/discussions/0/343788552548803731/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "Stardew Valley",
+          "method": "exact_title",
+          "success": true,
+          "appId": 413150,
+          "title": "Stardew Valley"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "No Man's Sky",
+        "appId": 275850,
+        "title": "No Man's Sky",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "No Man's Sky",
+      "expectedAppId": 275850,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "No Man's Sky",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "Русскоязычный топик / RUSSIAN THREAD",
+        "route": "/app/275850/discussions/0/412448792352324678/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "No Man's Sky",
+          "method": "exact_title",
+          "success": true,
+          "appId": 275850,
+          "title": "No Man's Sky"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "Control Ultimate Edition",
+        "appId": 870780,
+        "title": "CONTROL Ultimate Edition",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "Control Ultimate Edition",
+      "expectedAppId": 870780,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Control Ultimate Edition",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "5080 Issue?",
+        "route": "/app/870780/discussions/0/599643321875309384/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "Control Ultimate Edition",
+          "method": "exact_title",
+          "success": true,
+          "appId": 870780,
+          "title": "CONTROL Ultimate Edition"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "Hollow Knight",
+        "appId": 367520,
+        "title": "Hollow Knight",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "Hollow Knight",
+      "expectedAppId": 367520,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Hollow Knight",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "How high can we count until Team Cherry announces their third game",
+        "route": "/app/367520/discussions/0/5221372225834275450/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "Hollow Knight",
+          "method": "exact_title",
+          "success": true,
+          "appId": 367520,
+          "title": "Hollow Knight"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "435150",
+        "appId": 435150,
+        "title": "Divinity: Original Sin 2 - Definitive Edition",
+        "resolution": "app_id"
+      },
+      "expectedTitle": "Divinity: Original Sin 2 - Definitive Edition",
+      "expectedAppId": 435150,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Divinity: Original Sin 2 - Definitive Edition",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "Русские сюда!",
+        "route": "/app/435150/discussions/0/355043117522299557/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 46,
+        "uniquePostIdentityCount": 46,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          15,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 0,
+      "endpointCounts": {
+        "app_details": 1,
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "fallbackCommand": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "435150",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "usedAppIdFallback": true,
+      "resolutionAttempts": [
+        {
+          "input": "Divinity: Original Sin 2 - Definitive Edition",
+          "method": "exact_title",
+          "success": false,
+          "error": {
+            "type": "parser",
+            "severity": "error",
+            "code": "exact_title_not_found",
+            "message": "Steam search did not return exactly one exact title match",
+            "context": {
+              "title": "Divinity: Original Sin 2 - Definitive Edition",
+              "matchCount": 0
+            }
+          }
+        },
+        {
+          "input": "435150",
+          "method": "app_id_fallback",
+          "success": true,
+          "appId": 435150,
+          "title": "Divinity: Original Sin 2 - Definitive Edition"
+        }
+      ]
+    },
+    {
+      "target": {
+        "input": "Terraria",
+        "appId": 105600,
+        "title": "Terraria",
+        "resolution": "exact_title"
+      },
+      "expectedTitle": "Terraria",
+      "expectedAppId": 105600,
+      "command": [
+        "python",
+        "-m",
+        "steam_community_poc.cli",
+        "Terraria",
+        "--review-pages",
+        "1",
+        "--discussion-pages",
+        "10",
+        "--thread-pages",
+        "3",
+        "--sample-threads",
+        "1",
+        "--pretty"
+      ],
+      "success": true,
+      "unmetConditions": [],
+      "schemaValid": true,
+      "identityMatchesExpectedAppId": true,
+      "discussionListing": {
+        "sectionState": "Listing",
+        "requestedPages": 10,
+        "fetchedPages": 10,
+        "uniqueRequestCount": 10,
+        "topicCount": 150,
+        "uniqueTopicIdentityCount": 150,
+        "duplicateTopicIdentityCount": 0,
+        "identityKinds": [
+          "discussion_route"
+        ],
+        "perPageItemCounts": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
+      },
+      "sampledThread": {
+        "title": "Nerf the Terraria item/enemy/etc above you.",
+        "route": "/app/105600/discussions/0/2595630410181572043/",
+        "sectionState": "Thread",
+        "requestedPages": 3,
+        "fetchedPages": 3,
+        "uniqueRequestCount": 3,
+        "postCount": 45,
+        "uniquePostIdentityCount": 45,
+        "duplicatePostIdentityCount": 0,
+        "identityKinds": [
+          "steam_post_id"
+        ],
+        "perPageItemCounts": [
+          16,
+          14,
+          15
+        ]
+      },
+      "discussionParserSkipCount": 0,
+      "discussionParserSkipReasons": {},
+      "blankPostCount": 1,
+      "endpointCounts": {
+        "discussion_listing": 10,
+        "discussion_thread": 3,
+        "reviews": 1,
+        "store_search": 1
+      },
+      "warningsAndErrors": [],
+      "usedAppIdFallback": false,
+      "resolutionAttempts": [
+        {
+          "input": "Terraria",
+          "method": "exact_title",
+          "success": true,
+          "appId": 105600,
+          "title": "Terraria"
+        }
+      ]
+    }
+  ]
+}

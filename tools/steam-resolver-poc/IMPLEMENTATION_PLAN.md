@@ -4,7 +4,7 @@
 
 **Goal:** Build and live-evaluate a standalone Python 3 CLI that resolves GOG, Epic, and Amazon owned-copy evidence to Steam catalog candidates without using expected Steam AppIDs during resolution.
 
-**Architecture:** Keep immutable input/output models, source-ID validation, normalization/scoring, HTTP providers, resolution orchestration, corpus validation, and CLI wiring in focused modules. Candidate retrieval uses public Steam `storesearch`; every candidate is verified through `appdetails`. A key-gated `IStoreService/GetAppList/v1` refresh path may populate a local candidate-name index, sending the key only through `x-webapi-key`.
+**Architecture:** Keep immutable input/output models, source-ID validation, normalization/scoring, HTTP providers, resolution orchestration, corpus validation, and CLI wiring in focused modules. Candidate retrieval uses public Steam `storesearch`; every candidate is verified through `appdetails`. A key-gated `IStoreService/GetAppList/v1` refresh path may populate a local candidate-name index, sending the key only through `x-webapi-key`. A presentation-only Epic CMS provider may run only after a complete, nonpartial Steam `UNMATCHED` with no plausible candidate; it preserves source identity and never emits a Steam AppID.
 
 **Tech Stack:** Python 3.11+, standard-library HTTP/JSON/dataclasses/argparse, pytest as the only test dependency.
 
@@ -19,14 +19,17 @@
 - `src/steam_resolver/scoring.py`: deterministic score/evidence and decision thresholds.
 - `src/steam_resolver/http.py`: bounded standard-library HTTP transport and redacted diagnostics.
 - `src/steam_resolver/steam.py`: live storesearch/appdetails provider and optional cached IStoreService index.
-- `src/steam_resolver/resolver.py`: query, verification, ranking, decision, and provider-failure orchestration.
+- `src/steam_resolver/epic_input.py`: canonical Epic slug/store-URL validation and one-shot derived location.
+- `src/steam_resolver/epic.py`: bounded unauthenticated Epic CMS client, identity/media validation, and source presentation parsing.
+- `src/steam_resolver/resolver.py`: query, verification, ranking, Steam decision, guarded Epic fallback, and provider-failure orchestration.
 - `src/steam_resolver/corpus.py`: authoritative 30-case contract, public source corroboration, evaluation metrics.
 - `src/steam_resolver/cli.py`, `__main__.py`, `__init__.py`: JSON CLI.
 - `tests/corpus/real-30.json`: exactly the approved 10 GOG, 10 Epic, and 10 Amazon cases.
 - `tests/fixtures/*.json`: deterministic Steam HTTP and malformed-response fixtures.
 - `tests/test_*.py`: deterministic unit, provider, resolver, corpus, and CLI contracts.
 - `reports/live-validation-summary.json`: observed source/live resolver results and diagnostics.
-- `FEATURE_REPORT.md`: concise implementation and honest live findings.
+- `reports/epic-fallback-validation.json`: deterministic contracts, live Alan Wake 2 proof, and 30-case regressions.
+- `FEATURE_REPORT.md`, `EPIC_FALLBACK_REPORT.md`: concise implementation and honest live findings.
 
 ### Task 1: Package and authoritative test inputs
 
@@ -39,8 +42,8 @@
 - [ ] Add source-ID tests for valid approved forms and malformed decimal/base64url/UUID forms, including canonical Epic re-encoding.
 - [ ] Add normalization tests for NFKC/casefold, punctuation/trademarks, legal developer suffixes, Playdead possessive aliases, and preserved edition tokens.
 - [ ] Add scoring tests for exact title/developer/year/type weights, year conflict, edition conflict, thresholds, margin, and AppID tie-breaking.
-- [ ] Add provider tests using injected fake transport for storesearch parsing, appdetails key/type/title/developer/year verification, malformed JSON, timeout, 429, partial details, bounded deduplication, and header-only IStore key handling.
-- [ ] Add resolver tests for `AUTO_ACCEPT/HIGH`, `REVIEW_REQUIRED`, `UNMATCHED`, `PROVIDER_UNAVAILABLE`, sorted bounded candidates, and absent expected-AppID access.
+- [ ] Add provider tests using injected fake transport for storesearch parsing, appdetails key/type/title/developer/year verification, malformed JSON, timeout, bounded 429 retries/exhaustion, numeric and HTTP-date `Retry-After`, partial details, bounded deduplication, and header-only IStore key handling.
+- [ ] Add resolver tests for `AUTO_ACCEPT/HIGH`, `REVIEW_REQUIRED`, `UNMATCHED`, `PROVIDER_UNAVAILABLE`, typed rate-limit exhaustion, deterministic bounded ordering, prior-year ambiguity resolution, and absent expected-AppID access.
 - [ ] Add CLI/schema tests for GameNative-aligned names and deterministic JSON serialization.
 - [ ] Run `python -m pytest -q` and record the expected RED caused by the absent `steam_resolver` implementation.
 
@@ -54,10 +57,10 @@
 
 ### Task 4: Minimal scoring and decisions
 
-- [ ] Implement score components exactly: title `0.56` exact or `0.53` safe-alias exact; developer up to `0.20`; year `0.14` exact/`0.10` ±1/`-0.10` conflict; compatible game type `0.10`.
+- [ ] Implement score components exactly: title `0.56` exact or `0.53` safe-alias exact; developer up to `0.20`; year `0.14` exact/`0.10` ±1/`-0.10` unresolved conflict; compatible game type `0.10`. Treat a later Steam release year as neutral only when verified exact title, exact developer/publisher, and compatible game type already establish identity.
 - [ ] Emit structured evidence for every score component and edition conflict.
-- [ ] Enforce `AUTO_ACCEPT/HIGH` only at score `>=0.80`, strong title, developer or year corroboration, margin `>=0.08`, and no edition conflict. Use `REVIEW_REQUIRED` at plausible `>=0.62`; otherwise `UNMATCHED`.
-- [ ] Sort by descending score then ascending AppID and bound output candidates.
+- [ ] Enforce `AUTO_ACCEPT/HIGH` only at score `>=0.80`, verified strong title, developer or year corroboration, known compatible type, margin `>=0.08`, and no edition conflict. Keep bare exact-title evidence reviewable rather than unmatched; fail closed on every partial provider run.
+- [ ] Sort by descending score then ascending AppID unless a unique closest candidate at/before source year resolves a verified multi-candidate ambiguity; then order the selected candidate, remaining eligible prior-year candidates, and all others deterministically. Bound output candidates.
 - [ ] Run scoring/resolver tests to GREEN without changing thresholds to fit corpus expectations.
 
 ### Task 5: Steam HTTP providers and diagnostics
@@ -65,7 +68,7 @@
 - [ ] Implement a transport that reports sanitized endpoint, HTTP status, content type, body size, parser result, and error class/message without recording headers or credentials.
 - [ ] Query `https://store.steampowered.com/api/storesearch/` with original/alias normalized title variants and deduplicate candidate AppIDs.
 - [ ] Verify every retrieved AppID through `https://store.steampowered.com/api/appdetails`, requiring a matching response key, `success=true`, and `type=game`; parse title, developer/publisher, and release year.
-- [ ] Distinguish complete no-match from provider unavailability. Partial detail failures produce review warnings/diagnostics, never false unmatched certainty.
+- [ ] Distinguish complete no-match from provider unavailability. Partial detail failures produce review warnings/diagnostics, never false unmatched certainty. HTTP 429 is retried up to four total GET attempts and, if exhausted, aborts the whole operation as typed `RATE_LIMIT_EXHAUSTED` without resolution JSON.
 - [ ] Implement optional paginated `IStoreService/GetAppList/v1` cache refresh; require `STEAM_WEB_API_KEY`, send it only as `x-webapi-key`, and never serialize/log it.
 - [ ] Run provider and full tests to GREEN.
 
@@ -73,7 +76,7 @@
 
 - [ ] Implement `resolve`, `steam-index refresh`, `corpus validate-sources`, and `corpus evaluate` commands with deterministic JSON output and nonzero exits only for invalid input/contract or unmet explicitly requested gates.
 - [ ] Implement offline source-ID/corpus validation and live public corroboration: GOG product API, Epic official product content, and Amazon's public Junk Store record plus UMU evidence where available.
-- [ ] Compute per-store and overall count, recall@5, top1, automatic decisions, decision counts, failures, endpoint/status/body/parser diagnostics, commands, and schema/contract result.
+- [ ] Compute per-store and overall count, recall@5, top1, separate auto-accepted and automatic-correct metrics, decision counts, explicit wrong-auto failures, endpoint/status/body/parser diagnostics, commands, and schema/contract result.
 - [ ] Ensure expected AppIDs are passed only to post-resolution metric comparison and never into resolver/provider calls.
 - [ ] Run all tests to GREEN and run CLI help/smoke commands.
 
@@ -85,7 +88,17 @@
 - [ ] Save `reports/live-validation-summary.json` with per-case and aggregate metrics, failures, commands, schema/contract result, and sanitized diagnostics.
 - [ ] Write `FEATURE_REPORT.md` summarizing architecture, TDD RED/GREEN evidence, commands, observed live metrics/misses, and limitations. Do not claim the design report's aspirational 30/30 gates if observation differs.
 
-### Task 8: Final verification and scope audit
+### Task 8: Epic-exclusive presentation fallback
+
+- [x] Add deterministic RED tests for valid CMS parsing, derived-slug 404, namespace/host/product-page validation, every prohibited Steam trigger state, and persistent 429 typed failure.
+- [x] Accept one canonical Epic product slug or store product URL; otherwise derive and try exactly one normalized title slug.
+- [x] Fetch only unauthenticated `store-content.ak.epicgames.com`, apply the shared four-attempt 429 policy, and enforce a 1 MiB JSON body bound.
+- [x] Validate root/page/offer namespace, strict normalized title, canonical slug/offer identity, optional catalog-ID agreement, and HTTPS Epic/Unreal media.
+- [x] Emit bounded source presentation with preserved identity and `SOURCE_CATALOG_FALLBACK/SOURCE_CATALOG/SOURCE_ONLY`, never a Steam AppID.
+- [x] Prove live with Alan Wake 2 and record stale `Coming Soon` as null date/year plus warning.
+- [x] Re-run deterministic, offline 30-case, live source, and live 30-case Steam validation; write dedicated Markdown and JSON reports.
+
+### Task 9: Final verification and scope audit
 
 - [ ] Run `python -m pytest -q` from the POC and record the exact pass count.
 - [ ] Run offline corpus validation/evaluation using recorded fixtures and verify deterministic output byte-for-byte across two runs.

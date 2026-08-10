@@ -154,4 +154,5 @@ def test_live_source_failure_preserves_endpoint_status_body_and_parser_diagnosti
         "bodyBytes": 24,
         "parser": "HTTP_ERROR",
         "error": None,
+        "attempts": [{"attempt": 1, "status": 503, "delaySeconds": 0.0}],
     }

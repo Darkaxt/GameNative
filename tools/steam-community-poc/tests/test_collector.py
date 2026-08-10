@@ -2,9 +2,11 @@ import json
 from collections import deque
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
+
 from steam_community_poc.collector import CollectorConfig, SteamCommunityCollector
 from steam_community_poc.http import HttpResult, RequestPurpose
-from steam_community_poc.models import NetworkError
+from steam_community_poc.models import NetworkError, RateLimitError
 from steam_community_poc.schema import validate_result
 
 
@@ -177,6 +179,34 @@ def test_collector_stops_repeated_cursor_and_reports_item_overlap() -> None:
     assert result["discussions"]["sectionState"]["kind"] == "Empty"
 
 
+def test_rate_limit_exhaustion_aborts_collection_instead_of_returning_partial_content() -> None:
+    http = ScriptedHttp(
+        [
+            response(json.dumps({"items": [{"id": 42, "name": "Exact Game"}]})),
+            response(review_body("First page", "next")),
+            RateLimitError(
+                "steam_rate_limited",
+                "Steam rate limit persisted after four GET attempts",
+                context={"attemptCount": 4},
+            ),
+        ]
+    )
+
+    with pytest.raises(RateLimitError) as caught:
+        SteamCommunityCollector(http).collect(
+            "Exact Game",
+            CollectorConfig(
+                review_pages=2,
+                discussion_pages=1,
+                thread_pages=1,
+                sample_threads=1,
+            ),
+        )
+
+    assert caught.value.code == "steam_rate_limited"
+    assert len(http.calls) == 3
+
+
 def test_collector_maps_first_page_network_failure_to_unavailable_state() -> None:
     http = ScriptedHttp(
         [
@@ -229,6 +259,82 @@ def test_thread_sampling_prefers_topics_with_enough_replies_for_pagination() -> 
     )
 
     assert http.calls[3][0].endswith("/app/42/discussions/0/200/")
+
+
+def test_thread_sampling_rejects_shallow_candidate_and_selects_proven_depth() -> None:
+    listing = """
+      <div class='forum_topic'>
+        <a class='forum_topic_overlay' href='/app/42/discussions/0/100/'></a>
+        <div class='forum_topic_name'>High count but shallow live thread</div>
+        <div class='forum_topic_reply_count'>100</div>
+      </div>
+      <div class='forum_topic'>
+        <a class='forum_topic_overlay' href='/app/42/discussions/0/200/'></a>
+        <div class='forum_topic_name'>Proven three-page thread</div>
+        <div class='forum_topic_reply_count'>90</div>
+      </div>
+    """
+    http = ScriptedHttp(
+        [
+            response(json.dumps({"items": [{"id": 42, "name": "Exact Game"}]})),
+            response(json.dumps({"success": 1, "reviews": []})),
+            response(listing),
+            response(thread_body("Shallow", pages=1, post_id=100)),
+            response(thread_body("Deep page one", pages=3, post_id=201)),
+            response(thread_body("Deep page two", pages=3, post_id=202)),
+            response(thread_body("Deep page three", pages=3, post_id=203)),
+        ]
+    )
+
+    result = SteamCommunityCollector(http).collect(
+        "Exact Game",
+        CollectorConfig(review_pages=1, discussion_pages=1, thread_pages=3, sample_threads=1),
+    )
+
+    sampled = result["discussions"]["sampledThreads"][0]
+    assert sampled["route"] == "/app/42/discussions/0/200/"
+    assert sampled["pagination"]["fetchedPages"] == 3
+    assert any(
+        diagnostic["code"] == "thread_candidate_too_shallow"
+        and diagnostic["context"]["route"] == "/app/42/discussions/0/100/"
+        for diagnostic in result["diagnostics"]
+    )
+
+
+def test_collector_surfaces_blank_post_omissions_without_parser_skip() -> None:
+    thread = """
+      <div class='topic'>Thread with one blank reply</div>
+      <div class='commentthread_comment' id='comment_98'>
+        <div class='commentthread_comment_text'>A visible reply</div>
+      </div>
+      <div class='commentthread_comment' id='comment_99'>
+        <div class='commentthread_comment_text'><br><br><br></div>
+      </div>
+    """
+    http = ScriptedHttp(
+        [
+            response(json.dumps({"items": [{"id": 42, "name": "Exact Game"}]})),
+            response(json.dumps({"success": 1, "reviews": []})),
+            response(listing_body(100, "Thread with one blank reply", pages=1)),
+            response(thread),
+        ]
+    )
+
+    result = SteamCommunityCollector(http).collect(
+        "Exact Game",
+        CollectorConfig(review_pages=1, discussion_pages=1, thread_pages=1, sample_threads=1),
+    )
+
+    parsed = next(
+        diagnostic
+        for diagnostic in result["diagnostics"]
+        if diagnostic["code"] == "discussion_thread_parsed"
+    )
+    assert parsed["context"]["blankPostCount"] == 1
+    assert parsed["context"]["skippedItemCount"] == 0
+    assert [post["text"] for post in result["discussions"]["sampledThreads"][0]["posts"]] == [
+        "A visible reply"
+    ]
 
 
 def test_review_cross_page_dedupe_uses_recommendation_id_not_mutable_card_text() -> None:

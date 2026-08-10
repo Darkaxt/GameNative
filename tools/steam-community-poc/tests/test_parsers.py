@@ -115,9 +115,71 @@ def test_thread_parser_returns_inert_text_and_numeric_span_ctp_next_route() -> N
         "route": "/app/42/discussions/0/100/",
         "nextRoute": "/app/42/discussions/0/100/?ctp=2",
         "skippedItems": 0,
+        "skippedItemReasons": {},
+        "blankPostCount": 0,
         "identityFallbacks": 0,
     }
     assert all("<" not in post["text"] for post in thread["posts"])
+
+
+def test_thread_parser_preserves_inert_emoticon_alt_text() -> None:
+    html = """
+    <div class='topic'>Emoticon reply</div>
+    <div class='commentthread_comment' id='comment_99'>
+      <div class='commentthread_comment_text'>
+        <img class='emoticon' alt=':1scoreSD:' src='https://steam.example/emoticon.png'>
+      </div>
+    </div>
+    """
+
+    thread = parse_discussion_thread(html, 42, "/app/42/discussions/0/100/")
+
+    assert thread["posts"] == [
+        {
+            "text": ":1scoreSD:",
+            "_identity": {"kind": "steam_post_id", "value": "comment_99"},
+        }
+    ]
+    assert thread["skippedItems"] == 0
+
+
+def test_thread_parser_counts_unmarked_blank_post_as_omission() -> None:
+    html = """
+    <div class='topic'>Blank reply</div>
+    <div class='commentthread_comment' id='comment_98'>
+      <div class='commentthread_comment_text'>A visible reply</div>
+    </div>
+    <div class='commentthread_comment' id='comment_99'>
+      <div class='commentthread_comment_text'><br><br><br></div>
+    </div>
+    """
+
+    thread = parse_discussion_thread(html, 42, "/app/42/discussions/0/100/")
+
+    assert [post["text"] for post in thread["posts"]] == ["A visible reply"]
+    assert thread["blankPostCount"] == 1
+    assert thread["skippedItems"] == 0
+    assert thread["skippedItemReasons"] == {}
+
+
+def test_thread_parser_rejects_nonempty_page_when_every_post_is_blank() -> None:
+    html = """
+    <div class='topic'>All blank replies</div>
+    <div class='commentthread_comment' id='comment_99'>
+      <div class='commentthread_comment_text'><br><br><br></div>
+    </div>
+    """
+
+    with pytest.raises(ParseError) as caught:
+        parse_discussion_thread(html, 42, "/app/42/discussions/0/100/")
+
+    assert caught.value.code == "thread_selector_drift"
+    assert caught.value.context == {
+        "candidateCount": 1,
+        "blankPostCount": 1,
+        "skippedItemCount": 0,
+        "skippedItemReasons": {},
+    }
 
 
 def test_thread_parser_dedupes_opening_post_after_page_one() -> None:
@@ -162,6 +224,26 @@ def test_listing_parser_rejects_arbitrary_or_block_html(html: str) -> None:
         parse_discussion_listing(html, 42, "/app/42/discussions/")
 
     assert caught.value.code in {"unexpected_listing_html", "steam_error_html"}
+
+
+def test_listing_parser_types_empty_client_rendered_steam_shell() -> None:
+    html = """
+    <html>
+      <head>
+        <title>Example Game :: Steam Community</title>
+        <script src='https://community.fastly.steamstatic.com/public/javascript/applications/community/main.js'></script>
+      </head>
+      <body class='flat_page blue responsive_page'>
+        <div class='responsive_page_template_content'><div id='application_root'></div></div>
+      </body>
+    </html>
+    """
+
+    with pytest.raises(ParseError) as caught:
+        parse_discussion_listing(html, 42, "/app/42/discussions/")
+
+    assert caught.value.code == "steam_client_rendered_shell"
+    assert caught.value.context == {"representation": "client_rendered"}
 
 
 def test_listing_parser_rejects_selector_drift_instead_of_reporting_empty() -> None:

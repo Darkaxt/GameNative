@@ -19,6 +19,7 @@ test = ["pytest>=8.3,<10"]
 [project.scripts]
 steam-community-poc = "steam_community_poc.cli:main"
 steam-community-poc-live = "steam_community_poc.live_validation:main"
+steam-community-poc-discussions-10 = "steam_community_poc.discussion_validation:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

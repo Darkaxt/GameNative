@@ -14,7 +14,8 @@ from .corpus import (
     validate_corpus_contract,
     validate_sources,
 )
-from .http import UrllibTransport
+from .epic import EpicCatalogProvider, SlugRequired
+from .http import RateLimitExhausted, UrllibTransport
 from .models import OwnedCopy
 from .resolver import RESOLVER_VERSION, SCHEMA_VERSION, SteamResolver
 from .steam import (
@@ -90,8 +91,11 @@ def main(
         if args.command == "resolve":
             payload = _read_json(args.input, input_stream)
             owned_copy = OwnedCopy.from_dict(payload)
+            provider = _provider_from_args(args)
             result = SteamResolver(
-                _provider_from_args(args), max_candidates=args.max_output_candidates
+                provider,
+                max_candidates=args.max_output_candidates,
+                source_catalog_provider=_epic_provider_from_args(args),
             ).resolve(owned_copy)
             _write_json(result, output_stream)
             return 0
@@ -140,11 +144,23 @@ def main(
             error_stream,
         )
         return 2
+    except SlugRequired as error:
+        _write_json(error.to_dict(), error_stream)
+        return 2
+    except RateLimitExhausted as error:
+        _write_json(error.to_dict(), error_stream)
+        return 4
     except RuntimeError as error:
         _write_json(
             {"error": "PROVIDER_UNAVAILABLE", "message": str(error)}, error_stream
         )
         return 3
+
+
+def _epic_provider_from_args(args: argparse.Namespace) -> EpicCatalogProvider | None:
+    if args.candidate_provider == "fixture":
+        return None
+    return EpicCatalogProvider(timeout=args.timeout)
 
 
 def _provider_from_args(args: argparse.Namespace) -> Any:

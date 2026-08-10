@@ -8,14 +8,18 @@ Dependencies and entry points are self-contained in `pyproject.toml`: `requests`
 
 ## Deterministic TDD evidence
 
-Every behavior was exercised RED before implementation. The focused review cycle added failing tests for:
+Every behavior was exercised RED before implementation. The focused review cycles added failing tests for:
 
-- Strict live proof gates and machine-readable unmet conditions.
-- Arbitrary 200 HTML, Steam error/block HTML, listing/thread selector drift, and explicit empty markers.
+- Strict live proof gates, machine-readable unmet conditions, and the separate first-GOG-group Discussions proof.
+- Arbitrary HTTP-200 HTML, Steam error/block HTML, listing/thread selector drift, and explicit empty markers.
 - Response content types that do not match the validated request purpose.
 - Transient recommendation and post/comment identities, final-field stripping, cross-page identity overlap, and structural page/element fallback.
-- Live range spans such as `Showing 16 - 24 of 24 comments` and comma-separated totals such as `1,545`.
-- Live `forum_op_<id>` opening-post identity.
+- Live range spans such as `Showing 16 - 24 of 24 comments`, comma-separated totals such as `1,545`, and `forum_op_<id>` opening-post identity.
+- HTTP 429 recovery, numeric and HTTP-date `Retry-After`, the 30-second delay cap, 1/2/4-second fallback delays, four-attempt exhaustion, and fail-closed collector/CLI behavior.
+- Steam's client-rendered HTTP-200 shell, server-rendered representation negotiation, and exact `steam_client_rendered_shell` typing.
+- Expected-AppID fallback after a recorded exact-title failure, bounded 10-page candidate scanning, and live paging-summary depth selection.
+- Inert Steam emoticon alt text, counted `blankPostCount` omissions, and fail-closed all-blank thread pages.
+- Completed endpoint aggregation, including completed store-search responses before expected-AppID fallbacks.
 
 Final deterministic command:
 
@@ -23,7 +27,7 @@ Final deterministic command:
 .venv/Scripts/python -m pytest -q
 ```
 
-Result: **77 passed in 0.53s**.
+Result: **107 passed in 0.80s**.
 
 ## Proof, bounds, and safety behavior
 
@@ -33,10 +37,13 @@ Result: **77 passed in 0.53s**.
 - Listing `fp` and thread `ctp` routes are generated from validated route kinds. Live paging summaries are interpreted as start/end/total item spans to derive page count rather than misreading comment numbers as page numbers.
 - Discussion parsers require genuine topic/post containers or explicit empty markers. Arbitrary, blocked, and selector-drift HTML raises typed `ParseError` rather than becoming a false empty state.
 - Successful JSON endpoints require `application/json`; discussion endpoints require HTML media types.
-- Maximum decoded body: 1 MiB. Maximum redirect hops: 4. Redirects are manual and must preserve scheme, host, port, AppID, and route kind.
-- A fresh session is used per request/redirect hop. Cookies are cleared before and after each request, and no `Cookie` header is sent.
+- Maximum decoded body: 1 MiB. Each request allows at most four total idempotent GET attempts across manual redirects and rate-limit retries; redirects must preserve scheme, host, port, AppID, and route kind.
+- HTTP 429 is transport state, never section content. Numeric or HTTP-date `Retry-After` is honored up to 30 seconds; missing/invalid values use 1, 2, and 4 seconds. Attempt/delay records are emitted, while a fourth 429 raises typed `steam_rate_limited` and prevents partial CLI JSON.
+- Sleeper and clock dependencies are injectable, so retry tests run deterministically without waiting.
+- A fresh session is used per request, redirect, or retry attempt. Cookies are cleared before and after each request, and no `Cookie` header is sent.
 - Requests are bounded to 1–10 pages per kind and 1–10 sampled threads. Per-page limits are 20 reviews and 50 discussion items/posts; text, title, route, cursor, and diagnostic structures are bounded.
 - Opening posts are emitted only on thread page 1. HTML is converted to inert plain text; scripts, styles, media, and rich-HTML side channels are excluded.
+- Individual whitespace/`<br>`-only post elements are omitted with `blankPostCount`; they are not posts or unexplained skips. A nonempty thread page whose candidates are all blank still raises parser drift.
 - Public titles, AppIDs, routes, URLs, cursors, reviews, and discussions may be emitted. Credentials, cookies, headers, secrets, and personal account data are not retained.
 
 ## Fresh strict live validation
@@ -55,10 +62,12 @@ Equivalent per-title CLI commands are recorded in `reports/live-validation-summa
 | Dota 2 / 570 | 3 pages / 60 | 3 / 45 | 2 / 31 | recommendation ID, route, Steam post ID | pass |
 | Stardew Valley / 413150 | 3 pages / 60 | 3 / 45 | 2 / 25 | recommendation ID, route, Steam post ID | pass |
 
-All three exact title resolutions matched the expected AppIDs, all complete results passed JSON Schema validation, all identity duplicate counts were zero, all parsers skipped zero items, and no target produced warning/error diagnostics. All 27 HTTP responses were status 200 with zero redirects and validated media types (12 JSON, 15 HTML); decoded body sizes ranged from 710 to 146,439 bytes.
+All three exact title resolutions matched the expected AppIDs, all complete results passed JSON Schema validation, all identity duplicate counts were zero, all parsers skipped zero items, and no target produced warning/error diagnostics. All 27 HTTP responses were status 200 on their first attempt with zero redirects and validated media types (12 JSON, 15 HTML); decoded body sizes ranged from 710 to 145,959 bytes.
 
 The aggregate strict live result is **all-succeeded**. Every target fetched exactly 3 unique review pages, 3 unique listing pages, and 2 unique nonempty sampled-thread pages. This keeps a strong multi-page proof while matching the available Stardew thread depth instead of treating its legitimate end after page 2 as a failure.
 
 A separate final numeric-AppID probe used `1562430` instead of a title. It resolved by `app_id` and schema-validated 2 review pages / 40 cards, 2 listing pages / 30 topics, and 2 thread pages / 31 posts, with zero duplicate review, topic, or post identities.
 
-The machine report is 36 KB and retains commands, counts, identity strategies, typed HTTP/parser diagnostics, and unmet-condition arrays without persisting complete live review/post bodies.
+The machine report is about 38 KiB and retains commands, counts, identity strategies, typed HTTP/parser diagnostics, per-request attempt records, and unmet-condition arrays without persisting complete live review/post bodies.
+
+The separate strict 10-title Discussions result is in `DISCUSSIONS_10_TITLE_REPORT.md` and `reports/discussions-10-title-validation.json`. Its expanded bounded breadth probe passed all 10 targets; Terraria records one counted blank-post omission while retaining zero unexplained parser skips.
