@@ -81,10 +81,11 @@
       "partial/review/provider-failure/malformed/rate-limited Steam outcomes never trigger Epic fallback",
       "derived Epic slug 404 emits typed SLUG_REQUIRED",
       "persistent Epic CMS 429 emits only typed RATE_LIMIT_EXHAUSTED",
-      "Alan Wake 2 stale Coming Soon release label produces null date/year and preserves a warning"
+      "Alan Wake 2 stale Coming Soon release label produces null date/year and preserves a warning",
+      "Epic source data maps to the exact current CanonicalGameMetadata and nested GameMovie display shape"
     ],
     "offlineEvaluationByteDeterministic": true,
-    "passed": 84
+    "passed": 85
   },
   "endpointDiagnostics": {
     "sourceCorroboration": [
@@ -10393,7 +10394,7 @@
                   "weight": 0.0
                 }
               },
-              "publisher": "Ignis Sanat \ud83d\udd25",
+              "publisher": "Ignis Sanat 🔥",
               "releaseYear": 2019,
               "score": 0.0,
               "steamAppId": 650330,
@@ -10618,7 +10619,7 @@
               "releaseYear": 2012,
               "score": 0.86,
               "steamAppId": 208580,
-              "title": "STAR WARS\u2122 Knights of the Old Republic\u2122 II - The Sith Lords\u2122",
+              "title": "STAR WARS™ Knights of the Old Republic™ II - The Sith Lords™",
               "verified": true
             }
           ],
