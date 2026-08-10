@@ -226,9 +226,9 @@ class RoomGameMetadataRepository @Inject constructor(
     }
 
     private fun GameDetailSnapshotEntity.decodeSnapshot(): CanonicalGameMetadata? {
-        if (sourceRevision != SOURCE_REVISION) return null
         return try {
-            JSON.decodeFromString<GameMetadataProvenance>(provenanceJson)
+            val provenance = JSON.decodeFromString<GameMetadataProvenance>(provenanceJson)
+            if (!provenance.matchesSourceRevision(sourceRevision)) return null
             JSON.decodeFromString<CanonicalGameMetadata>(payloadJson)
                 .sanitizedForPersistence()
                 .takeIf { it.title.isNotBlank() }
@@ -238,6 +238,20 @@ class RoomGameMetadataRepository @Inject constructor(
             null
         }
     }
+
+    private fun GameMetadataProvenance.matchesSourceRevision(sourceRevision: String): Boolean =
+        when (sourceRevision) {
+            SOURCE_REVISION -> provider == MetadataProvider.STEAM_APPDETAILS
+            EPIC_CMS_SOURCE_REVISION ->
+                provider == MetadataProvider.EPIC_CMS &&
+                    source == GameSource.EPIC.name &&
+                    !stableSourceId.isNullOrBlank() &&
+                    !namespace.isNullOrBlank() &&
+                    !catalogId.isNullOrBlank() &&
+                    !slug.isNullOrBlank() &&
+                    !offerId.isNullOrBlank()
+            else -> false
+        }
 
     private fun GameDetailSnapshotEntity.isStale(nowEpochMs: Long): Boolean =
         nowEpochMs - fetchedAt >= GameMetadataRepository.CACHE_MAX_AGE_MS
@@ -269,6 +283,7 @@ class RoomGameMetadataRepository @Inject constructor(
 
     private companion object {
         const val SOURCE_REVISION = "steam_appdetails_v2"
+        const val EPIC_CMS_SOURCE_REVISION = "epic_cms_v1"
         val JSON = Json {
             encodeDefaults = true
             ignoreUnknownKeys = true

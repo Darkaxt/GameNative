@@ -74,11 +74,19 @@ enum class GamePlatform {
 data class GameMetadataProvenance(
     val provider: MetadataProvider,
     val fields: Set<MetadataField>,
+    val source: String? = null,
+    val stableSourceId: String? = null,
+    val namespace: String? = null,
+    val catalogId: String? = null,
+    val slug: String? = null,
+    val offerId: String? = null,
+    val storeUrl: String? = null,
 )
 
 @Serializable
 enum class MetadataProvider {
     STEAM_APPDETAILS,
+    EPIC_CMS,
 }
 
 @Serializable

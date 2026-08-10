@@ -11,8 +11,12 @@ import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.dao.StoreMatchDao
 import app.gamenative.library.canonical.CURRENT_RESOLVER_VERSION
 import app.gamenative.library.canonical.CanonicalGuardedMutationResult
+import app.gamenative.library.canonical.EpicCatalogFallbackWriter
 import app.gamenative.library.canonical.ExpectedMatchState
 import app.gamenative.library.canonical.SteamCatalogDecisionWriter
+import app.gamenative.library.metadata.EpicCmsCatalogException
+import app.gamenative.library.metadata.EpicCmsCatalogRequest
+import app.gamenative.library.metadata.EpicCmsCatalogSource
 import app.gamenative.library.metadata.MetadataClock
 import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
@@ -57,6 +61,8 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val recordSource: SteamCatalogRecordSource,
     private val candidatePolicy: SteamCatalogCandidatePolicy,
     private val decisionWriter: SteamCatalogDecisionWriter,
+    private val epicCatalogSource: EpicCmsCatalogSource,
+    private val epicFallbackWriter: EpicCatalogFallbackWriter,
     private val localeProvider: MetadataLocaleProvider,
     private val diagnostics: SteamCatalogResolutionDiagnosticSink,
     private val acceptedIdentityEnrichment: SteamAcceptedIdentityEnrichmentSink,
@@ -258,13 +264,48 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             }
 
             CatalogDecision.Unmatched -> {
-                decisionWriter.recordUnmatched(
-                    expected = expected,
-                    resolverVersion = CURRENT_RESOLVER_VERSION,
-                    nowEpochMs = clock.nowEpochMs(),
-                ).asItemResolution(SteamResolutionItemResult.Unmatched)
+                if (
+                    match.source == GameSource.EPIC &&
+                    match.evidenceAppType == CanonicalAppType.GAME
+                ) {
+                    val epicRecord = fetchEpicFallback(match, locale)
+                    epicFallbackWriter.recordEpicFallback(
+                        expected = expected,
+                        resolverVersion = CURRENT_RESOLVER_VERSION,
+                        nowEpochMs = clock.nowEpochMs(),
+                        locale = locale,
+                        record = epicRecord,
+                    ).asItemResolution(SteamResolutionItemResult.Unmatched)
+                } else {
+                    decisionWriter.recordUnmatched(
+                        expected = expected,
+                        resolverVersion = CURRENT_RESOLVER_VERSION,
+                        nowEpochMs = clock.nowEpochMs(),
+                    ).asItemResolution(SteamResolutionItemResult.Unmatched)
+                }
             }
         }
+    }
+
+    private suspend fun fetchEpicFallback(
+        match: StoreMatchEntity,
+        locale: MetadataLocale,
+    ) = try {
+        epicCatalogSource.fetch(
+            EpicCmsCatalogRequest(
+                stableSourceId = match.stableSourceId,
+                sourceTitle = match.evidenceDisplayName,
+                locale = locale,
+            ),
+        ) ?: throw EpicCmsCatalogException()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: SteamRateLimitExhaustedException) {
+        throw error
+    } catch (error: EpicCmsCatalogException) {
+        throw error
+    } catch (_: Exception) {
+        throw EpicCmsCatalogException()
     }
 
     private suspend fun fetchCandidates(
@@ -414,6 +455,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         is SteamCatalogSearchIncompleteException -> SEARCH_INCOMPLETE
         is SteamCatalogSearchException -> STORE_SEARCH_UNAVAILABLE
         is SteamCatalogCandidateFetchException -> APP_DETAILS_UNAVAILABLE
+        is EpicCmsCatalogException -> EPIC_CMS_UNAVAILABLE
         else -> UNEXPECTED_FAILURE
     }
 
@@ -493,6 +535,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         const val SEARCH_INCOMPLETE = "SEARCH_INCOMPLETE"
         const val CANDIDATE_DETAILS_INCOMPLETE = "CANDIDATE_DETAILS_INCOMPLETE"
         const val RATE_LIMIT_EXHAUSTED = "RATE_LIMIT_EXHAUSTED"
+        const val EPIC_CMS_UNAVAILABLE = "EPIC_CMS_UNAVAILABLE"
         const val UNEXPECTED_FAILURE = "UNEXPECTED_FAILURE"
     }
 }

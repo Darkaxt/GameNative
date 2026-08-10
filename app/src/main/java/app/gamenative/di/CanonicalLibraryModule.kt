@@ -17,6 +17,7 @@ import app.gamenative.library.canonical.CanonicalProjectionRunner
 import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.CanonicalResolver
 import app.gamenative.library.canonical.DefaultAccountScopeProvider
+import app.gamenative.library.canonical.EpicCatalogFallbackWriter
 import app.gamenative.library.canonical.FeatureCanonicalEventRecorder
 import app.gamenative.library.canonical.FeatureCanonicalLibraryDiagnostics
 import app.gamenative.library.canonical.PrefManagerCanonicalProjectionGate
@@ -59,6 +60,8 @@ import app.gamenative.library.discovery.GameFacetRepository
 import app.gamenative.library.discovery.RoomGameFacetRepository
 import app.gamenative.library.discovery.SteamReviewSummaryProvider
 import app.gamenative.library.discovery.SteamReviewSummarySource
+import app.gamenative.library.metadata.EpicCmsCatalogProvider
+import app.gamenative.library.metadata.EpicCmsCatalogSource
 import app.gamenative.library.metadata.GameMetadataRepository
 import app.gamenative.library.metadata.MetadataClock
 import app.gamenative.library.metadata.MetadataLocaleProvider
@@ -109,6 +112,12 @@ abstract class CanonicalLibraryModule {
 
     @Binds
     @Singleton
+    internal abstract fun bindEpicCatalogFallbackWriter(
+        implementation: RoomCanonicalMutationRepository,
+    ): EpicCatalogFallbackWriter
+
+    @Binds
+    @Singleton
     abstract fun bindCanonicalDiagnostics(implementation: CanonicalDiagnostics): CanonicalDiagnosticSink
 
     @Binds
@@ -140,6 +149,12 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamCatalogDataSource(
         implementation: SteamCatalogProvider,
     ): SteamCatalogDataSource
+
+    @Binds
+    @Singleton
+    internal abstract fun bindEpicCmsCatalogSource(
+        implementation: EpicCmsCatalogProvider,
+    ): EpicCmsCatalogSource
 
     @Binds
     @Singleton

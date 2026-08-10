@@ -8,6 +8,7 @@ import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameEntity
 import app.gamenative.data.canonical.ClassificationState
+import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -16,9 +17,13 @@ import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.library.canonical.CURRENT_RESOLVER_VERSION
 import app.gamenative.library.canonical.CanonicalGuardedMutationResult
+import app.gamenative.library.canonical.EpicCatalogFallbackWriter
 import app.gamenative.library.canonical.ExpectedMatchState
 import app.gamenative.library.canonical.SteamCatalogDecisionWriter
 import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.EpicCmsCatalogRecord
+import app.gamenative.library.metadata.EpicCmsCatalogRequest
+import app.gamenative.library.metadata.EpicCmsCatalogSource
 import app.gamenative.library.metadata.GamePlatform
 import app.gamenative.library.metadata.MetadataClock
 import app.gamenative.library.metadata.MetadataLocale
@@ -49,6 +54,7 @@ class SteamCatalogResolutionRepositoryTest {
     private lateinit var writer: FakeDecisionWriter
     private lateinit var diagnostics: FakeDiagnostics
     private lateinit var enrichment: FakeAcceptedIdentityEnrichment
+    private lateinit var epicFallbackWriter: FakeEpicFallbackWriter
     private val scope = AccountScope("2".repeat(64))
 
     @Before
@@ -60,6 +66,7 @@ class SteamCatalogResolutionRepositoryTest {
         writer = FakeDecisionWriter()
         diagnostics = FakeDiagnostics()
         enrichment = FakeAcceptedIdentityEnrichment()
+        epicFallbackWriter = FakeEpicFallbackWriter()
     }
 
     @After
@@ -88,6 +95,124 @@ class SteamCatalogResolutionRepositoryTest {
         assertEquals(1, calls.get())
         assertFalse(repository.keyRequired.value)
         assertFalse(repository.isScanning.value)
+    }
+
+    @Test
+    fun `complete Epic game unmatched persists CMS fallback atomically`() = runTest {
+        val namespace = "c4763f236d08423eb47b4c3008779c84"
+        val catalogId = "93f2a8c3547846eda966cb3c152a026e"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.EPIC, stableSourceId), canonical.canonicalId, title = "Alan Wake 2"))
+        val requests = mutableListOf<EpicCmsCatalogRequest>()
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ -> emptyList() },
+            epicCatalogSource = EpicCmsCatalogSource { request ->
+                requests += request
+                epicRecord(request.stableSourceId, namespace, catalogId, request.sourceTitle)
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.unmatched)
+        assertEquals(0, progress.failed)
+        assertTrue(writer.operations.isEmpty())
+        assertEquals(listOf("Alan Wake 2"), requests.map(EpicCmsCatalogRequest::sourceTitle))
+        assertEquals(1, epicFallbackWriter.calls.size)
+        assertEquals(stableSourceId, epicFallbackWriter.calls.single().record.stableSourceId)
+    }
+
+    @Test
+    fun `complete Epic unmatched remains unresolved when CMS is unavailable`() = runTest {
+        val namespace = "c4763f236d08423eb47b4c3008779c84"
+        val catalogId = "93f2a8c3547846eda966cb3c152a026e"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.EPIC, stableSourceId), canonical.canonicalId, title = "Alan Wake 2"))
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ -> emptyList() },
+            epicCatalogSource = EpicCmsCatalogSource { null },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.failed)
+        assertEquals(0, progress.unmatched)
+        assertTrue(writer.operations.isEmpty())
+        assertTrue(epicFallbackWriter.calls.isEmpty())
+        assertEquals("EPIC_CMS_UNAVAILABLE", diagnostics.events.single().errorType)
+    }
+
+    @Test
+    fun `Epic CMS rate exhaustion records no catalog result`() = runTest {
+        val stableSourceId = EpicStableSourceId.encode("namespace", "catalog")
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.EPIC, stableSourceId), canonical.canonicalId, title = "Epic Exclusive"))
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ -> emptyList() },
+            epicCatalogSource = EpicCmsCatalogSource { throw SteamRateLimitExhaustedException() },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.failed)
+        assertEquals(0, progress.unmatched)
+        assertTrue(writer.operations.isEmpty())
+        assertTrue(epicFallbackWriter.calls.isEmpty())
+        assertEquals("RATE_LIMIT_EXHAUSTED", diagnostics.events.single().errorType)
+    }
+
+    @Test
+    fun `Epic fallback never runs for partial review non Epic or non game results`() = runTest {
+        val matches = listOf(
+            Triple(GameSource.EPIC, "Partial Epic", CanonicalAppType.GAME),
+            Triple(GameSource.EPIC, "Review Epic", CanonicalAppType.GAME),
+            Triple(GameSource.GOG, "GOG Unmatched", CanonicalAppType.GAME),
+            Triple(GameSource.EPIC, "Epic Utility", CanonicalAppType.APPLICATION),
+        )
+        matches.forEachIndexed { index, (source, title, appType) ->
+            val canonical = canonical((index + 1).toLong(), steamAppId = null)
+            db.canonicalGameDao().insert(canonical)
+            val stableId = if (source == GameSource.EPIC) {
+                EpicStableSourceId.encode("namespace-$index", "catalog-$index")
+            } else {
+                "gog-$index"
+            }
+            seedMatch(match(key(source, stableId), canonical.canonicalId, title, appType = appType))
+        }
+        val search = object : SteamCatalogSearchSource {
+            override suspend fun search(query: String, locale: MetadataLocale) =
+                searchResult(query, locale).hits
+
+            override suspend fun searchResult(query: String, locale: MetadataLocale) = when (query) {
+                "Partial Epic" -> SteamCatalogSearchResult(emptyList(), complete = false)
+                "Review Epic" -> SteamCatalogSearchResult(
+                    listOf(SteamStoreSearchHit(42, "Review Epic", null)),
+                    complete = true,
+                )
+                else -> SteamCatalogSearchResult(emptyList(), complete = true)
+            }
+        }
+        val epicRequests = mutableListOf<EpicCmsCatalogRequest>()
+        val repository = repository(
+            search = search,
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(steamAppId, "Review Epic", developer = null, year = null)
+            },
+            epicCatalogSource = EpicCmsCatalogSource { request ->
+                epicRequests += request
+                throw AssertionError("ineligible Epic fallback")
+            },
+        )
+
+        repository.scanAutomatically()
+
+        assertTrue(epicRequests.isEmpty())
+        assertTrue(epicFallbackWriter.calls.isEmpty())
     }
 
     @Test
@@ -671,12 +796,17 @@ class SteamCatalogResolutionRepositoryTest {
     private fun repository(
         search: SteamCatalogSearchSource,
         records: SteamCatalogRecordSource = SteamCatalogRecordSource { _, _ -> null },
+        epicCatalogSource: EpicCmsCatalogSource = EpicCmsCatalogSource {
+            throw AssertionError("Epic CMS fallback must not run")
+        },
     ) = SteamCatalogResolutionRepository(
         storeMatchDao = db.storeMatchDao(),
         searchSource = search,
         recordSource = records,
         candidatePolicy = SteamCatalogCandidatePolicy(),
         decisionWriter = writer,
+        epicCatalogSource = epicCatalogSource,
+        epicFallbackWriter = epicFallbackWriter,
         localeProvider = MetadataLocaleProvider { MetadataLocale("en-US", "US") },
         diagnostics = diagnostics,
         acceptedIdentityEnrichment = enrichment,
@@ -747,6 +877,21 @@ class SteamCatalogResolutionRepositoryTest {
         accountScope = scope,
         source = source,
         stableSourceId = stableSourceId,
+    )
+
+    private fun epicRecord(
+        stableSourceId: String,
+        namespace: String,
+        catalogId: String,
+        title: String,
+    ) = EpicCmsCatalogRecord(
+        stableSourceId = stableSourceId,
+        namespace = namespace,
+        catalogId = catalogId,
+        slug = "alan-wake-2",
+        offerId = "a7364ebfa54147f1b90f78a81c8093f7",
+        storeUrl = "https://store.epicgames.com/en-US/p/alan-wake-2",
+        metadata = record(1, title, "Remedy Entertainment", 2023).metadata,
     )
 
     private fun record(
@@ -826,6 +971,21 @@ class SteamCatalogResolutionRepositoryTest {
         }
     }
 
+    private class FakeEpicFallbackWriter : EpicCatalogFallbackWriter {
+        val calls = mutableListOf<EpicFallbackCall>()
+
+        override suspend fun recordEpicFallback(
+            expected: ExpectedMatchState,
+            resolverVersion: Int,
+            nowEpochMs: Long,
+            locale: MetadataLocale,
+            record: EpicCmsCatalogRecord,
+        ): CanonicalGuardedMutationResult {
+            calls += EpicFallbackCall(expected.key, locale, record)
+            return CanonicalGuardedMutationResult.APPLIED
+        }
+    }
+
     private class FakeAcceptedIdentityEnrichment : SteamAcceptedIdentityEnrichmentSink {
         val calls = mutableListOf<EnrichmentCall>()
 
@@ -846,6 +1006,12 @@ class SteamCatalogResolutionRepositoryTest {
             events += event
         }
     }
+
+    private data class EpicFallbackCall(
+        val key: OwnedCopyKey,
+        val locale: MetadataLocale,
+        val record: EpicCmsCatalogRecord,
+    )
 
     private data class EnrichmentCall(
         val steamAppId: Int,

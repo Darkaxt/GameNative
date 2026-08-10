@@ -15,6 +15,7 @@ import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.CanonicalGameTagCrossRef
 import app.gamenative.data.canonical.CanonicalIdGenerator
 import app.gamenative.data.canonical.ClassificationState
+import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
@@ -23,7 +24,14 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.library.canonical.source.OwnedCopyProjection
+import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.EpicCmsCatalogRecord
+import app.gamenative.library.metadata.GameMetadataProvenance
+import app.gamenative.library.metadata.MetadataLocale
+import app.gamenative.library.metadata.MetadataProvider
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -679,6 +687,76 @@ class CanonicalMutationRepositoryTest {
         assertEquals(MatchConfidence.REVIEW_REQUIRED, review.confidence)
         assertEquals(MatchDecisionSource.AUTOMATIC, review.decisionSource)
         assertEquals(200, review.matchedAt)
+    }
+
+    @Test
+    fun `guarded Epic fallback atomically records unmatched and exact source metadata`() = runBlocking {
+        val namespace = "c4763f236d08423eb47b4c3008779c84"
+        val catalogId = "93f2a8c3547846eda966cb3c152a026e"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(index = 1, steamAppId = null, createdAt = 100, displayName = "Alan Wake 2")
+        val selectedKey = key(GameSource.EPIC, stableSourceId)
+        val selected = match(selectedKey, canonical.canonicalId).copy(
+            evidenceDisplayName = "Alan Wake 2",
+            evidenceTitleKey = "alan wake 2",
+        )
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(selected)
+        val record = epicRecord(stableSourceId, namespace, catalogId)
+
+        val result = repository.recordEpicFallback(
+            expected = expectedState(selectedKey, selected),
+            resolverVersion = CURRENT_RESOLVER_VERSION,
+            nowEpochMs = 200,
+            locale = MetadataLocale("en-US", "US"),
+            record = record,
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, result)
+        assertNull(db.canonicalGameDao().get(canonical.canonicalId)?.steamAppId)
+        val unmatched = requireNotNull(db.storeMatchDao().get(selectedKey))
+        assertEquals(MatchMethod.STEAM_CATALOG, unmatched.matchMethod)
+        assertEquals(MatchConfidence.UNMATCHED, unmatched.confidence)
+        assertEquals(MatchDecisionSource.AUTOMATIC, unmatched.decisionSource)
+        assertNull(unmatched.candidateSteamAppId)
+        val snapshot = db.gameDetailSnapshotDao().getByCanonicalId(canonical.canonicalId).single()
+        assertEquals("epic_cms_v1", snapshot.sourceRevision)
+        assertEquals(record.metadata, Json.decodeFromString<CanonicalGameMetadata>(snapshot.payloadJson))
+        val provenance = Json.decodeFromString<GameMetadataProvenance>(snapshot.provenanceJson)
+        assertEquals(MetadataProvider.EPIC_CMS, provenance.provider)
+        assertEquals("EPIC", provenance.source)
+        assertEquals(stableSourceId, provenance.stableSourceId)
+        assertEquals(namespace, provenance.namespace)
+        assertEquals(catalogId, provenance.catalogId)
+        assertEquals("alan-wake-2", provenance.slug)
+        assertEquals("a7364ebfa54147f1b90f78a81c8093f7", provenance.offerId)
+    }
+
+    @Test
+    fun `guarded Epic fallback writes nothing after Steam identity changes`() = runBlocking {
+        val namespace = "c4763f236d08423eb47b4c3008779c84"
+        val catalogId = "93f2a8c3547846eda966cb3c152a026e"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(index = 1, steamAppId = 42, createdAt = 100, displayName = "Alan Wake 2")
+        val selectedKey = key(GameSource.EPIC, stableSourceId)
+        val selected = match(selectedKey, canonical.canonicalId).copy(
+            evidenceDisplayName = "Alan Wake 2",
+            evidenceTitleKey = "alan wake 2",
+        )
+        db.canonicalGameDao().insert(canonical)
+        db.storeMatchDao().upsert(selected)
+
+        val result = repository.recordEpicFallback(
+            expected = expectedState(selectedKey, selected),
+            resolverVersion = CURRENT_RESOLVER_VERSION,
+            nowEpochMs = 200,
+            locale = MetadataLocale("en-US", "US"),
+            record = epicRecord(stableSourceId, namespace, catalogId),
+        )
+
+        assertEquals(CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED, result)
+        assertEquals(selected, db.storeMatchDao().get(selectedKey))
+        assertTrue(db.gameDetailSnapshotDao().getByCanonicalId(canonical.canonicalId).isEmpty())
     }
 
     @Test
@@ -1356,6 +1434,38 @@ class CanonicalMutationRepositoryTest {
         assertEquals(CURRENT_RESOLVER_VERSION, match.resolverVersion)
         assertEquals(matchedAt, match.matchedAt)
     }
+
+    private fun epicRecord(
+        stableSourceId: String,
+        namespace: String,
+        catalogId: String,
+    ) = EpicCmsCatalogRecord(
+        stableSourceId = stableSourceId,
+        namespace = namespace,
+        catalogId = catalogId,
+        slug = "alan-wake-2",
+        offerId = "a7364ebfa54147f1b90f78a81c8093f7",
+        storeUrl = "https://store.epicgames.com/en-US/p/alan-wake-2",
+        metadata = CanonicalGameMetadata(
+            title = "Alan Wake 2",
+            shortDescription = "Survival horror",
+            about = null,
+            headerImageUrl = "https://cdn2.unrealengine.com/alan-wake-2.jpg",
+            screenshots = emptyList(),
+            movies = emptyList(),
+            developers = listOf("Remedy Entertainment"),
+            publishers = listOf("Epic Games Publishing"),
+            releaseDate = "2023-10-27",
+            platforms = emptySet(),
+            languages = listOf("English"),
+            requirements = null,
+            genres = emptyList(),
+            features = emptyList(),
+            achievementCount = null,
+            dlcCount = null,
+            fetchedAtEpochMs = 150,
+        ),
+    )
 
     private fun expectedState(
         key: OwnedCopyKey,

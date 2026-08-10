@@ -11,6 +11,8 @@ import app.gamenative.data.canonical.CanonicalGameTagCrossRef
 import app.gamenative.data.canonical.CanonicalIdGenerator
 import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.data.canonical.ClassificationState
+import app.gamenative.data.canonical.EpicStableSourceId
+import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -18,8 +20,16 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.library.canonical.source.OwnedCopyProjection
+import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.EpicCmsCatalogRecord
+import app.gamenative.library.metadata.GameMetadataProvenance
+import app.gamenative.library.metadata.MetadataField
+import app.gamenative.library.metadata.MetadataLocale
+import app.gamenative.library.metadata.MetadataProvider
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 enum class CanonicalGuardedMutationResult {
     APPLIED,
@@ -75,6 +85,16 @@ interface SteamCatalogDecisionWriter {
         expected: ExpectedMatchState,
         resolverVersion: Int,
         nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult
+}
+
+internal interface EpicCatalogFallbackWriter {
+    suspend fun recordEpicFallback(
+        expected: ExpectedMatchState,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+        locale: MetadataLocale,
+        record: EpicCmsCatalogRecord,
     ): CanonicalGuardedMutationResult
 }
 
@@ -161,7 +181,7 @@ interface CanonicalMutationRepository : SteamCatalogDecisionWriter {
 class RoomCanonicalMutationRepository @Inject constructor(
     private val db: PluviaDatabase,
     private val idGenerator: CanonicalIdGenerator,
-) : CanonicalMutationRepository {
+) : CanonicalMutationRepository, EpicCatalogFallbackWriter {
     private val canonicalGameDao = db.canonicalGameDao()
     private val storeMatchDao = db.storeMatchDao()
     private val preferenceDao = db.canonicalPreferenceDao()
@@ -246,6 +266,60 @@ class RoomCanonicalMutationRepository @Inject constructor(
         if (match == null || resolverVersion <= 0) {
             return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
         }
+        storeMatchDao.upsert(
+            match.copy(
+                candidateSteamAppId = null,
+                matchMethod = MatchMethod.STEAM_CATALOG,
+                confidence = MatchConfidence.UNMATCHED,
+                decisionSource = MatchDecisionSource.AUTOMATIC,
+                resolverVersion = resolverVersion,
+                matchedAt = nowEpochMs,
+            ),
+        )
+        CanonicalGuardedMutationResult.APPLIED
+    }
+
+    override suspend fun recordEpicFallback(
+        expected: ExpectedMatchState,
+        resolverVersion: Int,
+        nowEpochMs: Long,
+        locale: MetadataLocale,
+        record: EpicCmsCatalogRecord,
+    ): CanonicalGuardedMutationResult = db.withTransaction {
+        val match = expectedMatchOrNull(expected)
+        val canonical = match?.let { canonicalGameDao.get(it.canonicalId) }
+        val decodedIdentity = runCatching {
+            EpicStableSourceId.decode(record.stableSourceId)
+        }.getOrNull()
+        val validRecord = decodedIdentity == (record.namespace to record.catalogId) &&
+            record.stableSourceId == expected.key.stableSourceId &&
+            record.metadata.title.isNotBlank() &&
+            CanonicalNormalization.titleKey(record.metadata.title) == match?.evidenceTitleKey &&
+            record.metadata.fetchedAtEpochMs >= 0L &&
+            record.slug.isNotBlank() &&
+            record.offerId.isNotBlank()
+        if (
+            match == null ||
+            expected.key.source != GameSource.EPIC ||
+            match.evidenceAppType != CanonicalAppType.GAME ||
+            canonical == null ||
+            canonical.steamAppId != null ||
+            resolverVersion <= 0 ||
+            !validRecord
+        ) {
+            return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+        }
+        snapshotDao.upsert(
+            GameDetailSnapshotEntity(
+                canonicalId = match.canonicalId,
+                locale = locale.normalizedLocale,
+                country = locale.normalizedCountry,
+                payloadJson = METADATA_JSON.encodeToString(record.metadata),
+                provenanceJson = METADATA_JSON.encodeToString(record.epicProvenance()),
+                fetchedAt = record.metadata.fetchedAtEpochMs,
+                sourceRevision = EPIC_CMS_SOURCE_REVISION,
+            ),
+        )
         storeMatchDao.upsert(
             match.copy(
                 candidateSteamAppId = null,
@@ -1141,6 +1215,45 @@ class RoomCanonicalMutationRepository @Inject constructor(
         resolverVersion = decision.resolverVersion,
         matchedAt = decision.decidedAt,
     )
+
+    private fun EpicCmsCatalogRecord.epicProvenance() = GameMetadataProvenance(
+        provider = MetadataProvider.EPIC_CMS,
+        fields = metadata.availableMetadataFields(),
+        source = GameSource.EPIC.name,
+        stableSourceId = stableSourceId,
+        namespace = namespace,
+        catalogId = catalogId,
+        slug = slug,
+        offerId = offerId,
+        storeUrl = storeUrl,
+    )
+
+    private fun CanonicalGameMetadata.availableMetadataFields(): Set<MetadataField> = buildSet {
+        add(MetadataField.TITLE)
+        if (shortDescription != null) add(MetadataField.SHORT_DESCRIPTION)
+        if (about != null) add(MetadataField.ABOUT)
+        if (headerImageUrl != null) add(MetadataField.HEADER_IMAGE)
+        if (screenshots.isNotEmpty()) add(MetadataField.SCREENSHOTS)
+        if (movies.isNotEmpty()) add(MetadataField.MOVIES)
+        if (developers.isNotEmpty()) add(MetadataField.DEVELOPERS)
+        if (publishers.isNotEmpty()) add(MetadataField.PUBLISHERS)
+        if (releaseDate != null) add(MetadataField.RELEASE_DATE)
+        if (platforms.isNotEmpty()) add(MetadataField.PLATFORMS)
+        if (languages.isNotEmpty()) add(MetadataField.LANGUAGES)
+        if (requirements != null) add(MetadataField.REQUIREMENTS)
+        if (genres.isNotEmpty()) add(MetadataField.GENRES)
+        if (features.isNotEmpty()) add(MetadataField.FEATURES)
+        if (achievementCount != null) add(MetadataField.ACHIEVEMENT_COUNT)
+        if (dlcCount != null) add(MetadataField.DLC_COUNT)
+    }
+
+    private companion object {
+        const val EPIC_CMS_SOURCE_REVISION = "epic_cms_v1"
+        val METADATA_JSON = Json {
+            encodeDefaults = true
+            ignoreUnknownKeys = true
+        }
+    }
 }
 
 private data class SteamMatchDecision(

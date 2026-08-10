@@ -165,6 +165,40 @@ class GameMetadataRepositoryTest {
     }
 
     @Test
+    fun servesFreshEpicCmsSnapshotWithoutTrustedSteamIdentityOrNetwork() = runTest {
+        val cached = metadata("Epic source title", NOW - 1_000L)
+        val epicSnapshot = snapshot(cached).copy(
+            provenanceJson = JSON.encodeToString(
+                GameMetadataProvenance(
+                    provider = MetadataProvider.EPIC_CMS,
+                    fields = setOf(MetadataField.TITLE),
+                    source = "EPIC",
+                    stableSourceId = "stable-epic-id",
+                    namespace = "namespace",
+                    catalogId = "catalog",
+                    slug = "epic-source-title",
+                    offerId = "offer",
+                ),
+            ),
+            sourceRevision = "epic_cms_v1",
+        )
+        val snapshotDao = FakeSnapshotDao(epicSnapshot)
+        val provider = FakeProvider(failure = AssertionError("Epic cache must not trigger Steam fetch"))
+        val repository = repository(
+            FakeCanonicalGameDao(canonical(steamAppId = null)),
+            snapshotDao,
+            provider,
+        )
+
+        val state = repository.observe(canonicalId()).first()
+
+        val content = state as GameDetailState.Content
+        assertEquals("Epic source title", content.metadata.title)
+        assertFalse(content.stale)
+        assertTrue(provider.requestedIds.isEmpty())
+    }
+
+    @Test
     fun legacyMovieSchemaCacheIsRefetchedBeforeSevenDays() = runTest {
         val cached = metadata("Cached without current movies", NOW - 1_000L)
         val snapshotDao = FakeSnapshotDao(

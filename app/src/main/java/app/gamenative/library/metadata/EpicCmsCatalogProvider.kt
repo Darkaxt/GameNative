@@ -37,7 +37,7 @@ internal data class EpicCmsCatalogRequest(
     val productSlug: String? = null,
 )
 
-internal data class EpicCmsCatalogRecord(
+data class EpicCmsCatalogRecord(
     val stableSourceId: String,
     val namespace: String,
     val catalogId: String,
