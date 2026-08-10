@@ -18,8 +18,7 @@ import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
-import app.gamenative.service.steam.SteamWebApiKeyRepository
-import app.gamenative.service.steam.SteamWebApiKeyStatus
+import app.gamenative.library.metadata.SteamRateLimitExhaustedException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -62,7 +61,6 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val diagnostics: SteamCatalogResolutionDiagnosticSink,
     private val acceptedIdentityEnrichment: SteamAcceptedIdentityEnrichmentSink,
     private val clock: MetadataClock,
-    private val steamWebApiKeyRepository: SteamWebApiKeyRepository,
 ) {
     private val scanMutex = Mutex()
     private val progressMutex = Mutex()
@@ -85,13 +83,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     }
 
     private suspend fun runAutomaticScan(force: Boolean): SteamResolutionProgress = scanMutex.withLock {
-        val keyConfigured = steamWebApiKeyRepository.status() == SteamWebApiKeyStatus.CONFIGURED
-        mutableKeyRequired.value = !keyConfigured
-        if (!keyConfigured) {
-            automaticScanCompleted = false
-            mutableProgress.value = SteamResolutionProgress()
-            return@withLock mutableProgress.value
-        }
+        mutableKeyRequired.value = false
         if (!force && automaticScanCompleted) return@withLock mutableProgress.value
 
         mutableIsScanning.value = true
@@ -237,7 +229,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 resolverVersion = CURRENT_RESOLVER_VERSION,
                 nowEpochMs = clock.nowEpochMs(),
             ).asItemResolution(SteamResolutionItemResult.ReviewRequired).copy(
-                errorType = CANDIDATE_DETAILS_INCOMPLETE,
+                errorType = requireNotNull(fetched.incompleteReason),
             )
         }
         return when (val decision = candidatePolicy.evaluate(match.sourceEvidence(), candidates)) {
@@ -280,13 +272,16 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         locale: MetadataLocale,
     ): CandidateFetchResult {
         var failedFetches = 0
-        val candidates = searchSource.search(query, locale)
+        val searchResult = searchSource.searchResult(query, locale)
+        val candidates = searchResult.hits
             .distinctBy(SteamStoreSearchHit::steamAppId)
             .take(MAX_VALIDATED_HITS)
             .mapNotNull { hit ->
                 val record = try {
                     recordSource.fetchRecord(hit.steamAppId, locale)
                 } catch (error: CancellationException) {
+                    throw error
+                } catch (error: SteamRateLimitExhaustedException) {
                     throw error
                 } catch (_: Exception) {
                     failedFetches++
@@ -303,9 +298,17 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         if (failedFetches > 0 && candidates.isEmpty()) {
             throw SteamCatalogCandidateFetchException()
         }
+        if (!searchResult.complete && candidates.isEmpty()) {
+            throw SteamCatalogSearchIncompleteException()
+        }
+        val incompleteReason = when {
+            !searchResult.complete -> SEARCH_INCOMPLETE
+            failedFetches > 0 -> CANDIDATE_DETAILS_INCOMPLETE
+            else -> null
+        }
         return CandidateFetchResult(
             candidates = candidates,
-            incomplete = failedFetches > 0,
+            incompleteReason = incompleteReason,
         )
     }
 
@@ -407,7 +410,9 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     }
 
     private fun Exception.diagnosticCategory(): String = when (this) {
-        is SteamCatalogSearchException -> APP_LIST_UNAVAILABLE
+        is SteamRateLimitExhaustedException -> RATE_LIMIT_EXHAUSTED
+        is SteamCatalogSearchIncompleteException -> SEARCH_INCOMPLETE
+        is SteamCatalogSearchException -> STORE_SEARCH_UNAVAILABLE
         is SteamCatalogCandidateFetchException -> APP_DETAILS_UNAVAILABLE
         else -> UNEXPECTED_FAILURE
     }
@@ -463,8 +468,10 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
 
     private data class CandidateFetchResult(
         val candidates: List<SteamCatalogCandidate>,
-        val incomplete: Boolean,
-    )
+        val incompleteReason: String?,
+    ) {
+        val incomplete: Boolean = incompleteReason != null
+    }
 
     private data class ItemResolution(
         val result: SteamResolutionItemResult,
@@ -474,13 +481,18 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private class SteamCatalogCandidateFetchException :
         IllegalStateException("Steam catalog candidate details unavailable")
 
+    private class SteamCatalogSearchIncompleteException :
+        IllegalStateException("Steam catalog search incomplete")
+
     private companion object {
         const val MAX_CONCURRENCY = 1
         const val MAX_VALIDATED_HITS = 5
         const val AUTOMATIC_ITEM_INTERVAL_MS = 350L
-        const val APP_LIST_UNAVAILABLE = "APP_LIST_UNAVAILABLE"
+        const val STORE_SEARCH_UNAVAILABLE = "STORE_SEARCH_UNAVAILABLE"
         const val APP_DETAILS_UNAVAILABLE = "APP_DETAILS_UNAVAILABLE"
+        const val SEARCH_INCOMPLETE = "SEARCH_INCOMPLETE"
         const val CANDIDATE_DETAILS_INCOMPLETE = "CANDIDATE_DETAILS_INCOMPLETE"
+        const val RATE_LIMIT_EXHAUSTED = "RATE_LIMIT_EXHAUSTED"
         const val UNEXPECTED_FAILURE = "UNEXPECTED_FAILURE"
     }
 }

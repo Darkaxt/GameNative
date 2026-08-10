@@ -28,8 +28,26 @@ fun interface SteamCatalogSearchSource {
         locale: MetadataLocale,
     ): List<SteamStoreSearchHit>
 
+    suspend fun searchResult(
+        query: String,
+        locale: MetadataLocale,
+    ): SteamCatalogSearchResult = SteamCatalogSearchResult(
+        hits = search(query, locale),
+        complete = true,
+    )
+
+    fun searchLoaded(
+        query: String,
+        locale: MetadataLocale,
+    ): List<SteamStoreSearchHit> = emptyList()
+
     fun requestImmediateRetry() = Unit
 }
+
+data class SteamCatalogSearchResult(
+    val hits: List<SteamStoreSearchHit>,
+    val complete: Boolean,
+)
 
 data class SteamStoreSearchHit(
     val steamAppId: Int,

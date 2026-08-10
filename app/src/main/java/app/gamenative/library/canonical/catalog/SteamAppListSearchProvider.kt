@@ -152,18 +152,34 @@ internal class SteamAppListSearchProvider internal constructor(
         query: String,
         locale: MetadataLocale,
     ): List<SteamStoreSearchHit> {
+        val titleKey = normalizedTitleKey(query)
+        if (titleKey.isEmpty()) return emptyList()
+        return ensureIndex()[titleKey].orEmpty().take(MAX_RESULTS)
+    }
+
+    override fun searchLoaded(
+        query: String,
+        locale: MetadataLocale,
+    ): List<SteamStoreSearchHit> {
+        val titleKey = normalizedTitleKey(query)
+        if (titleKey.isEmpty()) return emptyList()
+        val index = titleIndex ?: return emptyList()
+        val refreshedAt = titleIndexRefreshedAtEpochSeconds ?: return emptyList()
+        if (isStale(refreshedAt, nowEpochSeconds())) return emptyList()
+        return index[titleKey].orEmpty().take(MAX_RESULTS)
+    }
+
+    override fun requestImmediateRetry() {
+        immediateRetryRequested = true
+    }
+
+    private fun normalizedTitleKey(query: String): String {
         val trimmed = query.trim()
         require(trimmed.isNotEmpty()) { "Steam catalog query is blank" }
         require(trimmed.codePointCount(0, trimmed.length) <= MAX_QUERY_CODE_POINTS) {
             "Steam catalog query is too long"
         }
-        val titleKey = CanonicalNormalization.titleKey(trimmed)
-        if (titleKey.isEmpty()) return emptyList()
-        return ensureIndex()[titleKey].orEmpty().take(MAX_RESULTS)
-    }
-
-    override fun requestImmediateRetry() {
-        immediateRetryRequested = true
+        return CanonicalNormalization.titleKey(trimmed)
     }
 
     private suspend fun ensureIndex(): Map<String, List<SteamStoreSearchHit>> {

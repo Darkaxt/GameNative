@@ -25,9 +25,7 @@ import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
-import app.gamenative.service.steam.SteamWebApiKeyRepository
-import app.gamenative.service.steam.SteamWebApiKeySaveResult
-import app.gamenative.service.steam.SteamWebApiKeyStatus
+import app.gamenative.library.metadata.SteamRateLimitExhaustedException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
@@ -35,8 +33,6 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -72,24 +68,25 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `automatic scan waits for a configured Steam Web API key`() = runTest {
+    fun `automatic scan uses keyless Store search without a configured Web API key`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         db.canonicalGameDao().insert(canonical)
-        seedMatch(match(key(GameSource.GOG, "blocked"), canonical.canonicalId, title = "Blocked"))
+        seedMatch(match(key(GameSource.GOG, "keyless"), canonical.canonicalId, title = "Keyless"))
         val calls = AtomicInteger(0)
         val repository = repository(
             search = SteamCatalogSearchSource { _, _ ->
                 calls.incrementAndGet()
                 emptyList()
             },
-            keyStatus = SteamWebApiKeyStatus.NOT_CONFIGURED,
         )
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(SteamResolutionProgress(), progress)
-        assertEquals(0, calls.get())
-        assertTrue(repository.keyRequired.value)
+        assertEquals(1, progress.total)
+        assertEquals(1, progress.completed)
+        assertEquals(1, progress.unmatched)
+        assertEquals(1, calls.get())
+        assertFalse(repository.keyRequired.value)
         assertFalse(repository.isScanning.value)
     }
 
@@ -272,6 +269,107 @@ class SteamCatalogResolutionRepositoryTest {
         assertEquals(0, progress.autoAccepted)
         val recorded = writer.operations.single() as DecisionOperation.Review
         assertEquals(1, recorded.steamAppId)
+    }
+
+    @Test
+    fun `partial search with a verified candidate records review only`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.GOG, "partial-search"), canonical.canonicalId, "Exact Marker"))
+        val search = object : SteamCatalogSearchSource {
+            override suspend fun search(query: String, locale: MetadataLocale) = emptyList<SteamStoreSearchHit>()
+
+            override suspend fun searchResult(
+                query: String,
+                locale: MetadataLocale,
+            ) = SteamCatalogSearchResult(
+                hits = listOf(SteamStoreSearchHit(42, "Exact Marker", null)),
+                complete = false,
+            )
+        }
+        val repository = repository(
+            search = search,
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(steamAppId, "Exact Marker", "Studio", 2020)
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.needsReview)
+        assertEquals(0, progress.unmatched)
+        assertEquals(0, progress.failed)
+        assertTrue(writer.operations.single() is DecisionOperation.Review)
+        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
+    }
+
+    @Test
+    fun `partial search without a verified candidate is unavailable and never unmatched`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.GOG, "empty-partial"), canonical.canonicalId, "Exact Marker"))
+        val search = object : SteamCatalogSearchSource {
+            override suspend fun search(query: String, locale: MetadataLocale) = emptyList<SteamStoreSearchHit>()
+
+            override suspend fun searchResult(
+                query: String,
+                locale: MetadataLocale,
+            ) = SteamCatalogSearchResult(hits = emptyList(), complete = false)
+        }
+        val repository = repository(search = search)
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.failed)
+        assertEquals(0, progress.unmatched)
+        assertTrue(writer.operations.isEmpty())
+        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
+    }
+
+    @Test
+    fun `AppDetails rate exhaustion aborts candidate traversal without partial result`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.GOG, "details-limit"), canonical.canonicalId, "Exact Marker"))
+        val fetched = mutableListOf<Int>()
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ ->
+                listOf(
+                    SteamStoreSearchHit(1, "Exact Marker", null),
+                    SteamStoreSearchHit(2, "Exact Marker", null),
+                )
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                fetched += steamAppId
+                throw SteamRateLimitExhaustedException()
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(listOf(1), fetched)
+        assertEquals(1, progress.failed)
+        assertEquals(0, progress.needsReview)
+        assertEquals(0, progress.unmatched)
+        assertTrue(writer.operations.isEmpty())
+        assertEquals("RATE_LIMIT_EXHAUSTED", diagnostics.events.single().errorType)
+    }
+
+    @Test
+    fun `search rate exhaustion returns no catalog result`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.GOG, "search-limit"), canonical.canonicalId, "Exact Marker"))
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ -> throw SteamRateLimitExhaustedException() },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.failed)
+        assertEquals(0, progress.unmatched)
+        assertTrue(writer.operations.isEmpty())
+        assertEquals("RATE_LIMIT_EXHAUSTED", diagnostics.events.single().errorType)
     }
 
     @Test
@@ -533,7 +631,7 @@ class SteamCatalogResolutionRepositoryTest {
 
         assertEquals(
             listOf(
-                "APP_LIST_UNAVAILABLE",
+                "STORE_SEARCH_UNAVAILABLE",
                 "APP_DETAILS_UNAVAILABLE",
                 "CANDIDATE_DETAILS_INCOMPLETE",
             ),
@@ -573,7 +671,6 @@ class SteamCatalogResolutionRepositoryTest {
     private fun repository(
         search: SteamCatalogSearchSource,
         records: SteamCatalogRecordSource = SteamCatalogRecordSource { _, _ -> null },
-        keyStatus: SteamWebApiKeyStatus = SteamWebApiKeyStatus.CONFIGURED,
     ) = SteamCatalogResolutionRepository(
         storeMatchDao = db.storeMatchDao(),
         searchSource = search,
@@ -584,16 +681,6 @@ class SteamCatalogResolutionRepositoryTest {
         diagnostics = diagnostics,
         acceptedIdentityEnrichment = enrichment,
         clock = MetadataClock { 1_000L },
-        steamWebApiKeyRepository = object : SteamWebApiKeyRepository {
-            override val changes: SharedFlow<SteamWebApiKeyStatus> = MutableSharedFlow()
-
-            override suspend fun status(): SteamWebApiKeyStatus = keyStatus
-
-            override suspend fun save(key: String): SteamWebApiKeySaveResult =
-                SteamWebApiKeySaveResult.SAVED
-
-            override suspend fun delete() = Unit
-        },
     )
 
     private suspend fun seedMatch(match: StoreMatchEntity) {

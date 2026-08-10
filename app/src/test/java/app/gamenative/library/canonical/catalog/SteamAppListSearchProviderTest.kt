@@ -67,6 +67,29 @@ class SteamAppListSearchProviderTest {
     }
 
     @Test
+    fun unloadedIndexDoesNotRefreshForOptionalSupplement() {
+        val remote = FakeRemote(listOf(SteamAppListEntry(10, "Example", 100)))
+        val provider = provider(remote = remote)
+
+        val results = provider.searchLoaded("Example", locale())
+
+        assertEquals(emptyList<SteamStoreSearchHit>(), results)
+        assertEquals(0, remote.calls)
+    }
+
+    @Test
+    fun freshLoadedIndexCanSupplementWithoutAnotherRefresh() = runTest {
+        val remote = FakeRemote(listOf(SteamAppListEntry(10, "Example", 100)))
+        val provider = provider(remote = remote)
+        provider.search("Example", locale())
+
+        val results = provider.searchLoaded("Example", locale())
+
+        assertEquals(listOf(10), results.map(SteamStoreSearchHit::steamAppId))
+        assertEquals(1, remote.calls)
+    }
+
+    @Test
     fun missingCacheAndCredentialFailsUnavailableInsteadOfRecordingUnmatched() = runTest {
         val provider = provider(key = null)
 

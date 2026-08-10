@@ -32,7 +32,7 @@ import app.gamenative.library.canonical.catalog.SteamAcceptedIdentityEnricher
 import app.gamenative.library.canonical.catalog.SteamAcceptedIdentityEnrichmentSink
 import app.gamenative.library.canonical.catalog.SteamAppListCache
 import app.gamenative.library.canonical.catalog.SteamAppListRemoteSource
-import app.gamenative.library.canonical.catalog.SteamAppListSearchProvider
+import app.gamenative.library.canonical.catalog.SteamCatalogSearchCoordinator
 import app.gamenative.library.canonical.catalog.SteamCatalogResolutionDiagnosticSink
 import app.gamenative.library.canonical.catalog.SteamCatalogSearchSource
 import app.gamenative.library.canonical.catalog.SteamPublicPicsFacetSource
@@ -144,7 +144,7 @@ abstract class CanonicalLibraryModule {
     @Binds
     @Singleton
     internal abstract fun bindSteamCatalogSearchSource(
-        implementation: SteamAppListSearchProvider,
+        implementation: SteamCatalogSearchCoordinator,
     ): SteamCatalogSearchSource
 
     @Binds
