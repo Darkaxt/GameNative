@@ -118,6 +118,7 @@ class CanonicalNormalizationTest {
                 "STORED_USER_DECISION",
                 "TRUSTED_DIRECT_MAP",
                 "EXACT_METADATA",
+                "STEAM_CATALOG",
                 "OPTIONAL_RESOLVER",
                 "FUZZY_CANDIDATE",
                 "MANUAL",
