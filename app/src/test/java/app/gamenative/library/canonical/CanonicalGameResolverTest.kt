@@ -28,6 +28,11 @@ class CanonicalGameResolverTest {
     private val accountScope = AccountScope.parse("a".repeat(64))
 
     @Test
+    fun resolverVersionAdvancesForValidatedPocPolicy() {
+        assertEquals(4, CURRENT_RESOLVER_VERSION)
+    }
+
+    @Test
     fun resolverBoundaryTypesRejectMalformedIdentityState() {
         assertThrows(IllegalArgumentException::class.java) {
             TrustedSteamMapping(

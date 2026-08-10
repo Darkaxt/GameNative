@@ -17,7 +17,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
 
-const val CURRENT_RESOLVER_VERSION = 3
+const val CURRENT_RESOLVER_VERSION = 4
 const val SUPPORTED_TRUSTED_MAP_VERSION = 1
 
 data class TrustedSteamMapping(

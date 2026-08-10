@@ -29,6 +29,82 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
+    fun corroboratedCrossStoreReleaseYearGapDoesNotBlockAutoAccept() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio", year = 2005),
+            candidates = listOf(candidate(42, "Example", "Studio", 2012)),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(42), result)
+    }
+
+    @Test
+    fun uniqueClosestCandidateAtOrBeforeSourceYearAutoAccepts() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio", year = 2015),
+            candidates = listOf(
+                candidate(10, "Example", "Studio", 2010),
+                candidate(12, "Example", "Studio", 2012),
+                candidate(20, "Example", "Studio", 2020),
+            ),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(12), result)
+    }
+
+    @Test
+    fun exactSourceYearWinsVerifiedAmbiguity() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio", year = 2015),
+            candidates = listOf(
+                candidate(10, "Example", "Studio", 2010),
+                candidate(15, "Example", "Studio", 2015),
+            ),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(15), result)
+    }
+
+    @Test
+    fun tiedClosestPriorCandidatesRequireReview() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio", year = 2015),
+            candidates = listOf(
+                candidate(42, "Example", "Studio", 2012),
+                candidate(84, "Example", "Studio", 2012),
+            ),
+        )
+
+        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+    }
+
+    @Test
+    fun ambiguityWithoutCandidateAtOrBeforeSourceYearRequiresReview() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio", year = 2010),
+            candidates = listOf(
+                candidate(42, "Example", "Studio", 2012),
+                candidate(84, "Example", "Studio", 2020),
+            ),
+        )
+
+        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+    }
+
+    @Test
+    fun ambiguityWithoutSourceYearRequiresReview() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio", year = null),
+            candidates = listOf(
+                candidate(42, "Example", "Studio", 2012),
+                candidate(84, "Example", "Studio", 2020),
+            ),
+        )
+
+        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+    }
+
+    @Test
     fun titleOnlyCandidateRequiresReview() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = null),
