@@ -4,7 +4,7 @@
 
 **Goal:** Automatically resolve non-Steam games to trustworthy Steam catalog identities with a native correction path, then ship native Reviews and Discussions as three independently testable signed deliverables.
 
-**Architecture:** Keep canonical projection and source execution unchanged. Use authenticated Steam Web API AppList discovery with a compact app-private public-catalog cache and exact local title lookup, then feed Store-validated evidence into guarded canonical mutations and reuse accepted AppIDs for metadata/facets/popularity. Add Reviews and Discussions through a separate no-store community package and extend only the existing detail ViewModel and placeholder branches.
+**Architecture:** Keep canonical projection and source execution unchanged. Use keyless bounded Steam Store search as the primary discovery path, optionally supplement exact candidates from the authenticated AppList cache, validate every candidate through Store `appdetails`, and feed complete typed evidence into guarded canonical mutations. Reuse accepted AppIDs for metadata/facets/popularity; only a complete nonpartial Steam `UNMATCHED` may hand off to source-native presentation such as Epic CMS. Add Reviews and Discussions through a separate community package and extend only the existing detail ViewModel and placeholder branches.
 
 **Tech Stack:** Kotlin 2.1.21, Jetpack Compose, Material 3, Room 2.8.4 schema 27, Hilt, DataStore Preferences, coroutines/Flow, kotlinx.serialization, OkHttp/MockWebServer, Jsoup 1.23.1, JUnit 4, Robolectric, Compose UI tests, GitHub Actions
 
@@ -46,6 +46,7 @@ RC5–RC9 do not end the plan. Tasks 15–19 execute the design ledger's resolve
 - Create: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogModels.kt`
 - Create: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogCandidatePolicy.kt`
 - Create: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogSearchProvider.kt`
+- Create: `app/src/main/java/app/gamenative/library/metadata/SteamHttpRetryPolicy.kt`
 - Create: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogResolutionRepository.kt`
 - Create: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamAcceptedIdentityEnricher.kt`
 - Create: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogResolutionDiagnostics.kt`
@@ -156,13 +157,53 @@ Cover these exact outcomes:
 
 ```kotlin
 @Test
-fun uniqueExactCandidateWithDeveloperEvidenceAutoAccepts() {
+fun corroboratedLaterSteamYearAutoAccepts() {
     val result = policy.evaluate(
-        source = source(title = "Example Deluxe", developer = "Studio Ltd", year = 2020),
-        candidates = listOf(candidate(42, "Example Deluxe", "Studio", 2020)),
+        source = source(title = "Example", developer = "Studio", year = 2005),
+        candidates = listOf(candidate(42, "Example", "Studio", 2012)),
     )
 
     assertEquals(CatalogDecision.AutoAccept(42), result)
+}
+
+@Test
+fun uniqueClosestCandidateAtOrBeforeSourceYearAutoAccepts() {
+    val result = policy.evaluate(
+        source = source(title = "Example", developer = "Studio", year = 2015),
+        candidates = listOf(
+            candidate(10, "Example", "Studio", 2010),
+            candidate(12, "Example", "Studio", 2012),
+            candidate(20, "Example", "Studio", 2020),
+        ),
+    )
+
+    assertEquals(CatalogDecision.AutoAccept(12), result)
+}
+
+@Test
+fun tiedClosestPriorCandidatesRequireReview() {
+    val result = policy.evaluate(
+        source = source(title = "Example", developer = "Studio", year = 2015),
+        candidates = listOf(
+            candidate(42, "Example", "Studio", 2012),
+            candidate(84, "Example", "Studio", 2012),
+        ),
+    )
+
+    assertEquals(listOf(42, 84), (result as CatalogDecision.ReviewRequired).steamAppIds)
+}
+
+@Test
+fun multipleCandidatesWithoutPriorReleaseRequireReview() {
+    val result = policy.evaluate(
+        source = source(title = "Example", developer = "Studio", year = 2010),
+        candidates = listOf(
+            candidate(42, "Example", "Studio", 2012),
+            candidate(84, "Example", "Studio", 2020),
+        ),
+    )
+
+    assertEquals(listOf(42, 84), (result as CatalogDecision.ReviewRequired).steamAppIds)
 }
 
 @Test
@@ -174,32 +215,9 @@ fun titleOnlyCandidateRequiresReview() {
 
     assertEquals(listOf(42), (result as CatalogDecision.ReviewRequired).steamAppIds)
 }
-
-@Test
-fun editionConflictNeverAutoAccepts() {
-    val result = policy.evaluate(
-        source = source(title = "Example Deluxe", developer = "Studio", year = 2020),
-        candidates = listOf(candidate(42, "Example", "Studio", 2020)),
-    )
-
-    assertEquals(CatalogDecision.Unmatched, result)
-}
-
-@Test
-fun equallyEligibleCandidatesRequireReview() {
-    val result = policy.evaluate(
-        source = source(title = "Example", developer = "Studio", year = 2020),
-        candidates = listOf(
-            candidate(42, "Example", "Studio", 2020),
-            candidate(84, "Example", "Studio", 2020),
-        ),
-    )
-
-    assertEquals(listOf(42, 84), (result as CatalogDecision.ReviewRequired).steamAppIds)
-}
 ```
 
-Also cover unknown/incompatible type, developer conflict, year gap greater than one, empty result, duplicate AppID removal, and stable AppID ordering.
+Also cover same-year preference, missing source year, unknown/incompatible type, developer conflict, edition conflict, complete empty result, duplicate AppID removal, stable AppID ordering, and publisher-as-developer corroboration. A corroborated year gap is neutral only when title/edition/type and developer-or-publisher evidence remain exact; it never excuses an identity conflict.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -239,7 +257,7 @@ Require positive AppIDs when candidates are created.
 
 - [ ] **Step 4: Implement the strict policy**
 
-The implementation must:
+The implementation must keep edition-preserving exact title/type validation, treat corroborated cross-store year variance as neutral, and break verified ambiguity only with a unique closest release at or before the source year:
 
 ```kotlin
 class SteamCatalogCandidatePolicy {
@@ -247,51 +265,65 @@ class SteamCatalogCandidatePolicy {
         source: SourceCatalogEvidence,
         candidates: List<SteamCatalogCandidate>,
     ): CatalogDecision {
+        val unique = candidates
+            .distinctBy(SteamCatalogCandidate::steamAppId)
+            .sortedBy(SteamCatalogCandidate::steamAppId)
+        if (unique.isEmpty()) return CatalogDecision.Unmatched
+
         val sourceTitleKey = CanonicalNormalization.titleKey(source.title)
-        if (sourceTitleKey.isEmpty() || source.appType == CanonicalAppType.UNKNOWN) {
-            return CatalogDecision.Unmatched
+        if (sourceTitleKey.isEmpty()) return CatalogDecision.Unmatched
+        if (source.appType == CanonicalAppType.UNKNOWN) return unique.reviewRequired()
+
+        val eligible = unique.filter { candidate ->
+            candidate.appType == source.appType &&
+                CanonicalNormalization.titleKey(candidate.title) == sourceTitleKey
         }
+        if (eligible.isEmpty()) return unique.reviewRequired()
+
         val sourceDeveloperKey = source.developer
             ?.let(CanonicalNormalization::developerKey)
             .orEmpty()
-        val eligible = candidates
-            .distinctBy(SteamCatalogCandidate::steamAppId)
-            .filter { candidate ->
-                candidate.appType == source.appType &&
-                    CanonicalNormalization.titleKey(candidate.title) == sourceTitleKey
-            }
-            .sortedBy(SteamCatalogCandidate::steamAppId)
-        if (eligible.isEmpty()) return CatalogDecision.Unmatched
-
         val corroborated = eligible.filter { candidate ->
-            val candidateDeveloperKey = candidate.developer
-                ?.let(CanonicalNormalization::developerKey)
-                .orEmpty()
+            val partyKeys = sequenceOf(candidate.developer, candidate.publisher)
+                .filterNotNull()
+                .map(CanonicalNormalization::developerKey)
+                .filter(String::isNotEmpty)
+                .toSet()
             val developerMatches = sourceDeveloperKey.isNotEmpty() &&
-                candidateDeveloperKey == sourceDeveloperKey
+                sourceDeveloperKey in partyKeys
+            val developerConflicts = sourceDeveloperKey.isNotEmpty() &&
+                partyKeys.isNotEmpty() &&
+                sourceDeveloperKey !in partyKeys
             val yearMatches = source.releaseYear != null &&
                 candidate.releaseYear != null &&
                 kotlin.math.abs(source.releaseYear - candidate.releaseYear) <= 1
-            val developerConflicts = sourceDeveloperKey.isNotEmpty() &&
-                candidateDeveloperKey.isNotEmpty() &&
-                sourceDeveloperKey != candidateDeveloperKey
-            val yearConflicts = source.releaseYear != null &&
-                candidate.releaseYear != null &&
-                kotlin.math.abs(source.releaseYear - candidate.releaseYear) > 1
-            !developerConflicts && !yearConflicts && (developerMatches || yearMatches)
+            !developerConflicts && (developerMatches || yearMatches)
         }
-        return when {
-            corroborated.size == 1 -> CatalogDecision.AutoAccept(corroborated.single().steamAppId)
-            corroborated.size > 1 -> CatalogDecision.ReviewRequired(
-                corroborated.map(SteamCatalogCandidate::steamAppId),
-            )
-            else -> CatalogDecision.ReviewRequired(
-                eligible.map(SteamCatalogCandidate::steamAppId),
-            )
+
+        if (corroborated.size <= 1) {
+            return corroborated.singleOrNull()
+                ?.let { CatalogDecision.AutoAccept(it.steamAppId) }
+                ?: eligible.reviewRequired()
         }
+
+        val sourceYear = source.releaseYear ?: return corroborated.reviewRequired()
+        val prior = corroborated.filter { candidate ->
+            candidate.releaseYear?.let { it <= sourceYear } == true
+        }
+        val closestYear = prior.maxOfOrNull { requireNotNull(it.releaseYear) }
+            ?: return corroborated.reviewRequired()
+        val closest = prior.filter { it.releaseYear == closestYear }
+        return closest.singleOrNull()
+            ?.let { CatalogDecision.AutoAccept(it.steamAppId) }
+            ?: corroborated.reviewRequired()
     }
+
+    private fun List<SteamCatalogCandidate>.reviewRequired() =
+        CatalogDecision.ReviewRequired(map(SteamCatalogCandidate::steamAppId))
 }
 ```
+
+Bump `CURRENT_RESOLVER_VERSION` from 3 to 4 in the same policy checkpoint. Add regressions proving v3 automatic review/unmatched decisions become eligible once, while accepted `HIGH`/`VERIFIED` and user decisions remain sticky.
 
 - [ ] **Step 5: Verify GREEN and commit**
 
@@ -308,10 +340,13 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 
 **Files:**
 - Create: `app/src/main/java/app/gamenative/library/canonical/catalog/SteamCatalogSearchProvider.kt`
-- Create: `app/src/test/java/app/gamenative/library/canonical/catalog/SteamCatalogSearchProviderTest.kt`
+- Create: `app/src/main/java/app/gamenative/library/metadata/SteamHttpRetryPolicy.kt`
 - Modify: `app/src/main/java/app/gamenative/library/metadata/SteamCatalogProvider.kt`
+- Modify: `app/src/main/java/app/gamenative/library/metadata/SteamUrlPolicy.kt`
 - Modify: `app/src/main/java/app/gamenative/library/metadata/GameMetadataModels.kt`
+- Create: `app/src/test/java/app/gamenative/library/canonical/catalog/SteamCatalogSearchProviderTest.kt`
 - Modify: `app/src/test/java/app/gamenative/library/metadata/SteamCatalogProviderTest.kt`
+- Modify: `app/src/test/java/app/gamenative/library/metadata/SteamUrlPolicyTest.kt`
 - Create fixture: `app/src/test/resources/steam/store-search.json`
 
 - [ ] **Step 1: Write failing transport tests**
@@ -319,11 +354,14 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 Tests must prove:
 
 - locale/country are encoded with `HttpUrl.Builder`;
-- only HTTPS `store.steampowered.com:443/api/storesearch/` requests pass;
-- every redirect and final effective URL is revalidated;
-- cross-host, credentialed, fragment, wrong-path, excess-hop, oversized, malformed, duplicate, nonpositive-ID, and cancellation cases fail closed;
-- exception messages contain a fixed string only;
-- response/request text is never logged;
+- only HTTPS `store.steampowered.com:443/api/storesearch/` requests with `term`, `cc`, and `l` pass;
+- every redirect and final effective URL revalidates the same endpoint-specific path/query contract for Store search and `appdetails`;
+- cross-host, credentialed, fragment, wrong-path, wrong-query, excess-hop, oversized, malformed, duplicate, nonpositive-ID, and cancellation cases fail closed;
+- a 429 followed by 200 succeeds; four 429 responses throw typed `SteamRateLimitExhaustedException` and return no result;
+- numeric and HTTP-date `Retry-After` are capped at 30 seconds, missing/invalid values use cancellable 1/2/4-second fallback delays, and immediate success does not sleep;
+- cancellation during request/body/delay propagates;
+- complete empty, partial with hits, and unavailable-without-result remain distinguishable;
+- exception messages contain fixed strings only;
 - at most ten candidates survive parsing.
 
 Use `MockWebServer` and assert request path/query directly. Do not assert full URLs in diagnostic output.
@@ -339,12 +377,19 @@ Expected: provider types are unresolved.
 - [ ] **Step 3: Implement the search source contract**
 
 ```kotlin
+data class SteamCatalogSearchResult(
+    val hits: List<SteamStoreSearchHit>,
+    val complete: Boolean,
+)
+
 fun interface SteamCatalogSearchSource {
     suspend fun search(
         query: String,
         locale: MetadataLocale,
-    ): List<SteamStoreSearchHit>
+    ): SteamCatalogSearchResult
 }
+
+class SteamRateLimitExhaustedException : IOException("Steam rate limit exhausted")
 
 data class SteamStoreSearchHit(
     val steamAppId: Int,
@@ -353,7 +398,7 @@ data class SteamStoreSearchHit(
 )
 ```
 
-Reject blank queries, trim only in memory, cap query length at 256 Unicode code points, encode only `term`, `cc`, and `l`, parse at most ten results, and use a dedicated no-cookie/no-cache client with automatic redirects disabled.
+Reject blank queries, trim only in memory, cap query length at 256 Unicode code points, encode only `term`, `cc`, and `l`, parse at most ten results, and use a dedicated no-cookie/no-cache client with automatic redirects disabled. Implement one shared injectable retry executor for keyless Store search and `appdetails`: four total attempts, numeric/HTTP-date `Retry-After`, 30-second cap, 1/2/4 fallback, cancellable delay, and typed exhaustion with no partial return. `complete=true` is valid only after a fully parsed successful response; malformed/failed/exhausted requests never synthesize a complete empty list.
 
 - [ ] **Step 4: Extend appdetails with candidate evidence without breaking metadata callers**
 
@@ -375,7 +420,7 @@ interface SteamCatalogRecordSource {
 }
 ```
 
-Make `SteamCatalogProvider` implement both `SteamCatalogDataSource` and `SteamCatalogRecordSource`. Existing `fetch()` returns `fetchRecord()?.metadata`. Parse `data.type` into the exact `CanonicalAppType` enum and extract one supported four-digit year from the sanitized release-date field. Preserve all existing media and redirect tests.
+Make `SteamCatalogProvider` implement both `SteamCatalogDataSource` and `SteamCatalogRecordSource`. Existing `fetch()` returns `fetchRecord()?.metadata`. Parse `data.type` into the exact `CanonicalAppType` enum and extract one supported four-digit year from the sanitized release-date field. Apply the same shared four-attempt retry executor and typed exhaustion used by Store search. Revalidate exact `/api/appdetails` path plus only `appids`, `cc`, and `l` on the initial request, every redirect, and the effective response URL; a same-host wrong path or unexpected query fails closed. Preserve all existing media, body-bound, and cancellation tests.
 
 - [ ] **Step 5: Verify providers and commit**
 
@@ -467,16 +512,20 @@ All implementations call `requireMutableMatch`, re-read the exact row inside `db
 
 Use fakes to prove:
 
-- one search per canonical, not per copy;
+- one keyless Store search per canonical, not per copy;
 - strongest present evidence wins;
 - local/sticky/direct matches are skipped;
 - concurrency never exceeds two;
 - at most five plausible hits call `fetchRecord`;
-- one failure increments failed count and does not cancel siblings;
+- optional AppList candidates can supplement but missing-key state never prevents Store search;
+- typed search rate-limit exhaustion returns provider-unavailable with `RATE_LIMIT_EXHAUSTED`, no mutation, and no source fallback;
+- typed AppDetails rate-limit exhaustion aborts before the next hit and returns no partial resolution result;
+- partial search/details with at least one verified candidate records review-only; partial without a verified candidate is provider-unavailable;
+- only complete empty search persists `UNMATCHED`;
+- one per-game failure increments failed count and does not cancel sibling canonicals;
 - cancellation propagates;
-- accepted/review/unmatched outcomes are fixed categories;
-- manual search ignores scan cooldown;
-- no title/query/AppID/URL enters diagnostics.
+- accepted/review/unmatched/provider-unavailable/rate-limit outcomes are fixed categories;
+- manual search ignores scan cooldown.
 
 - [ ] **Step 5: Implement repository state and progress**
 
@@ -490,16 +539,25 @@ data class SteamResolutionProgress(
     val unmatched: Int,
 )
 
+enum class SteamProviderFailureReason {
+    SEARCH_UNAVAILABLE,
+    DETAILS_UNAVAILABLE,
+    INCOMPLETE_WITHOUT_VERIFIED_CANDIDATE,
+    RATE_LIMIT_EXHAUSTED,
+}
+
 sealed interface SteamResolutionItemResult {
     data object AutoAccepted : SteamResolutionItemResult
     data object ReviewRequired : SteamResolutionItemResult
     data object Unmatched : SteamResolutionItemResult
     data object ExpectedStateChanged : SteamResolutionItemResult
-    data object ProviderUnavailable : SteamResolutionItemResult
+    data class ProviderUnavailable(
+        val reason: SteamProviderFailureReason,
+    ) : SteamResolutionItemResult
 }
 ```
 
-The repository receives canonical IDs, loads current match evidence from `StoreMatchDao`, searches/fetches outside Room, applies `SteamCatalogCandidatePolicy`, then performs one guarded mutation. Keep process-session candidate lists in memory. Persist only the accepted/rejected/store-match decision and fixed global scan timestamp/version; do not persist search text or candidate titles.
+The repository receives canonical IDs, loads current match evidence from `StoreMatchDao`, performs keyless Store search and `appdetails` outside Room, applies `SteamCatalogCandidatePolicy` only to verified evidence with explicit completeness, then performs one guarded mutation. The AppList cache is optional candidate assistance and missing key state is not a scan gate. Catch generic per-candidate detail failures only to construct explicit partial state; rethrow cancellation, and handle typed rate-limit exhaustion before any later-candidate traversal. Persist `UNMATCHED` only for a complete empty result. Keep process-session candidate lists in memory. Persist only the accepted/rejected/store-match decision and fixed global scan timestamp/version.
 
 - [ ] **Step 6: Verify, commit, and push**
 
@@ -667,7 +725,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 
 - [ ] **Step 2: Perform one design cross-check**
 
-Check design Sections 5–6, 10–13, and Steam-resolution acceptance criteria 1–11. Record only deterministic evidence. Classify every discrepancy. Batch confirmed Critical/High fixes into one correction commit; do not launch a second review.
+Check design Sections 5–6, 10–13, and Steam-resolution acceptance criteria 1–13. Record only deterministic evidence. Classify every discrepancy. Batch confirmed Critical/High fixes into one correction commit; do not launch a second review.
 
 - [ ] **Step 3: Prepare the next unused release identity**
 
@@ -838,7 +896,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 ./gradlew --no-daemon --no-parallel :app:compileLegacyDebugAndroidTestKotlin
 ```
 
-- [ ] **Step 2: Cross-check design Sections 5, 7, 9–13 and criteria 11–14**
+- [ ] **Step 2: Cross-check design Sections 5, 7, 9–13 and criteria 14–17**
 
 Apply the one-pass classification/correction rule. Review-body/identity persistence, unsafe endpoint/query mapping, unbounded content, cursor loop, or a Reviews failure blanking another section is a release blocker.
 
@@ -985,7 +1043,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 ./gradlew --no-daemon --no-parallel :app:compileLegacyDebugAndroidTestKotlin
 ```
 
-- [ ] **Step 2: Cross-check design Sections 5, 8–13 and criteria 15–18**
+- [ ] **Step 2: Cross-check design Sections 5, 8–13 and criteria 18–21**
 
 Apply the one-pass classification/correction rule. Authenticated scraping/cookies, unsafe redirects, cross-AppID threads, raw HTML execution, body/identity persistence, missing external fallback, or Discussions breaking Reviews/other sections is a blocker.
 
@@ -1092,7 +1150,7 @@ data class ResolverCoverage(
 }
 ```
 
-`usefulCoveragePercent >= 80` closes the global-index expansion trigger. A lower result requires the local global-AppList candidate index in Step 3; it cannot be silently accepted.
+`usefulCoveragePercent >= 80` closes the candidate-expansion trigger. A lower result requires one bounded expansion selected from measured failure categories—optional authenticated AppList indexing, alternate normalization, or a validated direct hint. Missing AppList credentials can never block or downgrade the keyless Store baseline.
 
 - [ ] **Step 2: Add durable attempt and rejection history**
 
@@ -1135,7 +1193,7 @@ Add unique WorkManager work constrained to network availability. It reads only I
 
 - [ ] **Step 3: Apply the coverage-triggered catalog expansion**
 
-If Step 1 is below 80%, add a bounded keyless Steam AppList download and app-private local title-key index. The index stores public AppID/title keys only, validates candidates through `appdetails`, and never becomes action authority. If Step 1 is at least 80%, record the measured closure in the cross-check and do not add the index.
+If Step 1 is below 80% and measured evidence supports it, retain the existing authenticated Steam AppList cache as an optional bounded local title-key index. The index stores public AppID/title keys only, validates candidates through `appdetails`, and never becomes action authority. If no validated key exists, keyless Store search continues unchanged and the measured gap selects another approved expansion. If Step 1 is at least 80%, record the measured closure in the cross-check and do not expand discovery.
 
 Evaluate the existing GOG map only as a candidate hint. It remains review-required unless a map source satisfies the validated one-to-one contract.
 
@@ -1323,6 +1381,10 @@ Rebase or merge from then-current official master, retain upstream-compatible fe
 | Design requirement | Owning tasks |
 |---|---|
 | Automatic non-Steam catalog discovery | 2–4 |
+| Keyless Store baseline with optional AppList assistance | 3–4, 15 |
+| Four-attempt retry, typed rate-limit exhaustion, and complete/partial decisions | 3–4 |
+| Corroborated year variance and unique closest-prior ambiguity | 2 |
+| Complete-unmatched-only source presentation fallback | 4–5 |
 | Strict multi-field acceptance | 2–3 |
 | No network in projection transaction | 4 |
 | Guarded automatic/manual mutation | 4 |
