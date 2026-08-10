@@ -12,7 +12,14 @@ class SteamUrlPolicy(
     fun isAllowedApiRequest(url: HttpUrl): Boolean =
         isSafeBase(url) &&
             url.host in apiHosts &&
-            url.encodedPath == APPDETAILS_PATH
+            url.encodedPath == APPDETAILS_PATH &&
+            url.queryParameterNames.all(APPDETAILS_QUERY_PARAMETERS::contains)
+
+    fun isAllowedStoreSearchRequest(url: HttpUrl): Boolean =
+        isSafeBase(url) &&
+            url.host in apiHosts &&
+            url.encodedPath == STORE_SEARCH_PATH &&
+            url.queryParameterNames.all(STORE_SEARCH_QUERY_PARAMETERS::contains)
 
     fun isAllowedWebApiAppListRequest(url: HttpUrl): Boolean =
         isSafeBase(url) &&
@@ -35,6 +42,9 @@ class SteamUrlPolicy(
 
     companion object {
         const val APPDETAILS_PATH = "/api/appdetails"
+        val APPDETAILS_QUERY_PARAMETERS = setOf("appids", "l", "cc")
+        const val STORE_SEARCH_PATH = "/api/storesearch/"
+        val STORE_SEARCH_QUERY_PARAMETERS = setOf("term", "l", "cc")
         const val WEB_API_APP_LIST_PATH = "/IStoreService/GetAppList/v1/"
         val WEB_API_APP_LIST_QUERY_PARAMETERS = setOf(
             "include_games",

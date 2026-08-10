@@ -28,6 +28,34 @@ class SteamUrlPolicyTest {
     }
 
     @Test
+    fun rejectsUnexpectedAppDetailsAndStoreSearchQueryParameters() {
+        assertTrue(
+            policy.isAllowedApiRequest(
+                "https://store.steampowered.com/api/appdetails?appids=42&l=english&cc=US"
+                    .toHttpUrl(),
+            ),
+        )
+        assertFalse(
+            policy.isAllowedApiRequest(
+                "https://store.steampowered.com/api/appdetails?appids=42&redirect=evil"
+                    .toHttpUrl(),
+            ),
+        )
+        assertTrue(
+            policy.isAllowedStoreSearchRequest(
+                "https://store.steampowered.com/api/storesearch/?term=example&l=english&cc=US"
+                    .toHttpUrl(),
+            ),
+        )
+        assertFalse(
+            policy.isAllowedStoreSearchRequest(
+                "https://store.steampowered.com/api/storesearch/?term=example&key=secret"
+                    .toHttpUrl(),
+            ),
+        )
+    }
+
+    @Test
     fun acceptsOnlyExplicitHttpsSteamMediaHosts() {
         listOf(
             "https://shared.akamai.steamstatic.com/store_item_assets/a.jpg",

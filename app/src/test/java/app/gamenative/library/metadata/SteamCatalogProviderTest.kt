@@ -64,6 +64,47 @@ class SteamCatalogProviderTest {
     }
 
     @Test
+    fun retriesRateLimitBeforeReturningAppDetails() = runTest {
+        server.enqueue(MockResponse().setResponseCode(429))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successFixture()))
+
+        val metadata = provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US"))
+
+        assertNotNull(metadata)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun exhaustedRateLimitReturnsTypedFailureWithoutCatalogResult() = runTest {
+        repeat(4) { server.enqueue(MockResponse().setResponseCode(429)) }
+
+        try {
+            provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US"))
+            fail("Expected typed rate-limit exhaustion")
+        } catch (_: SteamRateLimitExhaustedException) {
+        }
+
+        assertEquals(4, server.requestCount)
+    }
+
+    @Test
+    fun rejectsSameHostRedirectToWrongEndpointPath() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", server.url("/api/not-appdetails")),
+        )
+
+        try {
+            provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US"))
+            fail("Expected wrong endpoint redirect to be rejected")
+        } catch (_: SteamCatalogException) {
+        }
+
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
     fun rejectsInvalidLocaleOrCountryBeforeNetwork() {
         assertInvalidLocale { MetadataLocale("not a locale", "US") }
         assertInvalidLocale { MetadataLocale("en-US", "USA") }
@@ -341,6 +382,10 @@ class SteamCatalogProviderTest {
             allowedPorts = setOf(server.port, 443),
         ),
         clock = MetadataClock { 1234L },
+        retryExecutor = SteamHttpRetryExecutor(
+            sleep = {},
+            nowEpochMs = { 1234L },
+        ),
     )
 
     private fun successFixture(): String = requireNotNull(

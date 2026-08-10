@@ -39,6 +39,7 @@ class SteamCatalogProvider internal constructor(
     private val apiEndpoint: HttpUrl,
     private val urlPolicy: SteamUrlPolicy,
     private val clock: MetadataClock,
+    private val retryExecutor: SteamHttpRetryExecutor,
 ) : SteamCatalogDataSource, SteamCatalogRecordSource {
     @Inject
     constructor() : this(
@@ -46,6 +47,7 @@ class SteamCatalogProvider internal constructor(
         apiEndpoint = DEFAULT_ENDPOINT.toHttpUrl(),
         urlPolicy = SteamUrlPolicy(),
         clock = MetadataClock(System::currentTimeMillis),
+        retryExecutor = SteamHttpRetryExecutor(),
     )
 
     override suspend fun fetch(
@@ -62,6 +64,8 @@ class SteamCatalogProvider internal constructor(
         return try {
             fetchRecordInternal(trustedSteamAppId, locale)
         } catch (error: CancellationException) {
+            throw error
+        } catch (error: SteamRateLimitExhaustedException) {
             throw error
         } catch (error: SteamCatalogException) {
             throw error
@@ -86,16 +90,16 @@ class SteamCatalogProvider internal constructor(
     private suspend fun executeValidated(initialRequest: Request): String {
         var request = initialRequest
         repeat(MAX_NETWORK_HOPS) {
-            if (!urlPolicy.isAllowedNetworkUrl(request.url)) throw SteamCatalogException()
-            val response = client.newCall(request).awaitResponse()
-            if (!urlPolicy.isAllowedNetworkUrl(response.request.url)) {
+            if (!urlPolicy.isAllowedApiRequest(request.url)) throw SteamCatalogException()
+            val response = retryExecutor.execute { client.newCall(request).awaitSteamResponse() }
+            if (!urlPolicy.isAllowedApiRequest(response.request.url)) {
                 response.close()
                 throw SteamCatalogException()
             }
             if (response.code in REDIRECT_CODES) {
                 val next = response.header("Location")?.let(response.request.url::resolve)
                 response.close()
-                if (next == null || !urlPolicy.isAllowedNetworkUrl(next)) {
+                if (next == null || !urlPolicy.isAllowedApiRequest(next)) {
                     throw SteamCatalogException()
                 }
                 request = Request.Builder().url(next).get().build()
@@ -284,7 +288,7 @@ private fun ResponseBody.readAppDetailsBoundedUtf8(maxBytes: Long): String {
     return source.readUtf8()
 }
 
-private suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
+internal suspend fun Call.awaitSteamResponse(): Response = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }
     enqueue(
         object : Callback {
