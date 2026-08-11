@@ -148,13 +148,19 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun incompatibleCandidateTypeRequiresReview() {
+    fun incompatibleCandidateTypeIsUnmatched() {
         val result = policy.evaluate(
-            source = source(title = "Example", appType = CanonicalAppType.GAME),
-            candidates = listOf(candidate(42, "Example", appType = CanonicalAppType.DLC)),
+            source = source(title = "Alan Wake 2", appType = CanonicalAppType.GAME),
+            candidates = listOf(
+                candidate(
+                    3_274_290,
+                    "Alan Wake 2",
+                    appType = CanonicalAppType.APPLICATION,
+                ),
+            ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+        assertEquals(CatalogDecision.Unmatched, result)
     }
 
     @Test

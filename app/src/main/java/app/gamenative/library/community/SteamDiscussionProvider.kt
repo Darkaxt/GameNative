@@ -1,5 +1,7 @@
 package app.gamenative.library.community
 
+import app.gamenative.library.metadata.SteamHttpRetryExecutor
+import app.gamenative.library.metadata.SteamRateLimitExhaustedException
 import app.gamenative.utils.Net
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -15,6 +17,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 @Singleton
@@ -24,6 +27,7 @@ class SteamDiscussionProvider internal constructor(
     private val allowedHosts: Set<String>,
     private val requireHttps: Boolean,
     private val allowedPorts: Set<Int>,
+    private val retryExecutor: SteamHttpRetryExecutor = SteamHttpRetryExecutor(),
 ) : SteamDiscussionSource {
     @Inject
     constructor() : this(
@@ -66,7 +70,11 @@ class SteamDiscussionProvider internal constructor(
             if (!isAllowedNetworkUrl(request.url) || validateUrlAppId(request.url, steamAppId) == null) {
                 throw SteamDiscussionsUnavailable()
             }
-            val response = client.newCall(request).awaitDiscussionResponse()
+            val response = try {
+                retryExecutor.execute { client.newCall(request).awaitDiscussionResponse() }
+            } catch (_: SteamRateLimitExhaustedException) {
+                throw SteamDiscussionsUnavailable()
+            }
             if (!isAllowedNetworkUrl(response.request.url)) {
                 response.close()
                 throw SteamDiscussionsUnavailable()
@@ -84,7 +92,9 @@ class SteamDiscussionProvider internal constructor(
                 request = requestFor(next)
             } else {
                 response.use { finalResponse ->
-                    if (!finalResponse.isSuccessful) throw SteamDiscussionsUnavailable()
+                    if (!finalResponse.isSuccessful || !finalResponse.hasHtmlContentType()) {
+                        throw SteamDiscussionsUnavailable()
+                    }
                     return finalResponse.readBoundedBody()
                 }
             }
@@ -98,7 +108,13 @@ class SteamDiscussionProvider internal constructor(
         } catch (_: IllegalArgumentException) {
             throw SteamDiscussionsUnavailable()
         }
-        val threads = document.select(".forum_topic")
+        ensureSupportedRepresentation(document)
+        val topics = document.select(".forum_topic").take(MAX_ITEMS)
+        val explicitEmpty = document.selectFirst(
+            ".forum_no_topics, .forum_topic_none, [data-forum-empty=true]",
+        )
+        if (topics.isEmpty() && explicitEmpty == null) throw SteamDiscussionsUnavailable()
+        val threads = topics
             .asSequence()
             .mapNotNull { topic ->
                 val title = safeText(topic.selectFirst(".forum_topic_name"))
@@ -119,6 +135,7 @@ class SteamDiscussionProvider internal constructor(
             }
             .take(MAX_ITEMS)
             .toList()
+        if (topics.isNotEmpty() && threads.isEmpty()) throw SteamDiscussionsUnavailable()
         return SteamDiscussionListing(
             threads = threads,
             nextRoute = nextRoute(document.select("a[rel=next], a.pagebtn"), steamAppId, RouteKind.LISTING),
@@ -135,6 +152,12 @@ class SteamDiscussionProvider internal constructor(
         } catch (_: IllegalArgumentException) {
             throw SteamDiscussionsUnavailable()
         }
+        ensureSupportedRepresentation(document)
+        val postContainers = document.select(".forum_op, .forum_post, .commentthread_comment")
+        val explicitEmpty = document.selectFirst(
+            ".forum_thread_empty, .forum_posts_empty, [data-forum-thread-empty=true]",
+        )
+        if (postContainers.isEmpty() && explicitEmpty == null) throw SteamDiscussionsUnavailable()
         val title = safeText(document.selectFirst(".topic, .forum_topic_name, h1"))
             ?.take(MAX_TITLE_LENGTH)
             ?: "Steam discussion"
@@ -146,12 +169,29 @@ class SteamDiscussionProvider internal constructor(
             .map { text -> SteamDiscussionPost(text.take(MAX_POST_LENGTH)) }
             .take(MAX_ITEMS)
             .toList()
+        if (postContainers.isNotEmpty() && posts.isEmpty()) throw SteamDiscussionsUnavailable()
         return SteamDiscussionThread(
             title = title,
             posts = posts,
             route = route.substringBefore('?'),
             nextRoute = nextRoute(document.select("a[rel=next], a.pagebtn"), steamAppId, RouteKind.THREAD),
         )
+    }
+
+    private fun ensureSupportedRepresentation(document: Document) {
+        if (
+            document.selectFirst(
+                ".error_ctn, .community_home_error, #error_box, [data-steam-error]",
+            ) != null
+        ) {
+            throw SteamDiscussionsUnavailable()
+        }
+        val clientRenderedShell = document.selectFirst("#application_root") != null &&
+            document.selectFirst("script[src*='/javascript/applications/community/main.js']") != null
+        val serverForumContent = document.selectFirst(
+            ".forum_topic, .forum_op, .forum_post, .commentthread_comment",
+        ) != null
+        if (clientRenderedShell && !serverForumContent) throw SteamDiscussionsUnavailable()
     }
 
     private fun nextRoute(
@@ -190,14 +230,18 @@ class SteamDiscussionProvider internal constructor(
             segments.size == 2 && segments.all { segment -> segment.all(Char::isDigit) } -> RouteKind.THREAD
             else -> return null
         }
-        if (!validPaginationQuery(url)) return null
+        if (!validPaginationQuery(url, kind)) return null
         return kind
     }
 
-    private fun validPaginationQuery(url: HttpUrl): Boolean {
+    private fun validPaginationQuery(url: HttpUrl, kind: RouteKind): Boolean {
         if (url.query == null) return true
-        if (url.queryParameterNames != setOf("ctp")) return false
-        return url.queryParameterValues("ctp").singleOrNull()
+        val paginationKey = when (kind) {
+            RouteKind.LISTING -> "fp"
+            RouteKind.THREAD -> "ctp"
+        }
+        if (url.queryParameterNames != setOf(paginationKey)) return false
+        return url.queryParameterValues(paginationKey).singleOrNull()
             ?.toIntOrNull()
             ?.let { page -> page in 1..MAX_PAGE }
             ?: false
@@ -219,6 +263,11 @@ class SteamDiscussionProvider internal constructor(
         .header("Cache-Control", "no-store")
         .get()
         .build()
+
+    private fun Response.hasHtmlContentType(): Boolean {
+        val contentType = body.contentType() ?: return false
+        return contentType.type == "text" && contentType.subtype == "html"
+    }
 
     private fun Response.readBoundedBody(): String {
         if (body.contentLength() > MAX_RESPONSE_BYTES) throw SteamDiscussionsUnavailable()

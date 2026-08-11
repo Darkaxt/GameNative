@@ -1,5 +1,7 @@
 package app.gamenative.library.community
 
+import app.gamenative.library.metadata.SteamHttpRetryExecutor
+import app.gamenative.library.metadata.SteamRateLimitExhaustedException
 import app.gamenative.utils.Net
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -33,6 +35,7 @@ class SteamReviewPageProvider internal constructor(
     private val allowedHosts: Set<String>,
     private val requireHttps: Boolean,
     private val allowedPorts: Set<Int>,
+    private val retryExecutor: SteamHttpRetryExecutor = SteamHttpRetryExecutor(),
 ) : SteamReviewPageSource {
     @Inject
     constructor() : this(
@@ -77,10 +80,15 @@ class SteamReviewPageProvider internal constructor(
             .header("Cache-Control", "no-store")
             .get()
             .build()
-        val response = client.newCall(request).awaitSteamReviewResponse()
+        val response = try {
+            retryExecutor.execute { client.newCall(request).awaitSteamReviewResponse() }
+        } catch (_: SteamRateLimitExhaustedException) {
+            throw SteamReviewsUnavailable()
+        }
         response.use {
             if (
                 !it.isSuccessful ||
+                !it.hasJsonContentType() ||
                 !isAllowedNetworkUrl(it.request.url) ||
                 it.code in REDIRECT_CODES
             ) {
@@ -106,6 +114,10 @@ class SteamReviewPageProvider internal constructor(
     }
 
     private fun parseReview(value: JsonObject): SteamReviewCard? {
+        val recommendationId = value.string("recommendationid")
+            ?.takeIf(String::isNotBlank)
+            ?.takeIf { it.length <= MAX_RECOMMENDATION_ID_LENGTH }
+            ?: return null
         val text = value.string("review")
             ?.takeIf(String::isNotBlank)
             ?.take(MAX_REVIEW_TEXT_LENGTH)
@@ -125,7 +137,14 @@ class SteamReviewPageProvider internal constructor(
             developerResponse = value.string("developer_response")
                 ?.takeIf(String::isNotBlank)
                 ?.take(MAX_DEVELOPER_RESPONSE_LENGTH),
+            recommendationId = recommendationId,
         )
+    }
+
+    private fun Response.hasJsonContentType(): Boolean {
+        val contentType = body.contentType() ?: return false
+        return contentType.type == "application" &&
+            (contentType.subtype == "json" || contentType.subtype.endsWith("+json"))
     }
 
     private fun Response.readBoundedBody(): String {
@@ -179,6 +198,7 @@ class SteamReviewPageProvider internal constructor(
         const val APP_REVIEWS_PATH = "/appreviews"
         const val MAX_REVIEWS = 20
         const val MAX_CURSOR_LENGTH = 512
+        const val MAX_RECOMMENDATION_ID_LENGTH = 128
         const val MAX_REVIEW_TEXT_LENGTH = 16 * 1024
         const val MAX_DEVELOPER_RESPONSE_LENGTH = 8 * 1024
         const val MAX_RESPONSE_BYTES = 1024L * 1024L

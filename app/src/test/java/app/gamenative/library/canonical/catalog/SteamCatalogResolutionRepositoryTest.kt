@@ -125,6 +125,43 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
+    fun `complete Epic result with only non game Steam hit uses CMS fallback`() = runTest {
+        val namespace = "c4763f236d08423eb47b4c3008779c84"
+        val catalogId = "93f2a8c3547846eda966cb3c152a026e"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.EPIC, stableSourceId), canonical.canonicalId, title = "Alan Wake 2"))
+        val requests = mutableListOf<EpicCmsCatalogRequest>()
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ ->
+                listOf(SteamStoreSearchHit(3_274_290, "Alan Wake 2", null))
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(
+                    steamAppId = steamAppId,
+                    title = "Alan Wake 2",
+                    developer = null,
+                    year = null,
+                    appType = CanonicalAppType.APPLICATION,
+                )
+            },
+            epicCatalogSource = EpicCmsCatalogSource { request ->
+                requests += request
+                epicRecord(request.stableSourceId, namespace, catalogId, request.sourceTitle)
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.unmatched)
+        assertEquals(0, progress.needsReview)
+        assertEquals(0, progress.failed)
+        assertEquals(listOf("Alan Wake 2"), requests.map(EpicCmsCatalogRequest::sourceTitle))
+        assertEquals(1, epicFallbackWriter.calls.size)
+    }
+
+    @Test
     fun `complete Epic unmatched remains unresolved when CMS is unavailable`() = runTest {
         val namespace = "c4763f236d08423eb47b4c3008779c84"
         val catalogId = "93f2a8c3547846eda966cb3c152a026e"
@@ -899,9 +936,10 @@ class SteamCatalogResolutionRepositoryTest {
         title: String,
         developer: String?,
         year: Int?,
+        appType: CanonicalAppType = CanonicalAppType.GAME,
     ) = SteamCatalogRecord(
         steamAppId = steamAppId,
-        appType = CanonicalAppType.GAME,
+        appType = appType,
         releaseYear = year,
         metadata = CanonicalGameMetadata(
             title = title,

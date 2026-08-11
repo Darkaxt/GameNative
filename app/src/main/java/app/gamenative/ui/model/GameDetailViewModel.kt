@@ -7,6 +7,7 @@ import app.gamenative.library.community.DiscussionSectionState
 import app.gamenative.library.community.ReviewSectionState
 import app.gamenative.library.community.SteamDiscussionSource
 import app.gamenative.library.community.SteamDiscussionSummary
+import app.gamenative.library.community.SteamReviewCard
 import app.gamenative.library.community.SteamReviewPageSource
 import app.gamenative.library.community.SteamReviewQuery
 import app.gamenative.library.metadata.GameDetailState
@@ -52,6 +53,7 @@ class GameDetailViewModel @Inject constructor(
     private val visitedDiscussionRoutes = mutableSetOf<String>()
     private var discussionRevision = 0L
     private var retainedDiscussionListing: DiscussionSectionState.Listing? = null
+    private var retainedDiscussionPagination: DiscussionPagination? = null
 
     val state = combine(selectedCanonicalId, reloadRevision) { canonicalId, _ -> canonicalId }
         .flatMapLatest { canonicalId ->
@@ -117,7 +119,8 @@ class GameDetailViewModel @Inject constructor(
                     ReviewSectionState.Empty
                 } else {
                     ReviewSectionState.Content(
-                        reviews = page.reviews.distinct().take(MAX_REVIEW_CARDS),
+                        reviews = page.reviews.deduplicateReviewIdentity()
+                            .take(MAX_REVIEW_CARDS),
                         canLoadMore = canLoadMore(),
                     )
                 }
@@ -161,7 +164,9 @@ class GameDetailViewModel @Inject constructor(
                 consumedReviewCursors += cursor
                 reviewPageCount += 1
                 nextReviewCursor = page.nextCursor
-                val reviews = (current.reviews + page.reviews).distinct().take(MAX_REVIEW_CARDS)
+                val reviews = (current.reviews + page.reviews)
+                    .deduplicateReviewIdentity()
+                    .take(MAX_REVIEW_CARDS)
                 mutableReviewState.value = ReviewSectionState.Content(
                     reviews = reviews,
                     canLoadMore = canLoadMore() && reviews.size < MAX_REVIEW_CARDS,
@@ -244,6 +249,11 @@ class GameDetailViewModel @Inject constructor(
         }
         (mutableDiscussionState.value as? DiscussionSectionState.Listing)?.let { listing ->
             retainedDiscussionListing = listing.copy(loadingMore = false)
+            retainedDiscussionPagination = DiscussionPagination(
+                nextRoute = nextDiscussionRoute,
+                pageCount = discussionPageCount,
+                visitedRoutes = visitedDiscussionRoutes.toSet(),
+            )
         }
         loadDiscussionThread(appId, route, previous = null)
     }
@@ -275,13 +285,16 @@ class GameDetailViewModel @Inject constructor(
 
     fun closeDiscussionThread(): Boolean {
         val listing = retainedDiscussionListing ?: return false
+        val pagination = retainedDiscussionPagination ?: return false
         discussionJob?.cancel()
         discussionJob = null
         discussionRevision += 1L
-        nextDiscussionRoute = null
-        discussionPageCount = 0
+        nextDiscussionRoute = pagination.nextRoute
+        discussionPageCount = pagination.pageCount
         visitedDiscussionRoutes.clear()
+        visitedDiscussionRoutes += pagination.visitedRoutes
         retainedDiscussionListing = null
+        retainedDiscussionPagination = null
         mutableDiscussionState.value = listing
         return true
     }
@@ -412,6 +425,11 @@ class GameDetailViewModel @Inject constructor(
         mutableReviewState.value = ReviewSectionState.Idle
     }
 
+    private fun List<SteamReviewCard>.deduplicateReviewIdentity(): List<SteamReviewCard> =
+        distinctBy { review ->
+            review.recommendationId.takeIf(String::isNotBlank) ?: review
+        }
+
     private fun canLoadMore(): Boolean =
         !nextReviewCursor.isNullOrBlank() &&
             nextReviewCursor !in consumedReviewCursors &&
@@ -425,6 +443,7 @@ class GameDetailViewModel @Inject constructor(
         discussionPageCount = 0
         visitedDiscussionRoutes.clear()
         retainedDiscussionListing = null
+        retainedDiscussionPagination = null
         discussionRevision += 1L
         mutableDiscussionState.value = DiscussionSectionState.Idle
     }
@@ -433,6 +452,12 @@ class GameDetailViewModel @Inject constructor(
         !nextDiscussionRoute.isNullOrBlank() &&
             nextDiscussionRoute !in visitedDiscussionRoutes &&
             discussionPageCount < MAX_DISCUSSION_PAGES
+
+    private data class DiscussionPagination(
+        val nextRoute: String?,
+        val pageCount: Int,
+        val visitedRoutes: Set<String>,
+    )
 
     private companion object {
         const val MAX_REVIEW_PAGES = 5

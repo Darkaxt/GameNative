@@ -29,15 +29,15 @@ class SteamReviewPageProviderTest {
     }
 
     @Test
-    fun `fetch maps bounded reviews and never exposes Steam identity`() = runTest {
+    fun `fetch maps bounded reviews with transient stable identity`() = runTest {
         server.enqueue(
-            MockResponse().setBody(
+            jsonResponse(
                 """
                 {
                   "success": 1,
                   "cursor": "next cursor",
                   "reviews": [{
-                    "recommendationid": "private-review-id",
+                    "recommendationid": "synthetic-review-id",
                     "author": {"steamid": "private-steamid", "playtime_forever": 125},
                     "review": "Synthetic review text",
                     "timestamp_created": 100,
@@ -80,6 +80,7 @@ class SteamReviewPageProviderTest {
                 receivedForFree = false,
                 earlyAccess = true,
                 developerResponse = "Synthetic developer response",
+                recommendationId = "synthetic-review-id",
             ),
             page.reviews.single(),
         )
@@ -99,18 +100,65 @@ class SteamReviewPageProviderTest {
 
     @Test
     fun `malformed oversized and redirected responses fail with fixed message`() = runTest {
-        server.enqueue(MockResponse().setBody("{"))
+        server.enqueue(jsonResponse("{"))
         assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
 
-        server.enqueue(MockResponse().setBody("""{"success":{},"reviews":[]}"""))
+        server.enqueue(jsonResponse("""{"success":{},"reviews":[]}"""))
         assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
 
-        server.enqueue(MockResponse().setBody("x".repeat(1024 * 1024 + 1)))
+        server.enqueue(jsonResponse("x".repeat(1024 * 1024 + 1)))
         assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
 
         server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", server.url("/elsewhere")))
         assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
     }
+
+    @Test
+    fun `rate limits retry up to a fourth successful attempt`() = runTest {
+        repeat(3) {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(429)
+                    .setHeader("Retry-After", "0"),
+            )
+        }
+        server.enqueue(jsonResponse("""{"success":1,"reviews":[]}"""))
+
+        assertEquals(
+            emptyList<SteamReviewCard>(),
+            provider().fetch(42, SteamReviewQuery(), null).reviews,
+        )
+        assertEquals(4, server.requestCount)
+    }
+
+    @Test
+    fun `four rate limits fail without a fifth request`() = runTest {
+        repeat(4) {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(429)
+                    .setHeader("Retry-After", "0"),
+            )
+        }
+
+        assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
+        assertEquals(4, server.requestCount)
+    }
+
+    @Test
+    fun `successful response requires JSON content type`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "text/html; charset=utf-8")
+                .setBody("""{"success":1,"reviews":[]}"""),
+        )
+
+        assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
+    }
+
+    private fun jsonResponse(body: String) = MockResponse()
+        .setHeader("Content-Type", "application/json; charset=utf-8")
+        .setBody(body)
 
     private fun provider() = SteamReviewPageProvider(
         client = OkHttpClient.Builder()

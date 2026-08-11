@@ -30,7 +30,7 @@ class SteamDiscussionProviderTest {
     @Test
     fun `listing extracts bounded plain metadata and validated continuation`() = runTest {
         server.enqueue(
-            MockResponse().setBody(
+            htmlResponse(
                 """
                 <html><body>
                   <div class="forum_topic">
@@ -41,7 +41,7 @@ class SteamDiscussionProviderTest {
                     <div class="forum_topic_lastpost">2 hours ago</div>
                     <div class="forum_topic_op"><a data-miniprofile="private-steamid">Private user</a></div>
                   </div>
-                  <a class="pagebtn" rel="next" href="/app/42/discussions/?ctp=2">Next</a>
+                  <a class="pagebtn" rel="next" href="/app/42/discussions/?fp=2">Next</a>
                 </body></html>
                 """.trimIndent(),
             ),
@@ -59,7 +59,7 @@ class SteamDiscussionProviderTest {
             ),
             listing.threads.single(),
         )
-        assertEquals("/app/42/discussions/?ctp=2", listing.nextRoute)
+        assertEquals("/app/42/discussions/?fp=2", listing.nextRoute)
         val request = server.takeRequest()
         assertEquals("/app/42/discussions/", request.requestUrl?.encodedPath)
         assertEquals("no-store", request.getHeader("Cache-Control"))
@@ -71,7 +71,7 @@ class SteamDiscussionProviderTest {
     @Test
     fun `thread extracts plain posts and discards identity markup`() = runTest {
         server.enqueue(
-            MockResponse().setBody(
+            htmlResponse(
                 """
                 <html><body>
                   <div class="forum_op">
@@ -97,6 +97,62 @@ class SteamDiscussionProviderTest {
     }
 
     @Test
+    fun `listing and thread pagination accept only their own query key`() = runTest {
+        assertUnavailable {
+            provider().fetchListing(42, "/app/42/discussions/?ctp=2")
+        }
+        assertUnavailable {
+            provider().fetchThread(42, "/app/42/discussions/0/100/?fp=2")
+        }
+
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `listing parser distinguishes explicit empty from unexpected representation`() = runTest {
+        server.enqueue(htmlResponse("<html><body><div class=\"forum_no_topics\"></div></body></html>"))
+        assertEquals(emptyList<SteamDiscussionSummary>(), provider().fetchListing(42, null).threads)
+
+        server.enqueue(htmlResponse("<html><body><div>arbitrary shell</div></body></html>"))
+        assertUnavailable { provider().fetchListing(42, null) }
+
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div id="application_root"></div>
+                  <script src="/javascript/applications/community/main.js"></script>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+        assertUnavailable { provider().fetchListing(42, null) }
+    }
+
+    @Test
+    fun `topic selector drift and unexpected thread representation fail closed`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                "<html><body><div class=\"forum_topic\"><div>missing required selectors</div></div></body></html>",
+            ),
+        )
+        assertUnavailable { provider().fetchListing(42, null) }
+
+        server.enqueue(htmlResponse("<html><body><div>missing posts</div></body></html>"))
+        assertUnavailable { provider().fetchThread(42, "/app/42/discussions/0/100/") }
+
+        server.enqueue(
+            htmlResponse(
+                "<html><body><div class=\"forum_thread_empty\"></div></body></html>",
+            ),
+        )
+        assertEquals(
+            emptyList<SteamDiscussionPost>(),
+            provider().fetchThread(42, "/app/42/discussions/0/100/").posts,
+        )
+    }
+
+    @Test
     fun `cross app routes redirects and oversized bodies fail closed`() = runTest {
         assertUnavailable {
             provider().fetchThread(42, "/app/99/discussions/0/100/")
@@ -109,9 +165,56 @@ class SteamDiscussionProviderTest {
         )
         assertUnavailable { provider().fetchListing(42, null) }
 
-        server.enqueue(MockResponse().setBody("x".repeat(1024 * 1024 + 1)))
+        server.enqueue(htmlResponse("x".repeat(1024 * 1024 + 1)))
         assertUnavailable { provider().fetchListing(42, null) }
     }
+
+    @Test
+    fun `rate limits retry up to a fourth successful attempt`() = runTest {
+        repeat(3) {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(429)
+                    .setHeader("Retry-After", "0"),
+            )
+        }
+        server.enqueue(htmlResponse("<html><body><div class=\"forum_no_topics\"></div></body></html>"))
+
+        assertEquals(
+            emptyList<SteamDiscussionSummary>(),
+            provider().fetchListing(42, null).threads,
+        )
+        assertEquals(4, server.requestCount)
+    }
+
+    @Test
+    fun `four rate limits fail without a fifth request`() = runTest {
+        repeat(4) {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(429)
+                    .setHeader("Retry-After", "0"),
+            )
+        }
+
+        assertUnavailable { provider().fetchListing(42, null) }
+        assertEquals(4, server.requestCount)
+    }
+
+    @Test
+    fun `successful response requires HTML content type`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("<html><body><div class=\"forum_no_topics\"></div></body></html>"),
+        )
+
+        assertUnavailable { provider().fetchListing(42, null) }
+    }
+
+    private fun htmlResponse(body: String) = MockResponse()
+        .setHeader("Content-Type", "text/html; charset=utf-8")
+        .setBody(body)
 
     private fun provider() = SteamDiscussionProvider(
         client = OkHttpClient.Builder()

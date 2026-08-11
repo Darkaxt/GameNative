@@ -144,6 +144,93 @@ class GameDetailViewModelTest {
     }
 
     @Test
+    fun reviewsDeduplicateRecommendationIdentityAcrossPages() = runTest(scheduler) {
+        val reviewSource = SteamReviewPageSource { _, _, cursor ->
+            if (cursor == null) {
+                SteamReviewPage(
+                    reviews = listOf(
+                        review("Original", recommendationId = "same-review"),
+                        review("First unique", recommendationId = "first-unique"),
+                    ),
+                    nextCursor = "next",
+                )
+            } else {
+                SteamReviewPage(
+                    reviews = listOf(
+                        review("Changed duplicate", recommendationId = "same-review"),
+                        review("Second unique", recommendationId = "second-unique"),
+                    ),
+                    nextCursor = null,
+                )
+            }
+        }
+        val viewModel = GameDetailViewModel(
+            FakeRepository(mutableMapOf()),
+            reviewSource,
+            emptyDiscussions(),
+        )
+
+        viewModel.loadReviews(steamAppId = 42, isOffline = false)
+        runCurrent()
+        viewModel.loadMoreReviews()
+        runCurrent()
+
+        val state = viewModel.reviewState.value as ReviewSectionState.Content
+        assertEquals(
+            listOf("Original", "First unique", "Second unique"),
+            state.reviews.map(SteamReviewCard::text),
+        )
+    }
+
+    @Test
+    fun closingThreadRestoresListingPaginationContext() = runTest(scheduler) {
+        val listingRoutes = mutableListOf<String?>()
+        val source = object : SteamDiscussionSource {
+            override suspend fun fetchListing(
+                steamAppId: Int,
+                route: String?,
+            ): SteamDiscussionListing {
+                listingRoutes += route
+                return SteamDiscussionListing(
+                    threads = listOf(
+                        discussion(
+                            title = if (route == null) "First" else "Second",
+                            route = if (route == null) {
+                                "/app/42/discussions/0/1/"
+                            } else {
+                                "/app/42/discussions/0/2/"
+                            },
+                        ),
+                    ),
+                    nextRoute = if (route == null) "/app/42/discussions/?fp=2" else null,
+                )
+            }
+
+            override suspend fun fetchThread(
+                steamAppId: Int,
+                route: String,
+            ) = SteamDiscussionThread("First", emptyList(), route, null)
+        }
+        val viewModel = GameDetailViewModel(
+            FakeRepository(mutableMapOf()),
+            emptyReviews(),
+            source,
+        )
+
+        viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
+        runCurrent()
+        viewModel.openDiscussion("/app/42/discussions/0/1/", isOffline = false)
+        runCurrent()
+        assertTrue(viewModel.closeDiscussionThread())
+        viewModel.loadMoreDiscussions()
+        runCurrent()
+
+        val listing = viewModel.discussionState.value as DiscussionSectionState.Listing
+        assertEquals(listOf("First", "Second"), listing.threads.map(SteamDiscussionSummary::title))
+        assertEquals(listOf(null, "/app/42/discussions/?fp=2"), listingRoutes)
+    }
+
+    @Test
     fun discussionsLazyLoadListingAndThreadAndBackReturnsToListing() = runTest(scheduler) {
         val listingRoutes = mutableListOf<String?>()
         val threadRoutes = mutableListOf<String>()
@@ -233,7 +320,10 @@ class GameDetailViewModelTest {
         route = route,
     )
 
-    private fun review(text: String) = SteamReviewCard(
+    private fun review(
+        text: String,
+        recommendationId: String = text,
+    ) = SteamReviewCard(
         recommended = true,
         text = text,
         playtimeMinutes = 60,
@@ -245,6 +335,7 @@ class GameDetailViewModelTest {
         receivedForFree = false,
         earlyAccess = false,
         developerResponse = null,
+        recommendationId = recommendationId,
     )
 
     private class FakeRepository(

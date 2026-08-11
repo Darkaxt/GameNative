@@ -24,6 +24,7 @@ data class SteamReviewCard(
     val receivedForFree: Boolean,
     val earlyAccess: Boolean,
     val developerResponse: String?,
+    val recommendationId: String = "",
 )
 
 data class SteamReviewPage(

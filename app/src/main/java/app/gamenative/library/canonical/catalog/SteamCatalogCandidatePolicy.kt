@@ -25,7 +25,16 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             candidate.appType == source.appType &&
                 CanonicalNormalization.titleKey(candidate.title) == sourceTitleKey
         }
-        if (eligible.isEmpty()) return uniqueCandidates.reviewRequired()
+        if (eligible.isEmpty()) {
+            val hasCompatibleType = uniqueCandidates.any { candidate ->
+                candidate.appType == source.appType
+            }
+            return if (hasCompatibleType) {
+                uniqueCandidates.reviewRequired()
+            } else {
+                CatalogDecision.Unmatched
+            }
+        }
 
         val sourceDeveloperKey = source.developer
             ?.let(CanonicalNormalization::developerKey)
