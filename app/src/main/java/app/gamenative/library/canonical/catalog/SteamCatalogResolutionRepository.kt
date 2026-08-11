@@ -20,6 +20,10 @@ import app.gamenative.library.metadata.EpicCmsCatalogSource
 import app.gamenative.library.metadata.MetadataClock
 import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityEvidence
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityRequest
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityResult
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilitySource
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
 import app.gamenative.library.metadata.SteamRateLimitExhaustedException
@@ -61,6 +65,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val recordSource: SteamCatalogRecordSource,
     private val candidatePolicy: SteamCatalogCandidatePolicy,
     private val decisionWriter: SteamCatalogDecisionWriter,
+    private val pcGamingWikiSource: PcGamingWikiCurrentAvailabilitySource,
     private val epicCatalogSource: EpicCmsCatalogSource,
     private val epicFallbackWriter: EpicCatalogFallbackWriter,
     private val localeProvider: MetadataLocaleProvider,
@@ -270,6 +275,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                     match.source == GameSource.EPIC &&
                     match.evidenceAppType == CanonicalAppType.GAME
                 ) {
+                    val decisionEvidence = fetchPcGamingWikiEvidence(match)
                     val epicRecord = fetchEpicFallback(match, locale)
                     epicFallbackWriter.recordEpicFallback(
                         expected = expected,
@@ -277,6 +283,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                         nowEpochMs = clock.nowEpochMs(),
                         locale = locale,
                         record = epicRecord,
+                        decisionEvidence = decisionEvidence,
                     ).asItemResolution(SteamResolutionItemResult.CompleteNoPlausibleSteamMatch)
                 } else {
                     decisionWriter.recordUnmatched(
@@ -287,6 +294,26 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 }
             }
         }
+    }
+
+    private suspend fun fetchPcGamingWikiEvidence(
+        match: StoreMatchEntity,
+    ): PcGamingWikiCurrentAvailabilityEvidence? {
+        val result = try {
+            pcGamingWikiSource.check(
+                PcGamingWikiCurrentAvailabilityRequest(
+                    sourceTitle = match.evidenceDisplayName,
+                    sourceReleaseYear = match.evidenceReleaseYear,
+                    sourceDeveloper = match.evidenceDeveloperKey.takeIf(String::isNotBlank),
+                    sourcePublisher = null,
+                ),
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            PcGamingWikiCurrentAvailabilityResult.Unavailable
+        }
+        return (result as? PcGamingWikiCurrentAvailabilityResult.Confirmed)?.evidence
     }
 
     private suspend fun fetchEpicFallback(

@@ -26,6 +26,8 @@ import app.gamenative.library.metadata.GameMetadataProvenance
 import app.gamenative.library.metadata.MetadataField
 import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataProvider
+import app.gamenative.library.metadata.PcGamingWikiAvailabilityLabel
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityEvidence
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.encodeToString
@@ -95,6 +97,7 @@ internal interface EpicCatalogFallbackWriter {
         nowEpochMs: Long,
         locale: MetadataLocale,
         record: EpicCmsCatalogRecord,
+        decisionEvidence: PcGamingWikiCurrentAvailabilityEvidence? = null,
     ): CanonicalGuardedMutationResult
 }
 
@@ -285,7 +288,13 @@ class RoomCanonicalMutationRepository @Inject constructor(
         nowEpochMs: Long,
         locale: MetadataLocale,
         record: EpicCmsCatalogRecord,
+        decisionEvidence: PcGamingWikiCurrentAvailabilityEvidence?,
     ): CanonicalGuardedMutationResult = db.withTransaction {
+        decisionEvidence?.let { evidence ->
+            require(
+                evidence.label == PcGamingWikiAvailabilityLabel.PCGW_CURRENT_EGS_ACCOUNT_REQUIRED,
+            )
+        }
         val match = expectedMatchOrNull(expected)
         val canonical = match?.let { canonicalGameDao.get(it.canonicalId) }
         val decodedIdentity = runCatching {

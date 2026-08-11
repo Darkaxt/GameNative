@@ -28,6 +28,10 @@ import app.gamenative.library.metadata.GamePlatform
 import app.gamenative.library.metadata.MetadataClock
 import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityEvidence
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityRequest
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityResult
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilitySource
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
 import app.gamenative.library.metadata.SteamRateLimitExhaustedException
@@ -46,6 +50,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -99,6 +104,164 @@ class SteamCatalogResolutionRepositoryTest {
         assertEquals(1, calls.get())
         assertFalse(repository.keyRequired.value)
         assertFalse(repository.isScanning.value)
+    }
+
+    @Test
+    fun `complete Steam miss checks PCGW before Epic CMS and carries confirmed label`() = runTest {
+        val namespace = "c4763f236d08423eb47b4c3008779c84"
+        val catalogId = "93f2a8c3547846eda966cb3c152a026e"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(
+            match(
+                key(GameSource.EPIC, stableSourceId),
+                canonical.canonicalId,
+                title = "Alan Wake 2",
+                developer = "remedy entertainment",
+                year = 2023,
+            ),
+        )
+        val order = mutableListOf<String>()
+        val availabilityRequests = mutableListOf<PcGamingWikiCurrentAvailabilityRequest>()
+        val evidence = PcGamingWikiCurrentAvailabilityEvidence(sourceRevision = 1_783_673L)
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ ->
+                order += "steam-search"
+                listOf(SteamStoreSearchHit(3_274_290, "Alan Wake 2", null))
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                order += "steam-details"
+                record(
+                    steamAppId = steamAppId,
+                    title = "Alan Wake 2",
+                    developer = "Remedy Entertainment",
+                    year = 2023,
+                    appType = CanonicalAppType.APPLICATION,
+                )
+            },
+            pcGamingWikiSource = PcGamingWikiCurrentAvailabilitySource { request ->
+                order += "pcgw"
+                availabilityRequests += request
+                PcGamingWikiCurrentAvailabilityResult.Confirmed(evidence)
+            },
+            epicCatalogSource = EpicCmsCatalogSource { request ->
+                order += "epic-cms"
+                epicRecord(request.stableSourceId, namespace, catalogId, request.sourceTitle)
+            },
+        )
+        epicFallbackWriter.onRecord = { order += "fallback-writer" }
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.unmatched)
+        assertEquals(
+            listOf("steam-search", "steam-details", "pcgw", "epic-cms", "fallback-writer"),
+            order,
+        )
+        assertEquals(
+            listOf(
+                PcGamingWikiCurrentAvailabilityRequest(
+                    sourceTitle = "Alan Wake 2",
+                    sourceReleaseYear = 2023,
+                    sourceDeveloper = "remedy entertainment",
+                    sourcePublisher = null,
+                ),
+            ),
+            availabilityRequests,
+        )
+        assertEquals(evidence, epicFallbackWriter.calls.single().decisionEvidence)
+        assertEquals(
+            "PCGW_CURRENT_EGS_ACCOUNT_REQUIRED",
+            epicFallbackWriter.calls.single().decisionEvidence?.label?.name,
+        )
+        assertEquals(stableSourceId, epicFallbackWriter.calls.single().key.stableSourceId)
+        assertTrue(writer.operations.isEmpty())
+    }
+
+    @Test
+    fun `PCGW not confirmed remains non blocking and still invokes Epic CMS`() = runTest {
+        val namespace = "namespace"
+        val catalogId = "catalog"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.EPIC, stableSourceId), canonical.canonicalId, "Epic Native"))
+        val calls = mutableListOf<String>()
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ -> emptyList() },
+            pcGamingWikiSource = PcGamingWikiCurrentAvailabilitySource {
+                calls += "pcgw-not-confirmed"
+                PcGamingWikiCurrentAvailabilityResult.NotConfirmed
+            },
+            epicCatalogSource = EpicCmsCatalogSource { request ->
+                calls += "epic-cms"
+                epicRecord(request.stableSourceId, namespace, catalogId, request.sourceTitle)
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.unmatched)
+        assertEquals(listOf("pcgw-not-confirmed", "epic-cms"), calls)
+        assertNull(epicFallbackWriter.calls.single().decisionEvidence)
+    }
+
+    @Test
+    fun `PCGW unavailable remains non blocking and still invokes Epic CMS`() = runTest {
+        val namespace = "namespace"
+        val catalogId = "catalog"
+        val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.EPIC, stableSourceId), canonical.canonicalId, "Epic Native"))
+        val calls = mutableListOf<String>()
+        val repository = repository(
+            search = SteamCatalogSearchSource { _, _ -> emptyList() },
+            pcGamingWikiSource = PcGamingWikiCurrentAvailabilitySource {
+                calls += "pcgw-unavailable"
+                PcGamingWikiCurrentAvailabilityResult.Unavailable
+            },
+            epicCatalogSource = EpicCmsCatalogSource { request ->
+                calls += "epic-cms"
+                epicRecord(request.stableSourceId, namespace, catalogId, request.sourceTitle)
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.unmatched)
+        assertEquals(listOf("pcgw-unavailable", "epic-cms"), calls)
+        assertNull(epicFallbackWriter.calls.single().decisionEvidence)
+    }
+
+    @Test
+    fun `partial Steam result never invokes PCGW or Epic CMS`() = runTest {
+        val stableSourceId = EpicStableSourceId.encode("namespace", "catalog")
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(match(key(GameSource.EPIC, stableSourceId), canonical.canonicalId, "Partial Epic"))
+        val search = object : SteamCatalogSearchSource {
+            override suspend fun search(query: String, locale: MetadataLocale) = emptyList<SteamStoreSearchHit>()
+
+            override suspend fun searchResult(query: String, locale: MetadataLocale) =
+                SteamCatalogSearchResult(emptyList(), complete = false)
+        }
+        val repository = repository(
+            search = search,
+            pcGamingWikiSource = PcGamingWikiCurrentAvailabilitySource {
+                throw AssertionError("PCGW must not run after partial Steam evidence")
+            },
+            epicCatalogSource = EpicCmsCatalogSource {
+                throw AssertionError("Epic CMS must not run after partial Steam evidence")
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.failed)
+        assertEquals(0, progress.unmatched)
+        assertTrue(epicFallbackWriter.calls.isEmpty())
     }
 
     @Test
@@ -1033,6 +1196,10 @@ class SteamCatalogResolutionRepositoryTest {
     private fun repository(
         search: SteamCatalogSearchSource,
         records: SteamCatalogRecordSource = SteamCatalogRecordSource { _, _ -> null },
+        pcGamingWikiSource: PcGamingWikiCurrentAvailabilitySource =
+            PcGamingWikiCurrentAvailabilitySource {
+                PcGamingWikiCurrentAvailabilityResult.NotConfirmed
+            },
         epicCatalogSource: EpicCmsCatalogSource = EpicCmsCatalogSource {
             throw AssertionError("Epic CMS fallback must not run")
         },
@@ -1042,6 +1209,7 @@ class SteamCatalogResolutionRepositoryTest {
         recordSource = records,
         candidatePolicy = SteamCatalogCandidatePolicy(),
         decisionWriter = writer,
+        pcGamingWikiSource = pcGamingWikiSource,
         epicCatalogSource = epicCatalogSource,
         epicFallbackWriter = epicFallbackWriter,
         localeProvider = MetadataLocaleProvider { MetadataLocale("en-US", "US") },
@@ -1211,6 +1379,7 @@ class SteamCatalogResolutionRepositoryTest {
 
     private class FakeEpicFallbackWriter : EpicCatalogFallbackWriter {
         val calls = mutableListOf<EpicFallbackCall>()
+        var onRecord: () -> Unit = {}
 
         override suspend fun recordEpicFallback(
             expected: ExpectedMatchState,
@@ -1218,8 +1387,10 @@ class SteamCatalogResolutionRepositoryTest {
             nowEpochMs: Long,
             locale: MetadataLocale,
             record: EpicCmsCatalogRecord,
+            decisionEvidence: PcGamingWikiCurrentAvailabilityEvidence?,
         ): CanonicalGuardedMutationResult {
-            calls += EpicFallbackCall(expected.key, locale, record)
+            onRecord()
+            calls += EpicFallbackCall(expected.key, locale, record, decisionEvidence)
             return CanonicalGuardedMutationResult.APPLIED
         }
     }
@@ -1249,6 +1420,7 @@ class SteamCatalogResolutionRepositoryTest {
         val key: OwnedCopyKey,
         val locale: MetadataLocale,
         val record: EpicCmsCatalogRecord,
+        val decisionEvidence: PcGamingWikiCurrentAvailabilityEvidence?,
     )
 
     private data class EnrichmentCall(

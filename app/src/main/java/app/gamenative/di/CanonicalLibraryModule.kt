@@ -65,6 +65,8 @@ import app.gamenative.library.metadata.EpicCmsCatalogSource
 import app.gamenative.library.metadata.GameMetadataRepository
 import app.gamenative.library.metadata.MetadataClock
 import app.gamenative.library.metadata.MetadataLocaleProvider
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilityProvider
+import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilitySource
 import app.gamenative.library.metadata.RoomGameMetadataRepository
 import app.gamenative.library.metadata.SteamCatalogDataSource
 import app.gamenative.library.metadata.SteamCatalogProvider
@@ -149,6 +151,12 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamCatalogDataSource(
         implementation: SteamCatalogProvider,
     ): SteamCatalogDataSource
+
+    @Binds
+    @Singleton
+    internal abstract fun bindPcGamingWikiCurrentAvailabilitySource(
+        implementation: PcGamingWikiCurrentAvailabilityProvider,
+    ): PcGamingWikiCurrentAvailabilitySource
 
     @Binds
     @Singleton
