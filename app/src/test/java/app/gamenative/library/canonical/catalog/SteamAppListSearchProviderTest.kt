@@ -30,6 +30,24 @@ class SteamAppListSearchProviderTest {
     }
 
     @Test
+    fun localIndexUsesCatalogSpecificAmpersandAndRomanNormalization() = runTest {
+        val provider = provider(
+            remote = FakeRemote(
+                listOf(
+                    SteamAppListEntry(10, "Clouds & Sheep 2", 100),
+                    SteamAppListEntry(20, "Baldur's Gate III", 100),
+                ),
+            ),
+        )
+
+        val ampersand = provider.search("clouds and sheep 2", locale())
+        val roman = provider.search("Baldur's Gate 3", locale())
+
+        assertEquals(listOf(10), ampersand.map(SteamStoreSearchHit::steamAppId))
+        assertEquals(listOf(20), roman.map(SteamStoreSearchHit::steamAppId))
+    }
+
+    @Test
     fun staleCompleteCacheRemainsUsableWhenRefreshFails() = runTest {
         val cache = FakeCache(
             SteamAppListSnapshot(
@@ -102,12 +120,12 @@ class SteamAppListSearchProviderTest {
     }
 
     @Test
-    fun returnsAtMostTenStableExactMatches() = runTest {
+    fun returnsAtMostFifteenStableExactMatches() = runTest {
         val entries = (20 downTo 1).map { id -> SteamAppListEntry(id, "Same Name", 100) }
 
         val results = provider(remote = FakeRemote(entries)).search("Same Name", locale())
 
-        assertEquals((1..10).toList(), results.map(SteamStoreSearchHit::steamAppId))
+        assertEquals((1..15).toList(), results.map(SteamStoreSearchHit::steamAppId))
     }
 
     private fun provider(

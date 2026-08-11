@@ -172,7 +172,7 @@ class SteamStoreSearchProvider internal constructor(
     private companion object {
         const val DEFAULT_ENDPOINT = "https://store.steampowered.com/api/storesearch/"
         const val MAX_QUERY_CODE_POINTS = 256
-        const val MAX_RESULTS = 10
+        const val MAX_RESULTS = 15
         const val MAX_NETWORK_HOPS = 4
         const val MAX_RESPONSE_BYTES = 1024L * 1024L
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)

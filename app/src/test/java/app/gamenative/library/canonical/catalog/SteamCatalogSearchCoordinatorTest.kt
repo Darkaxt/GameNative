@@ -60,6 +60,20 @@ class SteamCatalogSearchCoordinatorTest {
     }
 
     @Test
+    fun completeAggregationUsesValidatedFifteenHitBound() = runTest {
+        val coordinator = coordinator(
+            store = source(
+                SteamCatalogSearchResult((1..20).map(::hit), complete = true),
+            ),
+            appList = source(SteamCatalogSearchResult(emptyList(), complete = true)),
+        )
+
+        val result = coordinator.searchResult("Example", locale)
+
+        assertEquals((1..15).toList(), result.hits.map(SteamStoreSearchHit::steamAppId))
+    }
+
+    @Test
     fun optionalIndexFallbackAfterStoreFailureIsExplicitlyPartial() = runTest {
         val coordinator = coordinator(
             store = SteamCatalogSearchSource { _, _ -> throw SteamCatalogSearchException() },

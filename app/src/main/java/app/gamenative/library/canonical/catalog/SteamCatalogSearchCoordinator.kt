@@ -71,6 +71,6 @@ class SteamCatalogSearchCoordinator internal constructor(
         distinctBy(SteamStoreSearchHit::steamAppId).take(MAX_RESULTS)
 
     private companion object {
-        const val MAX_RESULTS = 10
+        const val MAX_RESULTS = 15
     }
 }

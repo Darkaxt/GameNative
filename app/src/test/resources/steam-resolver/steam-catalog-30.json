@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "apps": [
+    {"steamAppId": 632470, "title": "Disco Elysium - The Final Cut", "developer": "ZA/UM", "publisher": "ZA/UM", "releaseYear": 2019, "appType": "GAME"},
+    {"steamAppId": 1091500, "title": "Cyberpunk 2077", "developer": "CD PROJEKT RED", "publisher": "CD PROJEKT RED", "releaseYear": 2020, "appType": "GAME"},
+    {"steamAppId": 292030, "title": "The Witcher 3: Wild Hunt", "developer": "CD PROJEKT RED", "publisher": "CD PROJEKT RED", "releaseYear": 2015, "appType": "GAME"},
+    {"steamAppId": 1086940, "title": "Baldur's Gate 3", "developer": "Larian Studios", "publisher": "Larian Studios", "releaseYear": 2023, "appType": "GAME"},
+    {"steamAppId": 413150, "title": "Stardew Valley", "developer": "ConcernedApe", "publisher": "ConcernedApe", "releaseYear": 2016, "appType": "GAME"},
+    {"steamAppId": 275850, "title": "No Man's Sky", "developer": "Hello Games", "publisher": "Hello Games", "releaseYear": 2016, "appType": "GAME"},
+    {"steamAppId": 870780, "title": "Control Ultimate Edition", "developer": "Remedy Entertainment", "publisher": "505 Games", "releaseYear": 2020, "appType": "GAME"},
+    {"steamAppId": 367520, "title": "Hollow Knight", "developer": "Team Cherry", "publisher": "Team Cherry", "releaseYear": 2017, "appType": "GAME"},
+    {"steamAppId": 435150, "title": "Divinity: Original Sin 2 - Definitive Edition", "developer": "Larian Studios", "publisher": "Larian Studios", "releaseYear": 2017, "appType": "GAME"},
+    {"steamAppId": 105600, "title": "Terraria", "developer": "Re-Logic", "publisher": "Re-Logic", "releaseYear": 2011, "appType": "GAME"},
+
+    {"steamAppId": 504230, "title": "Celeste", "developer": "Maddy Makes Games Inc.", "publisher": "Maddy Makes Games Inc.", "releaseYear": 2018, "appType": "GAME"},
+    {"steamAppId": 264710, "title": "Subnautica", "developer": "Unknown Worlds Entertainment", "publisher": "Unknown Worlds Entertainment", "releaseYear": 2018, "appType": "GAME"},
+    {"steamAppId": 304430, "title": "INSIDE", "developer": "Playdead", "publisher": "Playdead", "releaseYear": 2016, "appType": "GAME"},
+    {"steamAppId": 210970, "title": "The Witness", "developer": "Thekla, Inc.", "publisher": "Thekla, Inc.", "releaseYear": 2016, "appType": "GAME"},
+    {"steamAppId": 388880, "title": "Oxenfree", "developer": "Night School Studio", "publisher": "Night School Studio", "releaseYear": 2016, "appType": "GAME"},
+    {"steamAppId": 433340, "title": "Slime Rancher", "developer": "Monomi Park", "publisher": "Monomi Park", "releaseYear": 2017, "appType": "GAME"},
+    {"steamAppId": 40800, "title": "Super Meat Boy", "developer": "Team Meat", "publisher": "Team Meat", "releaseYear": 2010, "appType": "GAME"},
+    {"steamAppId": 311690, "title": "Enter the Gungeon", "developer": "Dodge Roll", "publisher": "Devolver Digital", "releaseYear": 2016, "appType": "GAME"},
+    {"steamAppId": 22000, "title": "World of Goo", "developer": "2D BOY", "publisher": "2D BOY", "releaseYear": 2008, "appType": "GAME"},
+    {"steamAppId": 48000, "title": "LIMBO", "developer": "Playdead", "publisher": "Playdead", "releaseYear": 2011, "appType": "GAME"},
+
+    {"steamAppId": 228280, "title": "Baldur's Gate: Enhanced Edition", "developer": "Beamdog", "publisher": "Beamdog", "releaseYear": 2013, "appType": "GAME"},
+    {"steamAppId": 257350, "title": "Baldur's Gate II: Enhanced Edition", "developer": "Beamdog", "publisher": "Beamdog", "releaseYear": 2013, "appType": "GAME"},
+    {"steamAppId": 439800, "title": "Clouds & Sheep 2", "developer": "HandyGames", "publisher": "HandyGames", "releaseYear": 2015, "appType": "GAME"},
+    {"steamAppId": 898890, "title": "Endling - Extinction is Forever", "developer": "Herobeat Studios", "publisher": "HandyGames", "releaseYear": 2022, "appType": "GAME"},
+    {"steamAppId": 735290, "title": "Genesis Noir", "developer": "Feral Cat Den", "publisher": "Fellow Traveller", "releaseYear": 2021, "appType": "GAME"},
+    {"steamAppId": 1123050, "title": "GRIME", "developer": "Clover Bite", "publisher": "Akupara Games", "releaseYear": 2021, "appType": "GAME"},
+    {"steamAppId": 645320, "title": "SCARF", "developer": "Uprising Studios", "publisher": "HandyGames", "releaseYear": 2021, "appType": "GAME"},
+    {"steamAppId": 208580, "title": "STAR WARS Knights of the Old Republic II - The Sith Lords", "developer": "Obsidian Entertainment", "publisher": "LucasArts", "releaseYear": 2005, "appType": "GAME"},
+    {"steamAppId": 874260, "title": "The Forgotten City", "developer": "Modern Storyteller", "publisher": "Dear Villagers", "releaseYear": 2021, "appType": "GAME"},
+    {"steamAppId": 2187290, "title": "Wall World", "developer": "Alawar", "publisher": "Alawar Premium", "releaseYear": 2023, "appType": "GAME"}
+  ]
+}

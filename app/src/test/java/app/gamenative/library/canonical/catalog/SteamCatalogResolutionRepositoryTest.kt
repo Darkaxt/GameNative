@@ -39,6 +39,10 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -354,7 +358,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `automatic scan validates at most five hits and accepts one corroborated exact candidate`() = runTest {
+    fun `automatic scan validates at most fifteen aggregated hits and accepts one corroborated exact candidate`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         val selected = match(
             key(GameSource.EPIC, "bounded"),
@@ -368,7 +372,7 @@ class SteamCatalogResolutionRepositoryTest {
         val fetched = mutableListOf<Int>()
         val repository = repository(
             search = SteamCatalogSearchSource { _, _ ->
-                (1..10).map { id ->
+                (1..20).map { id ->
                     SteamStoreSearchHit(
                         steamAppId = id,
                         title = if (id == 1) "Exact Marker" else "Other $id",
@@ -389,12 +393,208 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(listOf(1, 2, 3, 4, 5), fetched)
+        assertEquals((1..15).toList(), fetched)
+        assertEquals(5, repository.candidatesFor(expected(selected).key).size)
         assertEquals(1, progress.autoAccepted)
         val accepted = writer.operations.single() as DecisionOperation.Accepted
         assertEquals(1, accepted.steamAppId)
         assertEquals(CanonicalAppType.GAME, accepted.appType)
         assertEquals(listOf(EnrichmentCall(1, MetadataLocale("en-US", "US"))), enrichment.calls)
+    }
+
+    @Test
+    fun `automatic scan fans out safe aliases and aggregates candidates before validation`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(
+            match(
+                key(GameSource.EPIC, "safe-alias"),
+                canonical.canonicalId,
+                title = "Playdead's INSIDE",
+                developer = "playdead",
+                year = 2016,
+            ),
+        )
+        val queries = mutableListOf<String>()
+        val fetched = mutableListOf<Int>()
+        val repository = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                queries += query
+                when (query) {
+                    "Playdead's INSIDE" -> (1..10).map { SteamStoreSearchHit(it, "Other $it", null) }
+                    "INSIDE" -> listOf(
+                        SteamStoreSearchHit(304430, "INSIDE", null),
+                        SteamStoreSearchHit(1, "Duplicate", null),
+                        *(11..20).map { SteamStoreSearchHit(it, "Other $it", null) }.toTypedArray(),
+                    )
+                    else -> listOf(SteamStoreSearchHit(304430, "INSIDE", null))
+                }
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                fetched += steamAppId
+                record(
+                    steamAppId,
+                    if (steamAppId == 304430) "INSIDE" else "Other $steamAppId",
+                    if (steamAppId == 304430) "Playdead" else "Other",
+                    2016,
+                )
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(
+            listOf("Playdead's INSIDE", "INSIDE", "playdead s inside"),
+            queries,
+        )
+        assertEquals(15, fetched.size)
+        assertEquals(15, fetched.distinct().size)
+        assertTrue(304430 in fetched)
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(
+            304430,
+            (writer.operations.single() as DecisionOperation.Accepted).steamAppId,
+        )
+    }
+
+    @Test
+    fun `failed alias query keeps aggregated verified candidates as ranked review only`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(
+            match(
+                key(GameSource.GOG, "partial-alias"),
+                canonical.canonicalId,
+                title = "Example!",
+                developer = "",
+                year = null,
+            ),
+        )
+        val search = object : SteamCatalogSearchSource {
+            override suspend fun search(query: String, locale: MetadataLocale) =
+                searchResult(query, locale).hits
+
+            override suspend fun searchResult(
+                query: String,
+                locale: MetadataLocale,
+            ): SteamCatalogSearchResult {
+                if (query == "example") throw SteamCatalogSearchException()
+                return SteamCatalogSearchResult(
+                    hits = listOf(
+                        SteamStoreSearchHit(42, "Unrelated", null),
+                        SteamStoreSearchHit(84, "Example", null),
+                    ),
+                    complete = true,
+                )
+            }
+        }
+        val repository = repository(
+            search = search,
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(
+                    steamAppId,
+                    if (steamAppId == 84) "Example" else "Unrelated",
+                    null,
+                    null,
+                )
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(1, progress.needsReview)
+        assertEquals(0, progress.failed)
+        assertEquals(84, (writer.operations.single() as DecisionOperation.Review).steamAppId)
+        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
+    }
+
+    @Test
+    fun `recorded 30 title corpus resolves without expected AppID candidate selection`() = runTest {
+        val json = Json { ignoreUnknownKeys = true }
+        val corpusRoot = json.parseToJsonElement(
+            requireNotNull(javaClass.classLoader?.getResource("steam-resolver/real-30.json"))
+                .readText(),
+        ) as JsonObject
+        val catalogRoot = json.parseToJsonElement(
+            requireNotNull(
+                javaClass.classLoader?.getResource("steam-resolver/steam-catalog-30.json"),
+            ).readText(),
+        ) as JsonObject
+        val cases = (corpusRoot.getValue("cases") as JsonArray).map { it as JsonObject }
+        val catalog = (catalogRoot.getValue("apps") as JsonArray).map { element ->
+            val app = element as JsonObject
+            SteamCatalogCandidate(
+                steamAppId = (app.getValue("steamAppId") as JsonPrimitive).content.toInt(),
+                title = (app.getValue("title") as JsonPrimitive).content,
+                developer = (app["developer"] as? JsonPrimitive)?.content,
+                publisher = (app["publisher"] as? JsonPrimitive)?.content,
+                releaseYear = (app["releaseYear"] as? JsonPrimitive)?.content?.toIntOrNull(),
+                appType = CanonicalAppType.valueOf(
+                    (app.getValue("appType") as JsonPrimitive).content,
+                ),
+                headerImageUrl = null,
+            )
+        }
+        cases.forEachIndexed { index, case ->
+            val input = case.getValue("input") as JsonObject
+            val canonical = canonical(index + 1L, steamAppId = null)
+            db.canonicalGameDao().insert(canonical)
+            seedMatch(
+                match(
+                    key(
+                        GameSource.valueOf((input.getValue("source") as JsonPrimitive).content),
+                        (input.getValue("stableSourceId") as JsonPrimitive).content,
+                    ),
+                    canonical.canonicalId,
+                    title = (input.getValue("displayName") as JsonPrimitive).content,
+                    developer = (input["developer"] as? JsonPrimitive)?.content.orEmpty(),
+                    year = (input["releaseYear"] as? JsonPrimitive)?.content?.toIntOrNull(),
+                    appType = CanonicalAppType.valueOf(
+                        (input.getValue("appType") as JsonPrimitive).content,
+                    ),
+                ),
+            )
+        }
+        val recordsById = catalog.associateBy(SteamCatalogCandidate::steamAppId)
+        val repository = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                val queryKey = SteamCatalogNormalization.titleKey(query)
+                catalog.filter { candidate ->
+                    SteamCatalogNormalization.titleKey(candidate.title) == queryKey
+                }.map { candidate ->
+                    SteamStoreSearchHit(candidate.steamAppId, candidate.title, null)
+                }
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                recordsById[steamAppId]?.let { candidate ->
+                    record(
+                        steamAppId = candidate.steamAppId,
+                        title = candidate.title,
+                        developer = candidate.developer,
+                        year = candidate.releaseYear,
+                        appType = candidate.appType,
+                    )
+                }
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+        val actualByStableSourceId = writer.operations
+            .filterIsInstance<DecisionOperation.Accepted>()
+            .associate { operation -> operation.key.stableSourceId to operation.steamAppId }
+
+        assertEquals(30, progress.autoAccepted)
+        cases.forEach { case ->
+            val input = case.getValue("input") as JsonObject
+            val stableSourceId = (input.getValue("stableSourceId") as JsonPrimitive).content
+            val expectedSteamAppId =
+                (case.getValue("expectedSteamAppId") as JsonPrimitive).content.toInt()
+            assertEquals(
+                (case.getValue("caseId") as JsonPrimitive).content,
+                expectedSteamAppId,
+                actualByStableSourceId[stableSourceId],
+            )
+        }
     }
 
     @Test

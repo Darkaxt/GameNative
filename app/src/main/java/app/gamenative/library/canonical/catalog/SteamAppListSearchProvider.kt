@@ -1,7 +1,6 @@
 package app.gamenative.library.canonical.catalog
 
 import android.content.Context
-import app.gamenative.data.canonical.CanonicalNormalization
 import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.sanitizeSteamText
 import app.gamenative.service.steam.SteamWebApiKeySource
@@ -179,7 +178,7 @@ internal class SteamAppListSearchProvider internal constructor(
         require(trimmed.codePointCount(0, trimmed.length) <= MAX_QUERY_CODE_POINTS) {
             "Steam catalog query is too long"
         }
-        return CanonicalNormalization.titleKey(trimmed)
+        return SteamCatalogNormalization.titleKey(trimmed)
     }
 
     private suspend fun ensureIndex(): Map<String, List<SteamStoreSearchHit>> {
@@ -248,7 +247,7 @@ internal class SteamAppListSearchProvider internal constructor(
             .distinctBy(SteamAppListEntry::steamAppId)
             .sortedBy(SteamAppListEntry::steamAppId)
             .mapNotNull { entry ->
-                val key = CanonicalNormalization.titleKey(entry.title)
+                val key = SteamCatalogNormalization.titleKey(entry.title)
                 key.takeIf(String::isNotEmpty)?.let {
                     it to SteamStoreSearchHit(entry.steamAppId, entry.title, null)
                 }
@@ -257,7 +256,7 @@ internal class SteamAppListSearchProvider internal constructor(
 
     private companion object {
         const val MAX_QUERY_CODE_POINTS = 256
-        const val MAX_RESULTS = 10
+        const val MAX_RESULTS = 15
         const val REFRESH_INTERVAL_SECONDS = 7L * 24L * 60L * 60L
         const val FAILURE_BACKOFF_SECONDS = 15L * 60L
     }

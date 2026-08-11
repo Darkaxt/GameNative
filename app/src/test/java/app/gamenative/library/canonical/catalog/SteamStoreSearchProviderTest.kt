@@ -78,7 +78,7 @@ class SteamStoreSearchProviderTest {
     }
 
     @Test
-    fun deduplicatesPositiveAppsAndCapsResultsAtTen() = runTest {
+    fun deduplicatesPositiveAppsAndCapsResultsAtFifteen() = runTest {
         val items = buildList {
             add("""{"type":"app","name":"Game 1","id":1}""")
             add("""{"type":"app","name":"Duplicate","id":1}""")
@@ -92,8 +92,8 @@ class SteamStoreSearchProviderTest {
 
         val hits = provider().search("Game", MetadataLocale("en-US", "US"))
 
-        assertEquals(10, hits.size)
-        assertEquals((1..10).toList(), hits.map(SteamStoreSearchHit::steamAppId))
+        assertEquals(15, hits.size)
+        assertEquals((1..15).toList(), hits.map(SteamStoreSearchHit::steamAppId))
     }
 
     @Test

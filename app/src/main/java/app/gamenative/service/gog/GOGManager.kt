@@ -8,6 +8,7 @@ import app.gamenative.data.GOGGame
 import app.gamenative.data.GameSource
 import app.gamenative.data.LaunchInfo
 import app.gamenative.data.LibraryItem
+import app.gamenative.data.canonical.StableSourceIdValidation
 import app.gamenative.db.dao.GOGGameDao
 import app.gamenative.enums.AppType
 import app.gamenative.enums.Marker
@@ -170,7 +171,7 @@ class GOGManager @Inject constructor(
         ownershipLedger.runCompleteSnapshot(GameSource.GOG) {
             val gameIds = GOGApiClient.getGameIds(context).getOrThrow()
                 .map(String::trim)
-                .also { ids -> require(ids.all(String::isNotEmpty)) }
+                .also { ids -> StableSourceIdValidation.requireAllValid(GameSource.GOG, ids) }
                 .distinct()
             val ownedIds = gameIds.toSet()
             val ignoredGameId = "1801418160"

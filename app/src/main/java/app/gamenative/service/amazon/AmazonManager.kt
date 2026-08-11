@@ -3,6 +3,7 @@ package app.gamenative.service.amazon
 import android.content.Context
 import app.gamenative.data.AmazonGame
 import app.gamenative.data.GameSource
+import app.gamenative.data.canonical.StableSourceIdValidation
 import app.gamenative.db.dao.AmazonGameDao
 import app.gamenative.library.canonical.AccountScopedOwnershipLedger
 import app.gamenative.library.canonical.MaterializedOwnedCopySnapshot
@@ -29,8 +30,9 @@ class AmazonManager @Inject constructor(
                 bearerToken = credentials.accessToken,
                 deviceSerial = credentials.deviceSerial,
             ).getOrThrow()
-            amazonGameDao.upsertPreservingInstallStatus(games)
             val stableSourceIds = games.map { it.productId }
+            StableSourceIdValidation.requireAllValid(GameSource.AMAZON, stableSourceIds)
+            amazonGameDao.upsertPreservingInstallStatus(games)
             require(stableSourceIds.size == stableSourceIds.toSet().size)
             val persistedIds = amazonGameDao.getAllAsList().map { it.productId }.toSet()
             require(stableSourceIds.all(persistedIds::contains))

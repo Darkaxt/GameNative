@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "caseId": "gog-disco-elysium",
+      "input": {"source": "GOG", "stableSourceId": "1771589310", "displayName": "Disco Elysium - The Final Cut", "developer": "ZA/UM", "releaseYear": 2019, "appType": "GAME"},
+      "expectedSteamAppId": 632470,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1771589310"]
+    },
+    {
+      "caseId": "gog-cyberpunk-2077",
+      "input": {"source": "GOG", "stableSourceId": "2093619782", "displayName": "Cyberpunk 2077", "developer": "CD PROJEKT RED", "releaseYear": 2020, "appType": "GAME"},
+      "expectedSteamAppId": 1091500,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/2093619782"]
+    },
+    {
+      "caseId": "gog-witcher-3",
+      "input": {"source": "GOG", "stableSourceId": "1207664663", "displayName": "The Witcher 3: Wild Hunt", "developer": "CD PROJEKT RED", "releaseYear": 2015, "appType": "GAME"},
+      "expectedSteamAppId": 292030,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1207664663"]
+    },
+    {
+      "caseId": "gog-baldurs-gate-3",
+      "input": {"source": "GOG", "stableSourceId": "1456460669", "displayName": "Baldur's Gate 3", "developer": "Larian Studios", "releaseYear": 2023, "appType": "GAME"},
+      "expectedSteamAppId": 1086940,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1456460669"]
+    },
+    {
+      "caseId": "gog-stardew-valley",
+      "input": {"source": "GOG", "stableSourceId": "1453375253", "displayName": "Stardew Valley", "developer": "ConcernedApe", "releaseYear": 2016, "appType": "GAME"},
+      "expectedSteamAppId": 413150,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1453375253"]
+    },
+    {
+      "caseId": "gog-no-mans-sky",
+      "input": {"source": "GOG", "stableSourceId": "1446213994", "displayName": "No Man's Sky", "developer": "Hello Games", "releaseYear": 2016, "appType": "GAME"},
+      "expectedSteamAppId": 275850,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1446213994"]
+    },
+    {
+      "caseId": "gog-control-ultimate",
+      "input": {"source": "GOG", "stableSourceId": "2049187585", "displayName": "Control Ultimate Edition", "developer": "Remedy Entertainment", "releaseYear": 2020, "appType": "GAME"},
+      "expectedSteamAppId": 870780,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/2049187585"]
+    },
+    {
+      "caseId": "gog-hollow-knight",
+      "input": {"source": "GOG", "stableSourceId": "1308320804", "displayName": "Hollow Knight", "developer": "Team Cherry", "releaseYear": 2017, "appType": "GAME"},
+      "expectedSteamAppId": 367520,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1308320804"]
+    },
+    {
+      "caseId": "gog-divinity-original-sin-2",
+      "input": {"source": "GOG", "stableSourceId": "1584823040", "displayName": "Divinity: Original Sin 2 - Definitive Edition", "developer": "Larian Studios", "releaseYear": 2017, "appType": "GAME"},
+      "expectedSteamAppId": 435150,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1584823040"]
+    },
+    {
+      "caseId": "gog-terraria",
+      "input": {"source": "GOG", "stableSourceId": "1207665503", "displayName": "Terraria", "developer": "Re-Logic", "releaseYear": 2011, "appType": "GAME"},
+      "expectedSteamAppId": 105600,
+      "sourceEvidenceUrls": ["https://api.gog.com/products/1207665503"]
+    },
+
+    {
+      "caseId": "epic-celeste",
+      "input": {"source": "EPIC", "stableSourceId": "YjY3MWZiYzdiZTQyNGU4ODhjOTM0NmE5YTZkM2Q5ZGI.MzhjMDdhMDlkYzE3NGI2OWI3NTZhYTUxODkwYzNkZDQ", "displayName": "Celeste", "developer": "Maddy Makes Games", "releaseYear": 2018, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "b671fbc7be424e888c9346a9a6d3d9db", "catalogId": "38c07a09dc174b69b756aa51890c3dd4"},
+      "expectedSteamAppId": 504230,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/celeste"]
+    },
+    {
+      "caseId": "epic-subnautica",
+      "input": {"source": "EPIC", "stableSourceId": "amFndWFy.MzI1N2UwNmMyODc2NDIzMWFjZDkzMDQ5ZjM3NzRlZDY", "displayName": "Subnautica", "developer": "Unknown Worlds Entertainment", "releaseYear": 2018, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "jaguar", "catalogId": "3257e06c28764231acd93049f3774ed6"},
+      "expectedSteamAppId": 264710,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/subnautica"]
+    },
+    {
+      "caseId": "epic-inside",
+      "input": {"source": "EPIC", "stableSourceId": "MTNiYjU3NzZiOWUxNDI0ZDg0Y2U0MmQ5YmE2MWMwY2E.NmZkYjVmZWJhNjY4NDZjZDg2MjNhNmQxNWNhNjgwODA", "displayName": "Playdead's INSIDE", "developer": "Playdead", "releaseYear": 2016, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "13bb5776b9e1424d84ce42d9ba61c0ca", "catalogId": "6fdb5feba66846cd8623a6d15ca68080"},
+      "expectedSteamAppId": 304430,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/inside"]
+    },
+    {
+      "caseId": "epic-the-witness",
+      "input": {"source": "EPIC", "stableSourceId": "bWFnbm9saWE.YTM3OWYwNTBmYTNkNDdlNGEwZmE2OTZiMGVmNzQ0ZDU", "displayName": "The Witness", "developer": "Thekla, Inc.", "releaseYear": 2016, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "magnolia", "catalogId": "a379f050fa3d47e4a0fa696b0ef744d5"},
+      "expectedSteamAppId": 210970,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/the-witness"]
+    },
+    {
+      "caseId": "epic-oxenfree",
+      "input": {"source": "EPIC", "stableSourceId": "aGliaXNjdXM.YTMyYjRmYzg1ZTI0NDBiZDlkYWUwZGFjZTc2ZjVjODY", "displayName": "Oxenfree", "developer": "Night School Studio", "releaseYear": 2016, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "hibiscus", "catalogId": "a32b4fc85e2440bd9dae0dace76f5c86"},
+      "expectedSteamAppId": 388880,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/oxenfree"]
+    },
+    {
+      "caseId": "epic-slime-rancher",
+      "input": {"source": "EPIC", "stableSourceId": "Y29yeWRhbGlz.MWUzOGI2MThkMTA2NDMwZGI5NGI0NzRhYmJmZWNjMTY", "displayName": "Slime Rancher", "developer": "Monomi Park", "releaseYear": 2017, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "corydalis", "catalogId": "1e38b618d106430db94b474abbfecc16"},
+      "expectedSteamAppId": 433340,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/slime-rancher"]
+    },
+    {
+      "caseId": "epic-super-meat-boy",
+      "input": {"source": "EPIC", "stableSourceId": "YnVmZmFsbw.N2ViNWJjOWVjMTY1NDJjN2JiMzE4NzRjZWFhZDQxMGY", "displayName": "Super Meat Boy", "developer": "Team Meat", "releaseYear": 2010, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "buffalo", "catalogId": "7eb5bc9ec16542c7bb31874ceaad410f"},
+      "expectedSteamAppId": 40800,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/super-meat-boy"]
+    },
+    {
+      "caseId": "epic-enter-the-gungeon",
+      "input": {"source": "EPIC", "stableSourceId": "YmUxM2Y2YzRmYjExNDI3ZmJmMzMxM2NlOTNiOTdjYzA.MjViNzcxZGIwMTU1NGIxYmI0MGM1NjE3YjY2M2QxN2U", "displayName": "Enter the Gungeon", "developer": "Dodge Roll", "releaseYear": 2016, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "be13f6c4fb11427fbf3313ce93b97cc0", "catalogId": "25b771db01554b1bb40c5617b663d17e"},
+      "expectedSteamAppId": 311690,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/enter-the-gungeon"]
+    },
+    {
+      "caseId": "epic-world-of-goo",
+      "input": {"source": "EPIC", "stableSourceId": "YW5lbW9uZQ.NzE2MjQ1ZTQ0ZjY5NDkzN2I2ODc5MmRjZDA5MGExNWM", "displayName": "World of Goo", "developer": "2D BOY", "releaseYear": 2008, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "anemone", "catalogId": "716245e44f694937b68792dcd090a15c"},
+      "expectedSteamAppId": 22000,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/world-of-goo"]
+    },
+    {
+      "caseId": "epic-limbo",
+      "input": {"source": "EPIC", "stableSourceId": "OTIwNTMwMDYwNjhlNGFhOWIxYWQ0MTNmNzIwOTBmNWU.OTM1NGNkOTJhMjFmNDJhMTg2YjczYzk4NDI5MGM5NDI", "displayName": "Playdead's LIMBO", "developer": "Playdead", "releaseYear": 2010, "appType": "GAME"},
+      "rawSourceIdentity": {"namespace": "92053006068e4aa9b1ad413f72090f5e", "catalogId": "9354cd92a21f42a186b73c984290c942"},
+      "expectedSteamAppId": 48000,
+      "sourceEvidenceUrls": ["https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/limbo"]
+    },
+
+    {
+      "caseId": "amazon-baldurs-gate-ee",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.5d35cae7-39d1-4e53-ba92-36004c4a5211", "displayName": "Baldur's Gate: Enhanced Edition", "developer": "Beamdog", "releaseYear": 2012, "appType": "GAME"},
+      "expectedSteamAppId": 228280,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/baldurs-gate-enhanced-edition.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-baldurs-gate-ii-ee",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.852e8b11-4233-42dc-be63-89f2ea9ce78f", "displayName": "Baldur's Gate II: Enhanced Edition", "developer": "Beamdog", "releaseYear": 2013, "appType": "GAME"},
+      "expectedSteamAppId": 257350,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/baldurs-gate-ii-enhanced-edition.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-clouds-and-sheep-2",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.2cbd524e-6778-4f53-b367-b3255aca792c", "displayName": "Clouds & Sheep 2", "developer": "HandyGames", "releaseYear": 2015, "appType": "GAME"},
+      "expectedSteamAppId": 439800,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/clouds-sheep-2.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-endling",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.21965245-d668-4a8f-818a-38133698587b", "displayName": "Endling: Extinction is Forever", "developer": "Herobeat Studios", "releaseYear": 2022, "appType": "GAME"},
+      "expectedSteamAppId": 898890,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/endling-extinction-is-forever.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-genesis-noir",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.35fd4aba-910f-4f83-b4b8-5ef898a20ae1", "displayName": "Genesis Noir", "developer": "Feral Cat Den", "releaseYear": 2021, "appType": "GAME"},
+      "expectedSteamAppId": 735290,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/genesis-noir.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-grime",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.a533b569-f163-4ad9-b0dc-e6c069695a72", "displayName": "GRIME", "developer": "Clover Bite", "releaseYear": 2021, "appType": "GAME"},
+      "expectedSteamAppId": 1123050,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/grime.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-scarf",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.bcce181d-9bb0-4feb-8cac-1aad48afb56b", "displayName": "SCARF", "developer": "Uprising Studios", "releaseYear": 2021, "appType": "GAME"},
+      "expectedSteamAppId": 645320,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/scarf.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-kotor-ii",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.bc8c2cf6-ded7-42fb-91d9-d0865af9e57a", "displayName": "Star Wars: Knights of the Old Republic II - The Sith Lords", "developer": "Obsidian Entertainment", "releaseYear": 2005, "appType": "GAME"},
+      "expectedSteamAppId": 208580,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/star-wars-knights-of-the-old-republic-ii-the-sith-lords.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-forgotten-city",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.e31e4571-b8d9-444e-852f-93846749eb40", "displayName": "The Forgotten City", "developer": "Modern Storyteller", "releaseYear": 2021, "appType": "GAME"},
+      "expectedSteamAppId": 874260,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/the-forgotten-city.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    },
+    {
+      "caseId": "amazon-wall-world",
+      "input": {"source": "AMAZON", "stableSourceId": "amzn1.adg.product.c25c2ac3-b318-4192-96b7-bafef73060b9", "displayName": "Wall World", "developer": "Alawar", "releaseYear": 2023, "appType": "GAME"},
+      "expectedSteamAppId": 2187290,
+      "sourceEvidenceUrls": ["https://raw.githubusercontent.com/ebenbruyns/junkstore-website/main/_games/amazon/wall-world.md", "https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"]
+    }
+  ]
+}

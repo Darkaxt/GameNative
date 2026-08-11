@@ -19,13 +19,23 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun uniqueExactCandidateWithAdjacentReleaseYearAutoAccepts() {
+    fun exactTitleAndYearMeetAutomaticScoreBoundary() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = null, year = 2020),
+            candidates = listOf(candidate(42, "Example", null, 2020)),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(42), result)
+    }
+
+    @Test
+    fun uniqueExactCandidateWithAdjacentReleaseYearRequiresReviewBelowScoreThreshold() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = 2020),
             candidates = listOf(candidate(42, "Example", null, 2021)),
         )
 
-        assertEquals(CatalogDecision.AutoAccept(42), result)
+        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
     }
 
     @Test
@@ -117,11 +127,65 @@ class SteamCatalogCandidatePolicyTest {
     @Test
     fun editionConflictRequiresReview() {
         val result = policy.evaluate(
-            source = source(title = "Example Deluxe", developer = "Studio", year = 2020),
-            candidates = listOf(candidate(42, "Example", "Studio", 2020)),
+            source = source(
+                title = "Example Ultimate Edition",
+                developer = "Studio",
+                year = 2020,
+            ),
+            candidates = listOf(
+                candidate(42, "Example Definitive Edition", "Studio", 2015),
+            ),
         )
 
         assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+    }
+
+    @Test
+    fun safeAliasExactCandidateCanAutoAccept() {
+        val result = policy.evaluate(
+            source = source(title = "Playdead's INSIDE", developer = "Playdead", year = 2016),
+            candidates = listOf(candidate(304430, "INSIDE", "Playdead", 2016)),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(304430), result)
+    }
+
+    @Test
+    fun marginBelowEightHundredthsRequiresScoreRankedReview() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = null, year = 2020),
+            candidates = listOf(
+                candidate(10, "Example", null, 2021),
+                candidate(20, "Example", null, 2020),
+            ),
+        )
+
+        assertEquals(CatalogDecision.ReviewRequired(listOf(20, 10)), result)
+    }
+
+    @Test
+    fun lowPlausibilityGameHitsAreUnmatched() {
+        val result = policy.evaluate(
+            source = source(title = "Alan Wake 2", developer = "Remedy", year = 2023),
+            candidates = listOf(
+                candidate(42, "Unrelated Game", "Other Studio", 2023),
+            ),
+        )
+
+        assertEquals(CatalogDecision.Unmatched, result)
+    }
+
+    @Test
+    fun reviewCandidatesAreRankedByScoreBeforeAppId() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = null, year = null),
+            candidates = listOf(
+                candidate(42, "Unrelated"),
+                candidate(84, "Example"),
+            ),
+        )
+
+        assertEquals(CatalogDecision.ReviewRequired(listOf(84, 42)), result)
     }
 
     @Test

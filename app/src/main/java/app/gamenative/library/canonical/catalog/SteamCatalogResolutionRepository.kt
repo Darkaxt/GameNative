@@ -116,7 +116,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             listOfNotNull(fetchDirectCandidate(directSteamAppId, locale))
         } else {
             searchSource.requestImmediateRetry()
-            fetchCandidates(query, locale).candidates
+            fetchCandidates(query, locale).candidates.take(MAX_VISIBLE_CANDIDATES)
         }
         candidateLists[expected.key] = candidates
         return candidates
@@ -224,11 +224,13 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private suspend fun resolve(match: StoreMatchEntity): ItemResolution {
         val expected = match.expectedState()
         val locale = localeProvider.current()
+        val evidence = match.sourceEvidence()
         val fetched = fetchCandidates(match.evidenceDisplayName, locale)
-        val candidates = fetched.candidates
-        candidateLists[expected.key] = candidates
+        val candidates = candidatePolicy.rankCandidates(evidence, fetched.candidates)
+        candidateLists[expected.key] = candidates.take(MAX_VISIBLE_CANDIDATES)
         if (fetched.incomplete) {
-            val selected = candidates.first()
+            val selected = candidates.firstOrNull()
+                ?: throw SteamCatalogCandidateFetchException()
             return decisionWriter.recordCandidate(
                 expected = expected,
                 steamAppId = selected.steamAppId,
@@ -238,7 +240,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 errorType = requireNotNull(fetched.incompleteReason),
             )
         }
-        return when (val decision = candidatePolicy.evaluate(match.sourceEvidence(), candidates)) {
+        return when (val decision = candidatePolicy.evaluate(evidence, candidates)) {
             is CatalogDecision.AutoAccept -> {
                 val selected = candidates.first { it.steamAppId == decision.steamAppId }
                 val mutation = decisionWriter.acceptAutomatic(
@@ -313,7 +315,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         locale: MetadataLocale,
     ): CandidateFetchResult {
         var failedFetches = 0
-        val searchResult = searchSource.searchResult(query, locale)
+        val searchResult = fetchSearchHits(query, locale)
         val candidates = searchResult.hits
             .distinctBy(SteamStoreSearchHit::steamAppId)
             .take(MAX_VALIDATED_HITS)
@@ -350,6 +352,41 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         return CandidateFetchResult(
             candidates = candidates,
             incompleteReason = incompleteReason,
+        )
+    }
+
+    private suspend fun fetchSearchHits(
+        query: String,
+        locale: MetadataLocale,
+    ): SteamCatalogSearchResult {
+        val hitsById = linkedMapOf<Int, SteamStoreSearchHit>()
+        var successfulQueries = 0
+        var partial = false
+        var firstFailure: Exception? = null
+        SteamCatalogNormalization.titleQueries(query)
+            .take(MAX_QUERY_FAN_OUT)
+            .forEach { catalogQuery ->
+                val result = try {
+                    searchSource.searchResult(catalogQuery, locale)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: SteamRateLimitExhaustedException) {
+                    throw error
+                } catch (error: Exception) {
+                    partial = true
+                    if (firstFailure == null) firstFailure = error
+                    return@forEach
+                }
+                successfulQueries++
+                partial = partial || !result.complete
+                result.hits.forEach { hit -> hitsById.putIfAbsent(hit.steamAppId, hit) }
+            }
+        if (successfulQueries == 0) {
+            throw firstFailure ?: SteamCatalogSearchException()
+        }
+        return SteamCatalogSearchResult(
+            hits = hitsById.values.take(MAX_VALIDATED_HITS),
+            complete = !partial,
         )
     }
 
@@ -528,7 +565,9 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
 
     private companion object {
         const val MAX_CONCURRENCY = 1
-        const val MAX_VALIDATED_HITS = 5
+        const val MAX_QUERY_FAN_OUT = 3
+        const val MAX_VALIDATED_HITS = 15
+        const val MAX_VISIBLE_CANDIDATES = 5
         const val AUTOMATIC_ITEM_INTERVAL_MS = 350L
         const val STORE_SEARCH_UNAVAILABLE = "STORE_SEARCH_UNAVAILABLE"
         const val APP_DETAILS_UNAVAILABLE = "APP_DETAILS_UNAVAILABLE"
