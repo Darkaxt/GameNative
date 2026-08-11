@@ -19,6 +19,7 @@ import okhttp3.Response
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.TextNode
 
 @Singleton
 class SteamDiscussionProvider internal constructor(
@@ -161,15 +162,41 @@ class SteamDiscussionProvider internal constructor(
         val title = safeText(document.selectFirst(".topic, .forum_topic_name, h1"))
             ?.take(MAX_TITLE_LENGTH)
             ?: "Steam discussion"
-        val posts = document.select(
-            ".forum_op > .content, .forum_post_text, .forum_post_body, .commentthread_comment_text",
-        )
+        val candidates = mutableListOf<Element>()
+        if (threadPage(route) == 1) {
+            document.selectFirst(
+                ".forum_op > .content, .forum_op .forum_post_text, .forum_op .forum_post_body",
+            )?.let(candidates::add)
+        }
+        listOf(
+            ".forum_post > .content",
+            ".forum_post_text",
+            ".forum_post_body",
+            ".commentthread_comment_text",
+        ).forEach { selector ->
+            document.select(selector).forEach { candidate ->
+                val insideOpeningPost = candidate.parents().any { it.hasClass("forum_op") }
+                if (!insideOpeningPost && candidates.none { it === candidate }) {
+                    candidates.add(candidate)
+                }
+            }
+        }
+        if (postContainers.isNotEmpty() && candidates.isEmpty()) {
+            throw SteamDiscussionsUnavailable()
+        }
+        val posts = candidates
             .asSequence()
-            .mapNotNull(::safeText)
-            .map { text -> SteamDiscussionPost(text.take(MAX_POST_LENGTH)) }
+            .mapNotNull { candidate ->
+                safePostText(candidate)?.let { text ->
+                    SteamDiscussionPost(
+                        text = text.take(MAX_POST_LENGTH),
+                        postId = stablePostId(candidate).orEmpty(),
+                    )
+                }
+            }
             .take(MAX_ITEMS)
             .toList()
-        if (postContainers.isNotEmpty() && posts.isEmpty()) throw SteamDiscussionsUnavailable()
+        if (candidates.isNotEmpty() && posts.isEmpty()) throw SteamDiscussionsUnavailable()
         return SteamDiscussionThread(
             title = title,
             posts = posts,
@@ -192,6 +219,30 @@ class SteamDiscussionProvider internal constructor(
             ".forum_topic, .forum_op, .forum_post, .commentthread_comment",
         ) != null
         if (clientRenderedShell && !serverForumContent) throw SteamDiscussionsUnavailable()
+    }
+
+    private fun threadPage(route: String): Int = endpoint.resolve(route)
+        ?.queryParameter("ctp")
+        ?.toIntOrNull()
+        ?: 1
+
+    private fun stablePostId(element: Element): String? {
+        var current: Element? = element
+        while (current != null) {
+            val node = current
+            listOf("data-postid" to "post:", "data-commentid" to "comment:")
+                .firstNotNullOfOrNull { (attribute, prefix) ->
+                    node.attr(attribute)
+                        .takeIf { value -> value.isNotEmpty() && value.all { it in '0'..'9' } }
+                        ?.let { value -> "$prefix$value" }
+                }
+                ?.let { return it }
+            node.id()
+                .takeIf { POST_ID.matches(it) }
+                ?.let { return it }
+            current = node.parent()
+        }
+        return null
     }
 
     private fun nextRoute(
@@ -277,6 +328,28 @@ class SteamDiscussionProvider internal constructor(
         return source.readUtf8()
     }
 
+    private fun safePostText(element: Element): String? {
+        val copy = element.clone()
+        copy.select("img.emoticon[alt]").forEach { emoticon ->
+            val alt = emoticon.attr("alt")
+                .trim()
+                .take(MAX_EMOTICON_ALT_LENGTH)
+            if (alt.isEmpty()) {
+                emoticon.remove()
+            } else {
+                emoticon.replaceWith(TextNode(" $alt "))
+            }
+        }
+        copy.select(
+            "script, style, iframe, img, video, audio, object, embed, " +
+                ".forum_author_link, [data-miniprofile]",
+        ).remove()
+        return copy.text()
+            .replace(WHITESPACE, " ")
+            .trim()
+            .takeIf(String::isNotBlank)
+    }
+
     private fun safeText(element: Element?): String? {
         val copy = element?.clone() ?: return null
         copy.select(
@@ -305,11 +378,13 @@ class SteamDiscussionProvider internal constructor(
         const val MAX_ITEMS = 50
         const val MAX_TITLE_LENGTH = 512
         const val MAX_ACTIVITY_LENGTH = 256
+        const val MAX_EMOTICON_ALT_LENGTH = 256
         const val MAX_POST_LENGTH = 32 * 1024
         const val MAX_ROUTE_LENGTH = 1024
         const val MAX_PAGE = 100
         const val MAX_RESPONSE_BYTES = 1024L * 1024L
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
+        val POST_ID = Regex("(?:forum_op|forum_post|comment|commentthread_comment)[_-][0-9]+")
         val WHITESPACE = Regex("\\s+")
     }
 }

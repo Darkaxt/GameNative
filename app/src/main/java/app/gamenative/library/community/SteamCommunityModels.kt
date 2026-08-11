@@ -67,7 +67,10 @@ data class SteamDiscussionListing(
     val nextRoute: String?,
 )
 
-data class SteamDiscussionPost(val text: String)
+data class SteamDiscussionPost(
+    val text: String,
+    val postId: String = "",
+)
 
 data class SteamDiscussionThread(
     val title: String,

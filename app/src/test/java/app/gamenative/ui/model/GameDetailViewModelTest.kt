@@ -16,6 +16,7 @@ import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GameMetadataRepository
 import app.gamenative.library.metadata.MetadataRefreshResult
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -183,6 +184,235 @@ class GameDetailViewModelTest {
     }
 
     @Test
+    fun failedReviewRefreshRestoresPaginationContext() = runTest(scheduler) {
+        val cursors = mutableListOf<String?>()
+        val failRefresh = CompletableDeferred<Unit>()
+        var firstPageCalls = 0
+        val reviewSource = SteamReviewPageSource { _, _, cursor ->
+            cursors += cursor
+            when {
+                cursor == "next" -> SteamReviewPage(
+                    reviews = listOf(review("Second")),
+                    nextCursor = null,
+                )
+                firstPageCalls++ == 0 -> SteamReviewPage(
+                    reviews = listOf(review("First")),
+                    nextCursor = "next",
+                )
+                else -> {
+                    failRefresh.await()
+                    error("refresh failed")
+                }
+            }
+        }
+        val viewModel = GameDetailViewModel(
+            FakeRepository(mutableMapOf()),
+            reviewSource,
+            emptyDiscussions(),
+        )
+
+        viewModel.loadReviews(steamAppId = 42, isOffline = false)
+        runCurrent()
+        viewModel.refreshReviews(isOffline = false)
+        runCurrent()
+        viewModel.refreshReviews(isOffline = false)
+        runCurrent()
+        assertEquals(listOf(null, null), cursors)
+        failRefresh.complete(Unit)
+        runCurrent()
+        val refreshed = viewModel.reviewState.value as ReviewSectionState.Content
+        assertTrue(refreshed.refreshFailed)
+        viewModel.loadMoreReviews()
+        runCurrent()
+
+        val loaded = viewModel.reviewState.value as ReviewSectionState.Content
+        assertEquals(listOf("First", "Second"), loaded.reviews.map(SteamReviewCard::text))
+        assertEquals(listOf(null, null, "next"), cursors)
+    }
+
+    @Test
+    fun discussionPostsDeduplicateStableIdentityAcrossPages() = runTest(scheduler) {
+        val source = object : SteamDiscussionSource {
+            override suspend fun fetchListing(steamAppId: Int, route: String?) =
+                SteamDiscussionListing(emptyList(), null)
+
+            override suspend fun fetchThread(
+                steamAppId: Int,
+                route: String,
+            ): SteamDiscussionThread = if (route.endsWith("ctp=2")) {
+                SteamDiscussionThread(
+                    title = "Thread",
+                    posts = listOf(
+                        discussionPost("Edited duplicate", postId = "forum_post_10"),
+                        discussionPost("Second reply", postId = "forum_post_11"),
+                    ),
+                    route = "/app/42/discussions/0/1/",
+                    nextRoute = null,
+                )
+            } else {
+                SteamDiscussionThread(
+                    title = "Thread",
+                    posts = listOf(
+                        discussionPost("Original reply", postId = "forum_post_10"),
+                    ),
+                    route = route,
+                    nextRoute = "$route?ctp=2",
+                )
+            }
+        }
+        val viewModel = GameDetailViewModel(
+            FakeRepository(mutableMapOf()),
+            emptyReviews(),
+            source,
+        )
+        viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
+        runCurrent()
+
+        viewModel.openDiscussion("/app/42/discussions/0/1/", isOffline = false)
+        runCurrent()
+        viewModel.loadMoreDiscussions()
+        runCurrent()
+
+        val thread = viewModel.discussionState.value as DiscussionSectionState.Thread
+        assertEquals(
+            listOf("Original reply", "Second reply"),
+            thread.posts.map(SteamDiscussionPost::text),
+        )
+    }
+
+    @Test
+    fun failedDiscussionListingRefreshRestoresPaginationContext() = runTest(scheduler) {
+        val listingRoutes = mutableListOf<String?>()
+        val failRefresh = CompletableDeferred<Unit>()
+        var firstPageCalls = 0
+        val source = object : SteamDiscussionSource {
+            override suspend fun fetchListing(
+                steamAppId: Int,
+                route: String?,
+            ): SteamDiscussionListing {
+                listingRoutes += route
+                return when {
+                    route == "/app/42/discussions/?fp=2" -> SteamDiscussionListing(
+                        threads = listOf(discussion("Second", "/app/42/discussions/0/2/")),
+                        nextRoute = null,
+                    )
+                    firstPageCalls++ == 0 -> SteamDiscussionListing(
+                        threads = listOf(discussion("First", "/app/42/discussions/0/1/")),
+                        nextRoute = "/app/42/discussions/?fp=2",
+                    )
+                    else -> {
+                        failRefresh.await()
+                        error("refresh failed")
+                    }
+                }
+            }
+
+            override suspend fun fetchThread(steamAppId: Int, route: String) =
+                SteamDiscussionThread("", emptyList(), route, null)
+        }
+        val viewModel = GameDetailViewModel(
+            FakeRepository(mutableMapOf()),
+            emptyReviews(),
+            source,
+        )
+
+        viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
+        runCurrent()
+        viewModel.refreshDiscussions(isOffline = false)
+        runCurrent()
+        viewModel.refreshDiscussions(isOffline = false)
+        runCurrent()
+        assertEquals(listOf(null, null), listingRoutes)
+        failRefresh.complete(Unit)
+        runCurrent()
+        val refreshed = viewModel.discussionState.value as DiscussionSectionState.Listing
+        assertTrue(refreshed.refreshFailed)
+        viewModel.loadMoreDiscussions()
+        runCurrent()
+
+        val loaded = viewModel.discussionState.value as DiscussionSectionState.Listing
+        assertEquals(listOf("First", "Second"), loaded.threads.map(SteamDiscussionSummary::title))
+        assertEquals(listOf(null, null, "/app/42/discussions/?fp=2"), listingRoutes)
+    }
+
+    @Test
+    fun failedDiscussionThreadRefreshRestoresPaginationContext() = runTest(scheduler) {
+        val threadRoutes = mutableListOf<String>()
+        val failRefresh = CompletableDeferred<Unit>()
+        var firstPageCalls = 0
+        val source = object : SteamDiscussionSource {
+            override suspend fun fetchListing(steamAppId: Int, route: String?) =
+                SteamDiscussionListing(
+                    threads = listOf(discussion("Thread", "/app/42/discussions/0/1/")),
+                    nextRoute = null,
+                )
+
+            override suspend fun fetchThread(
+                steamAppId: Int,
+                route: String,
+            ): SteamDiscussionThread {
+                threadRoutes += route
+                return when {
+                    route.endsWith("ctp=2") -> SteamDiscussionThread(
+                        title = "Thread",
+                        posts = listOf(discussionPost("Second", postId = "forum_post_2")),
+                        route = "/app/42/discussions/0/1/",
+                        nextRoute = null,
+                    )
+                    firstPageCalls++ == 0 -> SteamDiscussionThread(
+                        title = "Thread",
+                        posts = listOf(discussionPost("First", postId = "forum_post_1")),
+                        route = route,
+                        nextRoute = "$route?ctp=2",
+                    )
+                    else -> {
+                        failRefresh.await()
+                        error("refresh failed")
+                    }
+                }
+            }
+        }
+        val viewModel = GameDetailViewModel(
+            FakeRepository(mutableMapOf()),
+            emptyReviews(),
+            source,
+        )
+
+        viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
+        runCurrent()
+        viewModel.openDiscussion("/app/42/discussions/0/1/", isOffline = false)
+        runCurrent()
+        viewModel.refreshDiscussions(isOffline = false)
+        runCurrent()
+        viewModel.refreshDiscussions(isOffline = false)
+        runCurrent()
+        assertEquals(
+            listOf(
+                "/app/42/discussions/0/1/",
+                "/app/42/discussions/0/1/",
+            ),
+            threadRoutes,
+        )
+        failRefresh.complete(Unit)
+        runCurrent()
+        val refreshed = viewModel.discussionState.value as DiscussionSectionState.Thread
+        assertTrue(refreshed.refreshFailed)
+        viewModel.loadMoreDiscussions()
+        runCurrent()
+
+        val loaded = viewModel.discussionState.value as DiscussionSectionState.Thread
+        assertEquals(listOf("First", "Second"), loaded.posts.map(SteamDiscussionPost::text))
+        assertEquals(
+            listOf(
+                "/app/42/discussions/0/1/",
+                "/app/42/discussions/0/1/",
+                "/app/42/discussions/0/1/?ctp=2",
+            ),
+            threadRoutes,
+        )
+    }
+
+    @Test
     fun closingThreadRestoresListingPaginationContext() = runTest(scheduler) {
         val listingRoutes = mutableListOf<String?>()
         val source = object : SteamDiscussionSource {
@@ -243,7 +473,7 @@ class GameDetailViewModelTest {
                 return if (route == null) {
                     SteamDiscussionListing(
                         threads = listOf(discussion("First", "/app/42/discussions/0/1/")),
-                        nextRoute = "/app/42/discussions/?ctp=2",
+                        nextRoute = "/app/42/discussions/?fp=2",
                     )
                 } else {
                     SteamDiscussionListing(
@@ -294,7 +524,7 @@ class GameDetailViewModelTest {
 
         state = viewModel.discussionState.value as DiscussionSectionState.Listing
         assertEquals(listOf("First", "Second"), state.threads.map(SteamDiscussionSummary::title))
-        assertEquals(listOf(null, "/app/42/discussions/?ctp=2"), listingRoutes)
+        assertEquals(listOf(null, "/app/42/discussions/?fp=2"), listingRoutes)
         assertEquals(
             listOf("/app/42/discussions/0/1/", "/app/42/discussions/0/1/?ctp=2"),
             threadRoutes,
@@ -312,6 +542,11 @@ class GameDetailViewModelTest {
         override suspend fun fetchThread(steamAppId: Int, route: String) =
             SteamDiscussionThread("", emptyList(), route, null)
     }
+
+    private fun discussionPost(
+        text: String,
+        postId: String = text,
+    ) = SteamDiscussionPost(text = text, postId = postId)
 
     private fun discussion(title: String, route: String) = SteamDiscussionSummary(
         title = title,

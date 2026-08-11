@@ -74,12 +74,14 @@ class SteamDiscussionProviderTest {
             htmlResponse(
                 """
                 <html><body>
-                  <div class="forum_op">
+                  <div class="forum_op" id="forum_op_100">
                     <a class="forum_author_link" data-miniprofile="private-steamid">Private user</a>
                     <div class="topic">Synthetic topic</div>
                     <div class="content">First <b>plain</b> post<script>secret()</script></div>
                   </div>
-                  <div class="commentthread_comment_text">Second post</div>
+                  <div class="commentthread_comment" data-commentid="102">
+                    <div class="commentthread_comment_text">Second post</div>
+                  </div>
                   <a class="pagebtn" rel="next" href="/app/42/discussions/0/100/?ctp=2">Next</a>
                 </body></html>
                 """.trimIndent(),
@@ -89,11 +91,110 @@ class SteamDiscussionProviderTest {
         val thread = provider().fetchThread(42, "/app/42/discussions/0/100/")
 
         assertEquals("Synthetic topic", thread.title)
-        assertEquals(listOf("First plain post", "Second post"), thread.posts.map(SteamDiscussionPost::text))
+        assertEquals(
+            listOf(
+                SteamDiscussionPost("First plain post", postId = "forum_op_100"),
+                SteamDiscussionPost("Second post", postId = "comment:102"),
+            ),
+            thread.posts,
+        )
         assertEquals("/app/42/discussions/0/100/?ctp=2", thread.nextRoute)
         assertFalse(thread.toString().contains("Private user"))
         assertFalse(thread.toString().contains("private-steamid"))
         assertFalse(thread.toString().contains("secret"))
+    }
+
+    @Test
+    fun `continued thread omits repeated opening post and maps stable reply identity`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="forum_op" id="forum_op_1">
+                    <div class="content">Repeated opening post</div>
+                  </div>
+                  <div class="forum_post" data-postid="202">
+                    <div class="content">Page two reply</div>
+                  </div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        val thread = provider().fetchThread(42, "/app/42/discussions/0/100/?ctp=2")
+
+        assertEquals(
+            listOf(SteamDiscussionPost("Page two reply", postId = "post:202")),
+            thread.posts,
+        )
+    }
+
+    @Test
+    fun `thread preserves inert emoticon alt text`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="commentthread_comment" id="comment_99">
+                    <div class="commentthread_comment_text">
+                      <img class="emoticon" alt=":1scoreSD:" src="https://example.invalid/emoticon.png">
+                    </div>
+                  </div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        val thread = provider().fetchThread(42, "/app/42/discussions/0/100/")
+
+        assertEquals(
+            listOf(SteamDiscussionPost(":1scoreSD:", postId = "comment_99")),
+            thread.posts,
+        )
+    }
+
+    @Test
+    fun `blank posts are omitted when another mapped post has text`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="commentthread_comment" id="comment_98">
+                    <div class="commentthread_comment_text">A visible reply</div>
+                  </div>
+                  <div class="commentthread_comment" id="comment_99">
+                    <div class="commentthread_comment_text"><br><br><br></div>
+                  </div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        val thread = provider().fetchThread(42, "/app/42/discussions/0/100/")
+
+        assertEquals(
+            listOf(SteamDiscussionPost("A visible reply", postId = "comment_98")),
+            thread.posts,
+        )
+    }
+
+    @Test
+    fun `thread with only blank post containers fails closed`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="commentthread_comment" id="comment_99">
+                    <div class="commentthread_comment_text"><br><br><br></div>
+                  </div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        assertUnavailable {
+            provider().fetchThread(42, "/app/42/discussions/0/100/")
+        }
     }
 
     @Test

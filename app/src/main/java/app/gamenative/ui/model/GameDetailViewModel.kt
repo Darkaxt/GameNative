@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.library.community.DiscussionSectionState
 import app.gamenative.library.community.ReviewSectionState
+import app.gamenative.library.community.SteamDiscussionPost
 import app.gamenative.library.community.SteamDiscussionSource
 import app.gamenative.library.community.SteamDiscussionSummary
 import app.gamenative.library.community.SteamReviewCard
@@ -99,7 +100,9 @@ class GameDetailViewModel @Inject constructor(
         val sameRequest = activeReviewAppId == steamAppId
         if (!force && sameRequest && mutableReviewState.value !is ReviewSectionState.Offline) return
 
-        val previousContent = mutableReviewState.value as? ReviewSectionState.Content
+        val previousContent = (mutableReviewState.value as? ReviewSectionState.Content)
+            ?.takeIf { sameRequest }
+        val previousPagination = previousContent?.let { reviewPagination() }
         reviewJob?.cancel()
         activeReviewAppId = steamAppId
         nextReviewCursor = null
@@ -128,6 +131,7 @@ class GameDetailViewModel @Inject constructor(
                 throw error
             } catch (_: Exception) {
                 if (revision != reviewRevision) return@launch
+                previousPagination?.let(::restoreReviewPagination)
                 mutableReviewState.value = previousContent
                     ?.copy(loadingMore = false, refreshFailed = true)
                     ?: ReviewSectionState.Unavailable
@@ -145,6 +149,7 @@ class GameDetailViewModel @Inject constructor(
     }
 
     fun refreshReviews(isOffline: Boolean) {
+        if (reviewJob?.isActive == true) return
         val appId = activeReviewAppId ?: return
         loadReviews(appId, isOffline, force = true)
     }
@@ -203,10 +208,13 @@ class GameDetailViewModel @Inject constructor(
         val sameRequest = activeDiscussionAppId == steamAppId
         if (!force && sameRequest && mutableDiscussionState.value !is DiscussionSectionState.Offline) return
 
-        val previous = mutableDiscussionState.value as? DiscussionSectionState.Listing
+        val previous = (mutableDiscussionState.value as? DiscussionSectionState.Listing)
+            ?.takeIf { sameRequest }
+        val previousPagination = previous?.let { discussionPagination() }
         discussionJob?.cancel()
         activeDiscussionAppId = steamAppId
         retainedDiscussionListing = null
+        retainedDiscussionPagination = null
         nextDiscussionRoute = null
         discussionPageCount = 0
         visitedDiscussionRoutes.clear()
@@ -233,6 +241,7 @@ class GameDetailViewModel @Inject constructor(
                 throw error
             } catch (_: Exception) {
                 if (revision != discussionRevision) return@launch
+                previousPagination?.let(::restoreDiscussionPagination)
                 mutableDiscussionState.value = previous
                     ?.copy(loadingMore = false, refreshFailed = true)
                     ?: DiscussionSectionState.Unavailable
@@ -259,6 +268,7 @@ class GameDetailViewModel @Inject constructor(
     }
 
     fun refreshDiscussions(isOffline: Boolean) {
+        if (discussionJob?.isActive == true) return
         val appId = activeDiscussionAppId ?: return
         when (val current = mutableDiscussionState.value) {
             is DiscussionSectionState.Thread -> {
@@ -304,6 +314,7 @@ class GameDetailViewModel @Inject constructor(
         route: String,
         previous: DiscussionSectionState.Thread?,
     ) {
+        val previousPagination = previous?.let { discussionPagination() }
         discussionJob?.cancel()
         nextDiscussionRoute = null
         discussionPageCount = 0
@@ -318,7 +329,8 @@ class GameDetailViewModel @Inject constructor(
                 nextDiscussionRoute = thread.nextRoute
                 mutableDiscussionState.value = DiscussionSectionState.Thread(
                     title = thread.title,
-                    posts = thread.posts.take(MAX_DISCUSSION_ITEMS),
+                    posts = thread.posts.deduplicatePostIdentity()
+                        .take(MAX_DISCUSSION_ITEMS),
                     route = thread.route,
                     canLoadMore = canLoadMoreDiscussions(),
                 )
@@ -326,6 +338,7 @@ class GameDetailViewModel @Inject constructor(
                 throw error
             } catch (_: Exception) {
                 if (revision != discussionRevision) return@launch
+                previousPagination?.let(::restoreDiscussionPagination)
                 mutableDiscussionState.value = previous
                     ?.copy(loadingMore = false, refreshFailed = true)
                     ?: DiscussionSectionState.Unavailable
@@ -385,7 +398,9 @@ class GameDetailViewModel @Inject constructor(
                 visitedDiscussionRoutes += route
                 discussionPageCount += 1
                 nextDiscussionRoute = page.nextRoute
-                val posts = (current.posts + page.posts).take(MAX_DISCUSSION_ITEMS)
+                val posts = (current.posts + page.posts)
+                    .deduplicatePostIdentity()
+                    .take(MAX_DISCUSSION_ITEMS)
                 mutableDiscussionState.value = current.copy(
                     posts = posts,
                     canLoadMore = canLoadMoreDiscussions() && posts.size < MAX_DISCUSSION_ITEMS,
@@ -425,9 +440,27 @@ class GameDetailViewModel @Inject constructor(
         mutableReviewState.value = ReviewSectionState.Idle
     }
 
+    private fun reviewPagination() = ReviewPagination(
+        nextCursor = nextReviewCursor,
+        pageCount = reviewPageCount,
+        consumedCursors = consumedReviewCursors.toSet(),
+    )
+
+    private fun restoreReviewPagination(pagination: ReviewPagination) {
+        nextReviewCursor = pagination.nextCursor
+        reviewPageCount = pagination.pageCount
+        consumedReviewCursors.clear()
+        consumedReviewCursors += pagination.consumedCursors
+    }
+
     private fun List<SteamReviewCard>.deduplicateReviewIdentity(): List<SteamReviewCard> =
         distinctBy { review ->
             review.recommendationId.takeIf(String::isNotBlank) ?: review
+        }
+
+    private fun List<SteamDiscussionPost>.deduplicatePostIdentity(): List<SteamDiscussionPost> =
+        distinctBy { post ->
+            post.postId.takeIf(String::isNotBlank) ?: post
         }
 
     private fun canLoadMore(): Boolean =
@@ -448,10 +481,29 @@ class GameDetailViewModel @Inject constructor(
         mutableDiscussionState.value = DiscussionSectionState.Idle
     }
 
+    private fun discussionPagination() = DiscussionPagination(
+        nextRoute = nextDiscussionRoute,
+        pageCount = discussionPageCount,
+        visitedRoutes = visitedDiscussionRoutes.toSet(),
+    )
+
+    private fun restoreDiscussionPagination(pagination: DiscussionPagination) {
+        nextDiscussionRoute = pagination.nextRoute
+        discussionPageCount = pagination.pageCount
+        visitedDiscussionRoutes.clear()
+        visitedDiscussionRoutes += pagination.visitedRoutes
+    }
+
     private fun canLoadMoreDiscussions(): Boolean =
         !nextDiscussionRoute.isNullOrBlank() &&
             nextDiscussionRoute !in visitedDiscussionRoutes &&
             discussionPageCount < MAX_DISCUSSION_PAGES
+
+    private data class ReviewPagination(
+        val nextCursor: String?,
+        val pageCount: Int,
+        val consumedCursors: Set<String>,
+    )
 
     private data class DiscussionPagination(
         val nextRoute: String?,
