@@ -53,7 +53,7 @@ class FeatureSteamCatalogResolutionDiagnostics @Inject constructor() :
 
     private fun SteamResolutionItemResult.diagnosticOutcome(): DiagnosticOutcome = when (this) {
         SteamResolutionItemResult.AutoAccepted,
-        SteamResolutionItemResult.Unmatched,
+        SteamResolutionItemResult.CompleteNoPlausibleSteamMatch,
         -> DiagnosticOutcome.SUCCEEDED
         SteamResolutionItemResult.ReviewRequired -> DiagnosticOutcome.DEFERRED
         SteamResolutionItemResult.ExpectedStateChanged -> DiagnosticOutcome.SKIPPED
@@ -63,7 +63,8 @@ class FeatureSteamCatalogResolutionDiagnostics @Inject constructor() :
     private fun SteamResolutionItemResult.diagnosticCategory(): String = when (this) {
         SteamResolutionItemResult.AutoAccepted -> "AUTO_ACCEPTED"
         SteamResolutionItemResult.ReviewRequired -> "REVIEW_REQUIRED"
-        SteamResolutionItemResult.Unmatched -> "UNMATCHED"
+        SteamResolutionItemResult.CompleteNoPlausibleSteamMatch ->
+            "COMPLETE_NO_PLAUSIBLE_STEAM_MATCH"
         SteamResolutionItemResult.ExpectedStateChanged -> "EXPECTED_STATE_CHANGED"
         SteamResolutionItemResult.ProviderUnavailable -> "PROVIDER_UNAVAILABLE"
     }

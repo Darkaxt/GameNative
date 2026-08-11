@@ -951,7 +951,7 @@ class SteamCatalogResolutionRepositoryTest {
             listOf(
                 SteamResolutionItemResult.AutoAccepted,
                 SteamResolutionItemResult.ReviewRequired,
-                SteamResolutionItemResult.Unmatched,
+                SteamResolutionItemResult.CompleteNoPlausibleSteamMatch,
                 SteamResolutionItemResult.ProviderUnavailable,
             ),
         ))

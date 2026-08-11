@@ -17,7 +17,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
                 scored
             }
         }
-        if (ranked.isEmpty()) return CatalogDecision.Unmatched
+        if (ranked.isEmpty()) return CatalogDecision.NoPlausibleCandidate
 
         val ambiguity = resolvePriorYearAmbiguity(source, ranked)
         if (ambiguity.forceReview) return ambiguity.ranked.reviewRequired()
@@ -168,7 +168,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
     }
 
     private fun selectDecision(ranked: List<ScoredCandidate>): CatalogDecision {
-        if (ranked.isEmpty()) return CatalogDecision.Unmatched
+        if (ranked.isEmpty()) return CatalogDecision.NoPlausibleCandidate
         val top = ranked.first()
         val margin = if (ranked.size == 1) {
             1.0
@@ -186,7 +186,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             top.score >= 0.62 ||
                 top.strongTitle ||
                 (top.editionConflict && top.editionBaseMatch) -> ranked.reviewRequired()
-            else -> CatalogDecision.Unmatched
+            else -> CatalogDecision.NoPlausibleCandidate
         }
     }
 

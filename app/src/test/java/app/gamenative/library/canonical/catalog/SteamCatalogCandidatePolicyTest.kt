@@ -172,7 +172,7 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.Unmatched, result)
+        assertEquals(CatalogDecision.NoPlausibleCandidate, result)
     }
 
     @Test
@@ -224,7 +224,7 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.Unmatched, result)
+        assertEquals(CatalogDecision.NoPlausibleCandidate, result)
     }
 
     @Test
@@ -266,7 +266,7 @@ class SteamCatalogCandidatePolicyTest {
 
     @Test
     fun emptyCandidateListIsUnmatched() {
-        assertEquals(CatalogDecision.Unmatched, policy.evaluate(source(), emptyList()))
+        assertEquals(CatalogDecision.NoPlausibleCandidate, policy.evaluate(source(), emptyList()))
     }
 
     @Test

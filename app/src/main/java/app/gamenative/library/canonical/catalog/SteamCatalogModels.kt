@@ -28,5 +28,5 @@ sealed interface CatalogDecision {
 
     data class ReviewRequired(val steamAppIds: List<Int>) : CatalogDecision
 
-    data object Unmatched : CatalogDecision
+    data object NoPlausibleCandidate : CatalogDecision
 }

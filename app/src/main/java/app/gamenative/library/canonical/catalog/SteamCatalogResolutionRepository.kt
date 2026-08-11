@@ -49,7 +49,7 @@ data class SteamResolutionProgress(
 sealed interface SteamResolutionItemResult {
     data object AutoAccepted : SteamResolutionItemResult
     data object ReviewRequired : SteamResolutionItemResult
-    data object Unmatched : SteamResolutionItemResult
+    data object CompleteNoPlausibleSteamMatch : SteamResolutionItemResult
     data object ExpectedStateChanged : SteamResolutionItemResult
     data object ProviderUnavailable : SteamResolutionItemResult
 }
@@ -265,7 +265,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 ).asItemResolution(SteamResolutionItemResult.ReviewRequired)
             }
 
-            CatalogDecision.Unmatched -> {
+            CatalogDecision.NoPlausibleCandidate -> {
                 if (
                     match.source == GameSource.EPIC &&
                     match.evidenceAppType == CanonicalAppType.GAME
@@ -277,13 +277,13 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                         nowEpochMs = clock.nowEpochMs(),
                         locale = locale,
                         record = epicRecord,
-                    ).asItemResolution(SteamResolutionItemResult.Unmatched)
+                    ).asItemResolution(SteamResolutionItemResult.CompleteNoPlausibleSteamMatch)
                 } else {
                     decisionWriter.recordUnmatched(
                         expected = expected,
                         resolverVersion = CURRENT_RESOLVER_VERSION,
                         nowEpochMs = clock.nowEpochMs(),
-                    ).asItemResolution(SteamResolutionItemResult.Unmatched)
+                    ).asItemResolution(SteamResolutionItemResult.CompleteNoPlausibleSteamMatch)
                 }
             }
         }
@@ -467,7 +467,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 0
             },
             unmatched = previous.unmatched + if (
-                resolution.result == SteamResolutionItemResult.Unmatched
+                resolution.result == SteamResolutionItemResult.CompleteNoPlausibleSteamMatch
             ) {
                 1
             } else {
