@@ -52,9 +52,8 @@ class FeatureSteamCatalogResolutionDiagnostics @Inject constructor() :
     }
 
     private fun SteamResolutionItemResult.diagnosticOutcome(): DiagnosticOutcome = when (this) {
-        SteamResolutionItemResult.AutoAccepted,
-        SteamResolutionItemResult.CompleteNoPlausibleSteamMatch,
-        -> DiagnosticOutcome.SUCCEEDED
+        SteamResolutionItemResult.AutoAccepted -> DiagnosticOutcome.SUCCEEDED
+        is SteamResolutionItemResult.CompleteNoPlausibleSteamMatch -> DiagnosticOutcome.SUCCEEDED
         SteamResolutionItemResult.ReviewRequired -> DiagnosticOutcome.DEFERRED
         SteamResolutionItemResult.ExpectedStateChanged -> DiagnosticOutcome.SKIPPED
         SteamResolutionItemResult.ProviderUnavailable -> DiagnosticOutcome.UNAVAILABLE
@@ -63,8 +62,15 @@ class FeatureSteamCatalogResolutionDiagnostics @Inject constructor() :
     private fun SteamResolutionItemResult.diagnosticCategory(): String = when (this) {
         SteamResolutionItemResult.AutoAccepted -> "AUTO_ACCEPTED"
         SteamResolutionItemResult.ReviewRequired -> "REVIEW_REQUIRED"
-        SteamResolutionItemResult.CompleteNoPlausibleSteamMatch ->
-            "COMPLETE_NO_PLAUSIBLE_STEAM_MATCH"
+        is SteamResolutionItemResult.CompleteNoPlausibleSteamMatch -> when {
+            epicPresentation == EpicPresentationOutcome.EPIC_CMS_PERSISTED &&
+                pcGamingWikiEvidence != null -> "EPIC_CMS_PERSISTED_PCGW_CORROBORATED"
+            epicPresentation == EpicPresentationOutcome.EPIC_CMS_PERSISTED ->
+                "EPIC_CMS_PERSISTED"
+            epicPresentation == EpicPresentationOutcome.EPIC_CMS_UNAVAILABLE ->
+                "EPIC_CMS_UNAVAILABLE_AFTER_COMPLETE_STEAM_MISS"
+            else -> "COMPLETE_NO_PLAUSIBLE_STEAM_MATCH"
+        }
         SteamResolutionItemResult.ExpectedStateChanged -> "EXPECTED_STATE_CHANGED"
         SteamResolutionItemResult.ProviderUnavailable -> "PROVIDER_UNAVAILABLE"
     }

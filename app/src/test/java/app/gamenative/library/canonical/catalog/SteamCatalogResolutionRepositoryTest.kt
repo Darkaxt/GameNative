@@ -176,6 +176,13 @@ class SteamCatalogResolutionRepositoryTest {
             epicFallbackWriter.calls.single().decisionEvidence?.label?.name,
         )
         assertEquals(stableSourceId, epicFallbackWriter.calls.single().key.stableSourceId)
+        assertEquals(
+            SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(
+                epicPresentation = EpicPresentationOutcome.EPIC_CMS_PERSISTED,
+                pcGamingWikiEvidence = evidence,
+            ),
+            diagnostics.events.single().result,
+        )
         assertTrue(writer.operations.isEmpty())
     }
 
@@ -329,7 +336,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `complete Epic unmatched remains unresolved when CMS is unavailable`() = runTest {
+    fun `complete Epic miss records Steam outcome when CMS is unavailable`() = runTest {
         val namespace = "c4763f236d08423eb47b4c3008779c84"
         val catalogId = "93f2a8c3547846eda966cb3c152a026e"
         val stableSourceId = EpicStableSourceId.encode(namespace, catalogId)
@@ -343,15 +350,22 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(1, progress.failed)
-        assertEquals(0, progress.unmatched)
-        assertTrue(writer.operations.isEmpty())
+        assertEquals(0, progress.failed)
+        assertEquals(1, progress.unmatched)
+        assertEquals(1, writer.operations.filterIsInstance<DecisionOperation.Unmatched>().size)
         assertTrue(epicFallbackWriter.calls.isEmpty())
-        assertEquals("EPIC_CMS_UNAVAILABLE", diagnostics.events.single().errorType)
+        val event = diagnostics.events.single()
+        assertEquals("EPIC_CMS_UNAVAILABLE", event.errorType)
+        assertEquals(
+            SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(
+                EpicPresentationOutcome.EPIC_CMS_UNAVAILABLE,
+            ),
+            event.result,
+        )
     }
 
     @Test
-    fun `Epic CMS rate exhaustion records no catalog result`() = runTest {
+    fun `Epic CMS rate exhaustion preserves complete Steam miss`() = runTest {
         val stableSourceId = EpicStableSourceId.encode("namespace", "catalog")
         val canonical = canonical(1, steamAppId = null)
         db.canonicalGameDao().insert(canonical)
@@ -363,11 +377,18 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(1, progress.failed)
-        assertEquals(0, progress.unmatched)
-        assertTrue(writer.operations.isEmpty())
+        assertEquals(0, progress.failed)
+        assertEquals(1, progress.unmatched)
+        assertEquals(1, writer.operations.filterIsInstance<DecisionOperation.Unmatched>().size)
         assertTrue(epicFallbackWriter.calls.isEmpty())
-        assertEquals("RATE_LIMIT_EXHAUSTED", diagnostics.events.single().errorType)
+        val event = diagnostics.events.single()
+        assertEquals("RATE_LIMIT_EXHAUSTED", event.errorType)
+        assertEquals(
+            SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(
+                EpicPresentationOutcome.EPIC_CMS_UNAVAILABLE,
+            ),
+            event.result,
+        )
     }
 
     @Test
@@ -1114,7 +1135,7 @@ class SteamCatalogResolutionRepositoryTest {
             listOf(
                 SteamResolutionItemResult.AutoAccepted,
                 SteamResolutionItemResult.ReviewRequired,
-                SteamResolutionItemResult.CompleteNoPlausibleSteamMatch,
+                SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(),
                 SteamResolutionItemResult.ProviderUnavailable,
             ),
         ))

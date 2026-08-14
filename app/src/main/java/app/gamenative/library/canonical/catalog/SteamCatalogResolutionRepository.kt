@@ -50,10 +50,21 @@ data class SteamResolutionProgress(
     val unmatched: Int = 0,
 )
 
+enum class EpicPresentationOutcome {
+    NOT_APPLICABLE,
+    EPIC_CMS_PERSISTED,
+    EPIC_CMS_UNAVAILABLE,
+}
+
 sealed interface SteamResolutionItemResult {
     data object AutoAccepted : SteamResolutionItemResult
     data object ReviewRequired : SteamResolutionItemResult
-    data object CompleteNoPlausibleSteamMatch : SteamResolutionItemResult
+
+    data class CompleteNoPlausibleSteamMatch(
+        val epicPresentation: EpicPresentationOutcome = EpicPresentationOutcome.NOT_APPLICABLE,
+        val pcGamingWikiEvidence: PcGamingWikiCurrentAvailabilityEvidence? = null,
+    ) : SteamResolutionItemResult
+
     data object ExpectedStateChanged : SteamResolutionItemResult
     data object ProviderUnavailable : SteamResolutionItemResult
 }
@@ -276,7 +287,22 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                     match.evidenceAppType == CanonicalAppType.GAME
                 ) {
                     val decisionEvidence = fetchPcGamingWikiEvidence(match)
-                    val epicRecord = fetchEpicFallback(match, locale)
+                    val epicRecord = try {
+                        fetchEpicFallback(match, locale)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        return decisionWriter.recordUnmatched(
+                            expected = expected,
+                            resolverVersion = CURRENT_RESOLVER_VERSION,
+                            nowEpochMs = clock.nowEpochMs(),
+                        ).asItemResolution(
+                            SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(
+                                epicPresentation = EpicPresentationOutcome.EPIC_CMS_UNAVAILABLE,
+                                pcGamingWikiEvidence = decisionEvidence,
+                            ),
+                        ).copy(errorType = error.diagnosticCategory())
+                    }
                     epicFallbackWriter.recordEpicFallback(
                         expected = expected,
                         resolverVersion = CURRENT_RESOLVER_VERSION,
@@ -284,13 +310,20 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                         locale = locale,
                         record = epicRecord,
                         decisionEvidence = decisionEvidence,
-                    ).asItemResolution(SteamResolutionItemResult.CompleteNoPlausibleSteamMatch)
+                    ).asItemResolution(
+                        SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(
+                            epicPresentation = EpicPresentationOutcome.EPIC_CMS_PERSISTED,
+                            pcGamingWikiEvidence = decisionEvidence,
+                        ),
+                    )
                 } else {
                     decisionWriter.recordUnmatched(
                         expected = expected,
                         resolverVersion = CURRENT_RESOLVER_VERSION,
                         nowEpochMs = clock.nowEpochMs(),
-                    ).asItemResolution(SteamResolutionItemResult.CompleteNoPlausibleSteamMatch)
+                    ).asItemResolution(
+                        SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(),
+                    )
                 }
             }
         }
@@ -494,7 +527,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 0
             },
             unmatched = previous.unmatched + if (
-                resolution.result == SteamResolutionItemResult.CompleteNoPlausibleSteamMatch
+                resolution.result is SteamResolutionItemResult.CompleteNoPlausibleSteamMatch
             ) {
                 1
             } else {

@@ -35,6 +35,7 @@ internal data class EpicCmsCatalogRequest(
     val sourceTitle: String,
     val locale: MetadataLocale,
     val productSlug: String? = null,
+    val storeUrl: String? = null,
 )
 
 data class EpicCmsCatalogRecord(
@@ -51,8 +52,11 @@ internal fun interface EpicCmsCatalogSource {
     suspend fun fetch(request: EpicCmsCatalogRequest): EpicCmsCatalogRecord?
 }
 
-internal class EpicCmsCatalogException(message: String = "Epic CMS catalog unavailable") :
+internal open class EpicCmsCatalogException(message: String = "Epic CMS catalog unavailable") :
     IOException(message)
+
+internal class EpicProductSlugRequiredException :
+    EpicCmsCatalogException("Epic product slug is required")
 
 @Singleton
 internal class EpicCmsCatalogProvider internal constructor(
@@ -77,9 +81,9 @@ internal class EpicCmsCatalogProvider internal constructor(
         } catch (_: IllegalArgumentException) {
             throw EpicCmsCatalogException("Epic stable source identity is invalid")
         }
-        val slug = request.productSlug?.validatedProductSlug()
-            ?: deriveProductSlug(request.sourceTitle)
-        val locale = request.locale.normalizedLocale
+        val location = resolveEpicProductLocation(request)
+        val slug = location.slug
+        val locale = location.locale
         val endpoint = apiEndpoint.newBuilder()
             .addPathSegment(locale)
             .addPathSegment("content")
@@ -98,6 +102,7 @@ internal class EpicCmsCatalogProvider internal constructor(
                 catalogId = catalogId,
                 locale = locale,
                 slug = slug,
+                storeUrl = location.storeUrl,
             )
         } catch (error: Exception) {
             when (error) {
@@ -166,6 +171,7 @@ internal class EpicCmsCatalogProvider internal constructor(
         catalogId: String,
         locale: String,
         slug: String,
+        storeUrl: String,
     ): EpicCmsCatalogRecord {
         val root = JSON.parseToJsonElement(body).requiredObject("root")
         val pages = root["pages"].requiredArray("pages")
@@ -243,7 +249,7 @@ internal class EpicCmsCatalogProvider internal constructor(
             catalogId = catalogId,
             slug = slug,
             offerId = offerId,
-            storeUrl = "https://store.epicgames.com/$locale/p/$slug",
+            storeUrl = storeUrl,
             metadata = metadata,
         )
     }
@@ -469,6 +475,71 @@ internal class EpicCmsCatalogProvider internal constructor(
     }
 }
 
+private data class EpicProductLocation(
+    val locale: String,
+    val slug: String,
+    val storeUrl: String,
+)
+
+private fun resolveEpicProductLocation(request: EpicCmsCatalogRequest): EpicProductLocation {
+    val storeLocation = request.storeUrl?.validatedEpicStoreLocation()
+    request.productSlug?.let { slug ->
+        val validated = slug.validatedProductSlug()
+        if (storeLocation != null) {
+            if (validated != storeLocation.slug) {
+                throw EpicCmsCatalogException("Epic product slug conflicts with store URL")
+            }
+            return storeLocation
+        }
+        val locale = request.locale.normalizedLocale
+        return EpicProductLocation(
+            locale = locale,
+            slug = validated,
+            storeUrl = canonicalEpicStoreUrl(locale, validated),
+        )
+    }
+    storeLocation?.let { return it }
+
+    val locale = request.locale.normalizedLocale
+    val slug = deriveProductSlug(request.sourceTitle)
+    return EpicProductLocation(
+        locale = locale,
+        slug = slug,
+        storeUrl = canonicalEpicStoreUrl(locale, slug),
+    )
+}
+
+private fun String.validatedEpicStoreLocation(): EpicProductLocation {
+    if (length > MAX_EPIC_STORE_URL_CHARS) {
+        throw EpicCmsCatalogException("Epic store URL is invalid")
+    }
+    val parsed = toHttpUrlOrNull()
+        ?: throw EpicCmsCatalogException("Epic store URL is invalid")
+    val segments = parsed.pathSegments
+    if (
+        !parsed.isHttps ||
+        parsed.host != EPIC_STORE_HOST ||
+        parsed.port != 443 ||
+        parsed.username.isNotEmpty() ||
+        parsed.password.isNotEmpty() ||
+        parsed.query != null ||
+        parsed.fragment != null ||
+        segments.size != 3 ||
+        !EPIC_STORE_LOCALE.matches(segments[0]) ||
+        segments[1] != "p"
+    ) {
+        throw EpicCmsCatalogException("Epic store URL is invalid")
+    }
+    val locale = segments[0]
+    val slug = segments[2].validatedProductSlug()
+    val canonical = canonicalEpicStoreUrl(locale, slug)
+    if (this != canonical) throw EpicCmsCatalogException("Epic store URL is not canonical")
+    return EpicProductLocation(locale, slug, canonical)
+}
+
+private fun canonicalEpicStoreUrl(locale: String, slug: String): String =
+    "https://$EPIC_STORE_HOST/$locale/p/$slug"
+
 private fun String.validatedProductSlug(): String {
     if (length > 160 || !EpicUrlPolicy.PRODUCT_SLUG.matches(this)) {
         throw EpicCmsCatalogException("Epic product slug is invalid")
@@ -482,7 +553,11 @@ private fun deriveProductSlug(title: String): String = CanonicalNormalization.ti
     .joinToString("-")
     .takeIf(String::isNotEmpty)
     ?.validatedProductSlug()
-    ?: throw EpicCmsCatalogException("Epic source title cannot produce a product slug")
+    ?: throw EpicProductSlugRequiredException()
+
+private const val EPIC_STORE_HOST = "store.epicgames.com"
+private const val MAX_EPIC_STORE_URL_CHARS = 256
+private val EPIC_STORE_LOCALE = Regex("[a-z]{2}(?:-[A-Z]{2})?")
 
 private fun JsonElement?.requiredObject(label: String): JsonObject =
     this as? JsonObject ?: throw EpicCmsCatalogException("Epic CMS $label must be an object")

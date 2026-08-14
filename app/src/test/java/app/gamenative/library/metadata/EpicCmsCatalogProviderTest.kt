@@ -139,6 +139,59 @@ class EpicCmsCatalogProviderTest {
     }
 
     @Test
+    fun canonicalStoreUrlSuppliesTypedLocaleAndSlug() = runTest {
+        server.enqueue(jsonResponse(cmsFixture(slug = "alan-wake-ii", locale = "en-GB")))
+
+        val record = requireNotNull(
+            provider().fetch(
+                request().copy(
+                    storeUrl = "https://store.epicgames.com/en-GB/p/alan-wake-ii",
+                ),
+            ),
+        )
+
+        assertEquals("alan-wake-ii", record.slug)
+        assertEquals("https://store.epicgames.com/en-GB/p/alan-wake-ii", record.storeUrl)
+        assertEquals(
+            "/api/en-GB/content/products/alan-wake-ii",
+            server.takeRequest().requestUrl?.encodedPath,
+        )
+    }
+
+    @Test
+    fun productSlugDoesNotBypassStoreUrlValidationOrAgreement() = runTest {
+        listOf(
+            request().copy(
+                productSlug = "alan-wake-2",
+                storeUrl = "https://evil.example/en-US/p/alan-wake-2",
+            ),
+            request().copy(
+                productSlug = "different-game",
+                storeUrl = "https://store.epicgames.com/en-US/p/alan-wake-2",
+            ),
+        ).forEach { invalidRequest ->
+            try {
+                provider().fetch(invalidRequest)
+                fail("Expected conflicting Epic product location to be rejected")
+            } catch (_: EpicCmsCatalogException) {
+            }
+        }
+
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun missingDerivableSlugThrowsTypedRequirementWithoutNetwork() = runTest {
+        try {
+            provider().fetch(request().copy(sourceTitle = "東京"))
+            fail("Expected a typed Epic product slug requirement")
+        } catch (_: EpicProductSlugRequiredException) {
+        }
+
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun derivedSlug404ReturnsNoCatalogRecord() = runTest {
         server.enqueue(MockResponse().setResponseCode(404))
 
@@ -204,19 +257,21 @@ class EpicCmsCatalogProviderTest {
         catalogId: String = "",
         hero: String = HERO,
         releaseDate: String = "Coming Soon",
+        slug: String = "alan-wake-2",
+        locale: String = "en-US",
     ): String =
         """
         {
           "namespace": "$namespace",
           "productName": "$rootTitle",
-          "_slug": "alan-wake-2",
-          "_locale": "en-US",
+          "_slug": "$slug",
+          "_locale": "$locale",
           "pages": [
             {
               "type": "productHome",
               "namespace": "$NAMESPACE",
               "productName": "Alan Wake 2",
-              "_locale": "en-US",
+              "_locale": "$locale",
               "item": {"catalogId": "$catalogId", "namespace": "$NAMESPACE"},
               "offer": {"namespace": "$NAMESPACE", "id": "$OFFER_ID", "hasOffer": true},
               "data": {
