@@ -312,7 +312,7 @@
     <string name="performance_hud_fps_limiter_target">Цільовий FPS</string>
     <string name="performance_hud_fps_limiter_off">Без обмежень</string>
     <string name="performance_hud_fps_limiter_value">%1$d FPS</string>
-    <string name="performance_hud_fps_limiter_lsfg_override">Обмежувач вимкнено, поки активний LSFG. Частоту джерела задає множник.</string>
+    <string name="performance_hud_fps_limiter_lsfg_base">Обмежує базову частоту кадрів. Частота на екрані — це ліміт, помножений на множник LSFG.</string>
     <string name="performance_hud_presets">Набори</string>
     <string name="performance_hud_presets_description">Швидко перемикайтеся між типовими макетами HUD.</string>
     <string name="performance_hud_preset_fps_only">1</string>
@@ -559,6 +559,8 @@
     <string name="downloading">Завантаження...</string>
     <string name="calculating_time">Розрахунок...</string>
     <string name="download_failed_try_again">Помилка завантаження. Спробуйте знову.</string>
+    <string name="download_preparing">Підготовка завантаження...</string>
+    <string name="download_preparing_depots">Підготовка депо (%1$d/%2$d)</string>
     <string name="update_available">Доступне оновлення</string>
     <string name="game_information">Інформація про гру</string>
     <string name="status">Статус</string>
@@ -1475,8 +1477,9 @@
 
     <!-- Recommendations -->
     <string name="recommended_badge">Рекомендовано</string>
-    <string name="recommended_buy_button">Переглянути гру</string>
-    <string name="recommended_support_message">Покупка за цим посиланням допомагає підтримувати розробку GameNative.</string>
+    <string name="recommended_buy_button">Купити в GOG</string>
+    <string name="rec_buy_with_price">%1$s · Купити в GOG</string>
+    <string name="recommended_support_message">Ми отримуємо комісію з покупок, здійснених за цим посиланням.</string>
     <string name="recommended_about_heading">Про цю гру</string>
     <string name="recommended_review_count">На основі %1$s відгуків</string>
     <string name="review_overwhelmingly_positive">Надзвичайно позитивні</string>
@@ -1522,6 +1525,8 @@
     <string name="lsfg_flow_scale">Масштаб потоку</string>
     <string name="lsfg_flow_scale_desc">Нижче — стабільніше; вище — плавніше, але можуть з’являтися артефакти.</string>
     <string name="lsfg_performance_mode">Режим продуктивності</string>
+    <string name="lsfg_present_mode">Режим виводу</string>
+    <string name="lsfg_present_mode_desc">Рекомендується Mailbox. FIFO також підходить, коли вихідна частота кадрів (ліміт fps × множник) збігається з частотою оновлення екрана; нижче за неї FIFO може виглядати нерівно.</string>
     <string name="lsfg_not_supported">Для генерації кадрів потрібен контейнер Bionic</string>
     <string name="lsfg_install_prompt">Lossless Scaling не встановлено. Натисніть для встановлення. Відомо, що працює лише на Adreno 6xx і новіших.</string>
     <string name="lsfg_not_in_library">Lossless Scaling немає у вашій бібліотеці Steam</string>
@@ -2052,8 +2057,8 @@
     <string name="control_stroke_width_default">За замовчуванням</string>
     <string name="control_stroke_width_thick">Товста</string>
     <string name="control_stroke_width_extra_thick">Дуже товста</string>
-    <string name="button_shooter_look_through">Наскрізне введення shooter</string>
-    <string name="button_shooter_look_through_subtitle">Дозволити цьому дотику кнопки також керувати динамічним рухом і оглядом shooter</string>
+    <string name="button_look_through">Наскрізне керування</string>
+    <string name="button_look_through_subtitle">Натисніть цю кнопку й проведіть від неї, щоб також керувати рухом або камерою. Недоступно в режимі сенсорного екрана.</string>
     <string name="preview">Попередній перегляд</string>
     <string name="active">Активно</string>
     <string name="apply_all">Застосувати до всіх</string>
@@ -2165,16 +2170,6 @@
     <string name="nexus_invalid_source_metadata">Цей керований мод має неповні відомості про джерело, тому повторити операцію неможливо.</string>
     <string name="nexus_archive_memory_error">Архів потребує більше пам’яті, ніж дозволено Android. Повторіть спробу після оновлення GameNative або виберіть менший файл.</string>
     <!-- Bionic FG (AI) Frame Generation -->
-    <string name="bfg_tab_title">ШІ-генерація кадрів</string>
-    <string name="bfg_enable">Увімкнути ШІ-генерацію кадрів</string>
-    <string name="bfg_description">Вбудована ШІ-інтерполяція кадрів. Додаткових покупок не потрібно.</string>
-    <string name="bfg_multiplier">Множник кадрів</string>
-    <string name="bfg_flow_scale">Масштаб потоку</string>
-    <string name="bfg_flow_scale_desc">Менше — швидше; більше — краще відстежує рух, але навантажує GPU сильніше.</string>
-    <string name="bfg_model">Модель</string>
-    <string name="bfg_model_desc">Clear чіткіший, але важчий</string>
-    <string name="bfg_model_standard">Стандартна</string>
-    <string name="bfg_model_clear">Clear</string>
     <string name="steam_invite_tab_title">Запросити</string>
     <string name="steam_invite_header">Друзів: %1$d</string>
     <string name="steam_invite_joinable">У цій грі — торкніться, щоб приєднатися</string>
@@ -2185,4 +2180,43 @@
     <string name="steam_invite_joined">У вашій грі</string>
     <string name="steam_invite_online">У мережі</string>
     <string name="steam_invite_offline">Не в мережі</string>
+
+    <!-- Power Control -->
+    <string name="power_control">Керування продуктивністю</string>
+    <string name="power_control_info">Керує масштабуванням частоти процесора та налаштуваннями регулятора. Потрібна служба PServer.</string>
+    <string name="power_control_driver">Драйвер: %s</string>
+    <string name="power_control_profiles">Профілі продуктивності</string>
+    <string name="power_control_governor">Регулятор ЦП</string>
+    <string name="power_control_current_frequencies">Поточні частоти</string>
+    <string name="power_control_frequencies">Налаштування частоти</string>
+    <string name="power_control_cpu_min_freq">Мінімальна частота ЦП</string>
+    <string name="power_control_cpu_max_freq">Максимальна частота ЦП</string>
+    <string name="power_control_gpu_freq">Частота ГП</string>
+    <string name="power_control_gpu_min_power">Мінімальна потужність ГП</string>
+    <string name="power_control_gpu_max_power">Максимальна потужність ГП</string>
+    <string name="power_control_ram_min_power">Мінімальна частота ОЗП</string>
+    <string name="power_control_ram_max_power">Максимальна частота ОЗП</string>
+    <string name="power_control_available_frequencies">Доступні частоти</string>
+    <string name="power_control_auto_tuning">Автоналаштування</string>
+    <string name="power_control_auto_tuning_desc">Стабільніша продуктивність, довша робота від батареї, менше нагрівання: автоматично налаштовує CPU та GPU під гру. Перевірено на Retroid Pocket 6.</string>
+    <string name="power_control_adaptive_fps">Автоматичне зниження FPS</string>
+    <string name="power_control_adaptive_fps_desc">Знижує ліміт FPS, якщо гра не може його досягти, для стабільного темпу кадрів. Перевірено на Retroid Pocket 6.</string>
+    <string name="power_control_tuning_mode">Режим налаштування</string>
+    <string name="power_control_tuning_mode_per_cluster">За кластерами (перевірено на Retroid Pocket 6)</string>
+    <string name="power_control_tuning_mode_whole_cpu">ПІД-регулятор</string>
+    <string name="power_control_fan_control">Керування вентилятором</string>
+    <string name="power_control_fan_control_desc">Підтримує задану температуру за мінімального шуму вентилятора. Перевірено на Retroid Pocket 6.</string>
+    <string name="power_control_game_pinning">Закріплення гри</string>
+    <string name="power_control_game_pinning_desc">Утримує гру на швидких ядрах CPU. Перевірено на Retroid Pocket 6.</string>
+    <string name="power_control_hud_show_fan">Показувати швидкість вентилятора</string>
+    <string name="power_control_hud_show_tuner">Показувати межі частот налаштування</string>
+    <string name="power_control_tuning_strategy">Стратегія налаштування</string>
+    <string name="power_control_strategy_balanced">Збалансована</string>
+    <string name="power_control_strategy_balanced_desc">Рівномірно налаштовує всі компоненти для кращої загальної продуктивності</string>
+    <string name="power_control_strategy_power_efficient">Енергоефективна</string>
+    <string name="power_control_strategy_power_efficient_desc">Знижує неблокуючі компоненти для економії енергії</string>
+    <string name="power_control_strategy_aggressive">Агресивна</string>
+    <string name="power_control_strategy_aggressive_desc">Максимізує продуктивність на виявлених вузьких місцях</string>
+    <string name="power_control_strategy_conservative">Консервативна</string>
+    <string name="power_control_strategy_conservative_desc">Поступові налаштування з акцентом на стабільність</string>
 </resources>

@@ -12,6 +12,7 @@ import app.gamenative.events.EventDispatcher
 import app.gamenative.library.canonical.AccountLifecycleState
 import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.CanonicalProjectionCoordinator
+import app.gamenative.powercontrol.PowerManager
 import app.gamenative.service.ActiveGameRegistry
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
@@ -138,6 +139,7 @@ class PluviaApp : SplitCompatApplication() {
 
         PlayIntegrity.warmUp(this)
 
+        PowerManager.initialize(this)
     }
 
     /**
@@ -249,6 +251,9 @@ class PluviaApp : SplitCompatApplication() {
                 .onFailure { Timber.e(it, "shutdownEnvironment: releasePointerCapture") }
             runCatching { env?.stopEnvironmentComponents() }
                 .onFailure { Timber.e(it, "shutdownEnvironment: stopEnvironmentComponents") }
+
+            // Stop performance driver
+            PowerManager.stop()
 
             xEnvironment = null
             inputControlsView = null
