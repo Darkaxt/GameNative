@@ -125,7 +125,38 @@ class PcGamingWikiCurrentAvailabilityProviderTest {
     }
 
     @Test
-    fun revisionContinuationOrSchemaFailureIsUnavailable() = runTest {
+    fun currentMediaWikiRevisionContinuationStillReturnsEvidence() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """
+                {
+                  "continue": {
+                    "rvcontinue": "20260621233214|1781015",
+                    "continue": "||"
+                  },
+                  "query": {
+                    "pages": [
+                      {
+                        "pageid": 173493,
+                        "ns": 0,
+                        "title": "$LIST_PAGE",
+                        "revisions": [{"revid": 1783673, "parentid": 1781015}]
+                      }
+                    ]
+                  }
+                }
+                """.trimIndent(),
+            ),
+        )
+        server.enqueue(cargoResponse(alanWakeRow()))
+
+        val result = provider().check(request("Alan Wake 2", 2023, "Remedy Entertainment"))
+
+        assertTrue(result is PcGamingWikiCurrentAvailabilityResult.Confirmed)
+    }
+
+    @Test
+    fun revisionSchemaFailureIsUnavailable() = runTest {
         val failures = listOf(
             """{"continue":{"rvcontinue":"next"},"query":{"pages":[]}}""",
             """{"batchcomplete":true,"query":{"pages":[]}}""",

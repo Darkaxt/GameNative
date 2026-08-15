@@ -17,7 +17,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 import okhttp3.Authenticator
@@ -242,9 +241,7 @@ internal class PcGamingWikiCurrentAvailabilityProvider internal constructor(
 
     private fun parseRevision(body: String): Long {
         val root = JSON.parseToJsonElement(body).objectOrThrow()
-        if (root["continue"] != null || root["batchcomplete"].booleanOrNull() != true) {
-            throw PcGamingWikiAvailabilityException()
-        }
+        if (root["error"] != null) throw PcGamingWikiAvailabilityException()
         val pages = root["query"].objectOrThrow()["pages"].arrayOrThrow()
         if (pages.size != 1) throw PcGamingWikiAvailabilityException()
         val page = pages.single().objectOrThrow()
@@ -473,9 +470,6 @@ private fun JsonElement?.objectOrThrow(): JsonObject =
 
 private fun JsonElement?.arrayOrThrow(): JsonArray =
     this as? JsonArray ?: throw PcGamingWikiAvailabilityException()
-
-private fun JsonElement?.booleanOrNull(): Boolean? =
-    (this as? JsonPrimitive)?.booleanOrNull
 
 private fun JsonElement?.positiveLongOrThrow(): Long =
     (this as? JsonPrimitive)?.longOrNull?.takeIf { it > 0L }

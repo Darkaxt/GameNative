@@ -4,29 +4,34 @@
 
 **Play the PC games you already own — from Steam, Epic and GOG — on your Android device, with cloud saves.**
 
-<a href="https://trendshift.io/repositories/14497" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14497" alt="utkarshdalal%2FGameNative | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+[![Darkaxt Release](https://img.shields.io/github/v/release/Darkaxt/GameNative?include_prereleases&style=flat-square&logo=github&label=Darkaxt%20release)](https://github.com/Darkaxt/GameNative/releases)
+[![GitHub stars](https://img.shields.io/github/stars/Darkaxt/GameNative?style=flat-square&logo=github&color=ffd700)](https://github.com/Darkaxt/GameNative/stargazers)
+[![Official Discord](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv9%2Finvites%2F2hKv4VfZfE%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&style=flat-square&logo=discord&logoColor=white&label=official%20discord&color=5865F2&suffix=%20members)](https://discord.gg/2hKv4VfZfE)
+[![License](https://img.shields.io/badge/license-GPL%203.0-blue?style=flat-square)](LICENSE)
 
-<a href="https://www.star-history.com/utkarshdalal/gamenative">
- <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=utkarshdalal/GameNative&theme=dark" />
-  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=utkarshdalal/GameNative" />
-  <img alt="Star History Rank" src="https://api.star-history.com/badge?repo=utkarshdalal/GameNative" />
- </picture>
-</a>
-
-[![GitHub Release](https://img.shields.io/github/v/release/utkarshdalal/GameNative?style=flat-square&logo=github&label=latest)](https://github.com/utkarshdalal/GameNative/releases/latest)
-[![GitHub stars](https://img.shields.io/github/stars/utkarshdalal/GameNative?style=flat-square&logo=github&color=ffd700)](https://github.com/utkarshdalal/GameNative/stargazers)
-[![Discord](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv9%2Finvites%2F2hKv4VfZfE%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&style=flat-square&logo=discord&logoColor=white&label=discord&color=5865F2&suffix=%20members)](https://discord.gg/2hKv4VfZfE)
-[![License](https://img.shields.io/badge/license-GPL%203.0-blue?style=flat-square)](https://github.com/utkarshdalal/GameNative/blob/master/LICENSE)
-[![Ko-fi](https://img.shields.io/badge/ko--fi-support-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/gamenative)
-
-[**Download**](https://downloads.gamenative.app/releases/1.1.1/gamenative-v1.1.1.apk) · [**Discord**](https://discord.gg/2hKv4VfZfE) · [**Support on Ko-fi**](https://ko-fi.com/gamenative)
+[**Download Darkaxt builds**](https://github.com/Darkaxt/GameNative/releases) · [**Official upstream**](https://github.com/utkarshdalal/GameNative) · [**Official Discord**](https://discord.gg/2hKv4VfZfE)
 
 <video src="https://github.com/user-attachments/assets/95b5397b-908a-44ef-a10a-dac7723580b0" autoplay loop muted playsinline width="100%"></video>
 
 </div>
 
 ---
+
+> [!IMPORTANT]
+> This is the **[Darkaxt/GameNative](https://github.com/Darkaxt/GameNative) fork** of the [official GameNative project](https://github.com/utkarshdalal/GameNative). It follows upstream while developing a Steam-normalized cross-store library and native Steam community experience. Download fork builds from [Darkaxt releases](https://github.com/Darkaxt/GameNative/releases).
+
+## What this fork adds
+
+- **One game, all owned copies:** confidently related Steam, Epic, GOG, Amazon and custom copies share one canonical card and search result while retaining their real source badges.
+- **Conservative Steam catalog matching:** normalized title and corroborating metadata drive automatic matches; ambiguous games stay unresolved until you use **Fix Steam match** with a title or AppID.
+- **Ownership-safe actions:** a Steam match improves presentation only. Install, play, update, uninstall and save operations still use the selected copy from the store where you actually own it.
+- **Steam-rich game pages:** trusted Steam identities can provide descriptions, media, requirements, achievements, DLC information and other catalog details for non-Steam-owned copies.
+- **Native Steam community browsing:** fork prereleases include read-only Reviews and Discussions with filters and bounded pagination; authenticated actions continue through Steam.
+- **Secure matching setup and fork releases:** Steam Web API keys are validated and protected with Android Keystore. Darkaxt releases use a persistent signing identity and include optional side-by-side builds; master builds are available as [signed GitHub Actions artifacts](https://github.com/Darkaxt/GameNative/actions/workflows/app-release-signed.yml).
+
+Automatic matching is best effort: the fork does not force uncertain matches, and a matched Steam AppID never implies Steam ownership.
+
+## About GameNative
 
 GameNative lets you run the PC games in your Steam, Epic and GOG libraries directly on Android — no streaming required. Your saves sync to the cloud, so you can stop on your PC and keep going on your phone.
 
@@ -53,7 +58,7 @@ It's still early. Not every game runs yet, and some need tweaking to play well, 
 
 ## How to use
 
-1. Download the latest release [here](https://downloads.gamenative.app/releases//gamenative-v.apk)
+1. Download a signed fork build from [Darkaxt releases](https://github.com/Darkaxt/GameNative/releases)
 2. Install the APK on your Android device
 3. Log in to your Steam account
 4. Install your game
@@ -61,15 +66,13 @@ It's still early. Not every game runs yet, and some need tweaking to play well, 
 
 ## Support
 
-The fastest way to get help is the [Discord server](https://discord.gg/2hKv4VfZfE) — we're 35k+ strong and someone's usually around.
+For help with the official GameNative project and the wider community, visit the [upstream Discord server](https://discord.gg/2hKv4VfZfE). Darkaxt build details, checksums and compatibility variants are documented on each [fork release](https://github.com/Darkaxt/GameNative/releases).
 
-Please **don't** open issues on GitHub; they're closed automatically. Bring it to Discord instead.
-
-If you'd like to chip in, you can support the project on [Ko-fi](https://ko-fi.com/gamenative).
+If you'd like to support the original project, its [Ko-fi page](https://ko-fi.com/gamenative) remains the official destination.
 
 ## Contributing
 
-Want to help out? Message us to get into the **#development** channel on [Discord](https://discord.gg/2hKv4VfZfE), or open a thread there. Things we're currently looking for help with live on our [Trello board](https://trello.com/b/vGRkFoAM/open-source-board).
+To contribute to the official project, ask for the **#development** channel on the [upstream Discord](https://discord.gg/2hKv4VfZfE) or use its [Trello board](https://trello.com/b/vGRkFoAM/open-source-board). Fork-specific development is tracked in this repository.
 
 ### Building
 
@@ -103,13 +106,11 @@ The full [Privacy Policy](PrivacyPolicy/README.md) has the details.
 
 ## Supporters
 
-Thanks to our [Ko-fi sponsors](https://ko-fi.com/gamenative) and [GitHub sponsors](https://github.com/sponsors/utkarshdalal?preview=true), including [CodeRabbit](https://coderabbit.link/gnative).
-
-[![Star History Chart](https://api.star-history.com/svg?repos=utkarshdalal/GameNative&type=Date&theme=dark)](https://www.star-history.com/#utkarshdalal/GameNative&Date)
+The official project is supported by its [Ko-fi sponsors](https://ko-fi.com/gamenative) and [GitHub sponsors](https://github.com/sponsors/utkarshdalal?preview=true), including [CodeRabbit](https://coderabbit.link/gnative).
 
 ## License
 
-[GPL 3.0](https://github.com/utkarshdalal/GameNative/blob/master/LICENSE).
+[GPL 3.0](LICENSE).
 
 See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for attributions, copyleft source offers, and notices about third-party and proprietary components bundled with the app.
 

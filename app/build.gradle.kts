@@ -65,8 +65,8 @@ android {
         buildConfigField("boolean", "XR_BUILD", "false")
         buildConfigField("boolean", "MODERN_XR", "false")
 
-        versionCode = 38
-        versionName = "1.1.3-rc12"
+        versionCode = 39
+        versionName = "1.1.3-rc13"
 
         buildConfigField("boolean", "GOLD", "false")
         buildConfigField("String", "RELEASE_CHANNEL", "\"compatibility\"")
@@ -448,6 +448,9 @@ dependencies {
     implementation("com.posthog:posthog-android:3.8.0")
 
     implementation("com.auth0.android:jwtdecode:2.0.2")
+
+    // Samsung Performance SDK
+    implementation(files("src/main/lib/perfsdk-v1.0.0.jar"))
 
     "modernXrImplementation"("com.meta.horizon.platform.sdk:core-kotlin:0.2.2")
     "modernXrImplementation"("com.meta.horizon.platform.sdk:iap-kotlin:0.2.2")
