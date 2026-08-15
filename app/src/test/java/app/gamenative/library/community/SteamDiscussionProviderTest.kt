@@ -1,5 +1,6 @@
 package app.gamenative.library.community
 
+import app.gamenative.diagnostics.DiagnosticOutcome
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
 import okhttp3.CookieJar
@@ -63,6 +64,10 @@ class SteamDiscussionProviderTest {
         val request = server.takeRequest()
         assertEquals("/app/42/discussions/", request.requestUrl?.encodedPath)
         assertEquals("no-store", request.getHeader("Cache-Control"))
+        assertEquals(
+            "GameNative/1.0 python-requests-compatible",
+            request.getHeader("User-Agent"),
+        )
         assertNull(request.getHeader("Cookie"))
         assertFalse(listing.toString().contains("Private user"))
         assertFalse(listing.toString().contains("private-steamid"))
@@ -105,6 +110,28 @@ class SteamDiscussionProviderTest {
     }
 
     @Test
+    fun `current Steam paging summary supplies thread continuation without a next anchor`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="forum_op" id="forum_op_100">
+                    <div class="content">Opening post</div>
+                  </div>
+                  <div class="forum_paging_summary">
+                    <span>1</span><span>15</span><span>46</span>
+                  </div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        val thread = provider().fetchThread(42, "/app/42/discussions/0/100/")
+
+        assertEquals("/app/42/discussions/0/100/?ctp=2", thread.nextRoute)
+    }
+
+    @Test
     fun `continued thread omits repeated opening post and maps stable reply identity`() = runTest {
         server.enqueue(
             htmlResponse(
@@ -127,6 +154,74 @@ class SteamDiscussionProviderTest {
             listOf(SteamDiscussionPost("Page two reply", postId = "post:202")),
             thread.posts,
         )
+    }
+
+    @Test
+    fun `id-less duplicate posts receive distinct transient page identities`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="commentthread_comment">
+                    <div class="commentthread_comment_text">Same valid post</div>
+                  </div>
+                  <div class="commentthread_comment">
+                    <div class="commentthread_comment_text">Same valid post</div>
+                  </div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        val thread = provider().fetchThread(42, "/app/42/discussions/0/100/")
+
+        assertEquals(2, thread.posts.size)
+        assertEquals(2, thread.posts.map { it.postId }.distinct().size)
+        assertFalse(thread.posts.any { it.postId.isBlank() })
+        assertFalse(thread.posts.any { it.postId.contains('/') })
+    }
+
+    @Test
+    fun `thread continuation preserves path and advances exactly one page`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="forum_op"><div class="content">Opening post</div></div>
+                  <a class="pagebtn" rel="next"
+                     href="/app/42/discussions/0/999/?ctp=2">Next</a>
+                  <a class="pagebtn" href="/app/42/discussions/0/100/?ctp=1">Next</a>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        val thread = provider().fetchThread(42, "/app/42/discussions/0/100/")
+
+        assertNull(thread.nextRoute)
+    }
+
+    @Test
+    fun `thread redirect cannot switch discussion identity`() = runTest {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(302)
+                .setHeader("Location", "/app/42/discussions/0/999/"),
+        )
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="forum_op"><div class="content">Wrong thread</div></div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+
+        assertUnavailable {
+            provider().fetchThread(42, "/app/42/discussions/0/100/")
+        }
+        assertEquals(1, server.requestCount)
     }
 
     @Test
@@ -207,6 +302,66 @@ class SteamDiscussionProviderTest {
         }
 
         assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `discussion pages record only bounded aggregate diagnostics`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div class="commentthread_comment" id="comment_98">
+                    <div class="commentthread_comment_text">Private post body</div>
+                  </div>
+                  <div class="commentthread_comment" id="comment_99">
+                    <div class="commentthread_comment_text"><br><br></div>
+                  </div>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+        val events = mutableListOf<SteamCommunityPageDiagnostic>()
+
+        provider(SteamCommunityDiagnosticSink(events::add))
+            .fetchThread(42, "/app/42/discussions/0/100/")
+
+        val event = events.single()
+        assertEquals(SteamCommunityPageOperation.DISCUSSION_THREAD, event.operation)
+        assertEquals(DiagnosticOutcome.SUCCEEDED, event.outcome)
+        assertEquals(200, event.httpStatus)
+        assertEquals(1, event.attemptCount)
+        assertEquals(1, event.itemCount)
+        assertEquals(0, event.skippedItemCount)
+        assertEquals(1, event.blankItemCount)
+        assertEquals(0, event.duplicateItemCount)
+        assertNull(event.failureReason)
+        assertFalse(event.toString().contains("comment_98"))
+        assertFalse(event.toString().contains("Private post body"))
+    }
+
+    @Test
+    fun `client-rendered discussion shell records fixed failure reason`() = runTest {
+        server.enqueue(
+            htmlResponse(
+                """
+                <html><body>
+                  <div id="application_root"></div>
+                  <script src="/javascript/applications/community/main.js"></script>
+                </body></html>
+                """.trimIndent(),
+            ),
+        )
+        val events = mutableListOf<SteamCommunityPageDiagnostic>()
+
+        assertUnavailable {
+            provider(SteamCommunityDiagnosticSink(events::add)).fetchListing(42, null)
+        }
+
+        val event = events.single()
+        assertEquals(DiagnosticOutcome.FAILED, event.outcome)
+        assertEquals(SteamCommunityFailureReason.CLIENT_RENDERED_SHELL, event.failureReason)
+        assertEquals(200, event.httpStatus)
+        assertEquals(1, event.attemptCount)
     }
 
     @Test
@@ -317,7 +472,9 @@ class SteamDiscussionProviderTest {
         .setHeader("Content-Type", "text/html; charset=utf-8")
         .setBody(body)
 
-    private fun provider() = SteamDiscussionProvider(
+    private fun provider(
+        diagnostics: SteamCommunityDiagnosticSink = NoOpSteamCommunityDiagnostics,
+    ) = SteamDiscussionProvider(
         client = OkHttpClient.Builder()
             .cache(null)
             .cookieJar(CookieJar.NO_COOKIES)
@@ -328,6 +485,7 @@ class SteamDiscussionProviderTest {
         allowedHosts = setOf(server.hostName),
         requireHttps = false,
         allowedPorts = setOf(server.port),
+        diagnostics = diagnostics,
     )
 
     private suspend fun assertUnavailable(block: suspend () -> Unit) {

@@ -1,5 +1,6 @@
 package app.gamenative.library.community
 
+import app.gamenative.diagnostics.DiagnosticOutcome
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
 import okhttp3.CookieJar
@@ -99,6 +100,97 @@ class SteamReviewPageProviderTest {
     }
 
     @Test
+    fun `success without a reviews array fails closed`() = runTest {
+        server.enqueue(jsonResponse("""{"success":1}"""))
+        val events = mutableListOf<SteamCommunityPageDiagnostic>()
+
+        assertUnavailable {
+            provider(SteamCommunityDiagnosticSink(events::add))
+                .fetch(42, SteamReviewQuery(), null)
+        }
+
+        assertEquals(
+            SteamCommunityFailureReason.MALFORMED_REPRESENTATION,
+            events.single().failureReason,
+        )
+    }
+
+    @Test
+    fun `id-less duplicate review text receives distinct transient page identities`() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """
+                {
+                  "success": 1,
+                  "reviews": [
+                    {"review":"Same valid review"},
+                    {"review":"Same valid review"}
+                  ]
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        val page = provider().fetch(42, SteamReviewQuery(), null)
+
+        assertEquals(2, page.reviews.size)
+        assertTrue(page.reviews.all { it.recommendationId.startsWith("page:") })
+        assertEquals(2, page.reviews.map { it.recommendationId }.distinct().size)
+    }
+
+    @Test
+    fun `successful review page records only bounded aggregate diagnostics`() = runTest {
+        server.enqueue(
+            jsonResponse(
+                """
+                {
+                  "success": 1,
+                  "reviews": [
+                    {"recommendationid":"private-review-id","review":"Private review body"},
+                    {"review":"Skipped review body"},
+                    {"recommendationid":"blank-review-id","review":""}
+                  ]
+                }
+                """.trimIndent(),
+            ),
+        )
+        val events = mutableListOf<SteamCommunityPageDiagnostic>()
+
+        provider(SteamCommunityDiagnosticSink(events::add))
+            .fetch(42, SteamReviewQuery(), null)
+
+        val event = events.single()
+        assertEquals(SteamCommunityPageOperation.REVIEWS, event.operation)
+        assertEquals(DiagnosticOutcome.SUCCEEDED, event.outcome)
+        assertEquals(200, event.httpStatus)
+        assertEquals(1, event.attemptCount)
+        assertEquals(2, event.itemCount)
+        assertEquals(1, event.skippedItemCount)
+        assertEquals(1, event.blankItemCount)
+        assertEquals(0, event.duplicateItemCount)
+        assertNull(event.failureReason)
+        assertFalse(event.toString().contains("private-review-id"))
+        assertFalse(event.toString().contains("Private review body"))
+    }
+
+    @Test
+    fun `malformed review page records a fixed failure reason`() = runTest {
+        server.enqueue(jsonResponse("{"))
+        val events = mutableListOf<SteamCommunityPageDiagnostic>()
+
+        assertUnavailable {
+            provider(SteamCommunityDiagnosticSink(events::add))
+                .fetch(42, SteamReviewQuery(), null)
+        }
+
+        val event = events.single()
+        assertEquals(DiagnosticOutcome.FAILED, event.outcome)
+        assertEquals(SteamCommunityFailureReason.MALFORMED_REPRESENTATION, event.failureReason)
+        assertEquals(200, event.httpStatus)
+        assertEquals(1, event.attemptCount)
+    }
+
+    @Test
     fun `malformed oversized and redirected responses fail with fixed message`() = runTest {
         server.enqueue(jsonResponse("{"))
         assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
@@ -140,9 +232,17 @@ class SteamReviewPageProviderTest {
                     .setHeader("Retry-After", "0"),
             )
         }
+        val events = mutableListOf<SteamCommunityPageDiagnostic>()
 
-        assertUnavailable { provider().fetch(42, SteamReviewQuery(), null) }
+        assertUnavailable {
+            provider(SteamCommunityDiagnosticSink(events::add))
+                .fetch(42, SteamReviewQuery(), null)
+        }
         assertEquals(4, server.requestCount)
+        assertEquals(DiagnosticOutcome.UNAVAILABLE, events.single().outcome)
+        assertEquals(SteamCommunityFailureReason.RATE_LIMITED, events.single().failureReason)
+        assertEquals(429, events.single().httpStatus)
+        assertEquals(4, events.single().attemptCount)
     }
 
     @Test
@@ -160,7 +260,9 @@ class SteamReviewPageProviderTest {
         .setHeader("Content-Type", "application/json; charset=utf-8")
         .setBody(body)
 
-    private fun provider() = SteamReviewPageProvider(
+    private fun provider(
+        diagnostics: SteamCommunityDiagnosticSink = NoOpSteamCommunityDiagnostics,
+    ) = SteamReviewPageProvider(
         client = OkHttpClient.Builder()
             .cache(null)
             .cookieJar(CookieJar.NO_COOKIES)
@@ -171,6 +273,7 @@ class SteamReviewPageProviderTest {
         allowedHosts = setOf(server.hostName),
         requireHttps = false,
         allowedPorts = setOf(server.port),
+        diagnostics = diagnostics,
     )
 
     private suspend fun assertUnavailable(block: suspend () -> Unit) {

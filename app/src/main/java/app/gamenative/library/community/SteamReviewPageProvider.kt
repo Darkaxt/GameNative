@@ -1,5 +1,7 @@
 package app.gamenative.library.community
 
+import app.gamenative.diagnostics.DiagnosticOutcome
+import app.gamenative.diagnostics.DiagnosticRedactor
 import app.gamenative.library.metadata.SteamHttpRetryExecutor
 import app.gamenative.library.metadata.SteamRateLimitExhaustedException
 import app.gamenative.utils.Net
@@ -7,15 +9,16 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -36,6 +39,7 @@ class SteamReviewPageProvider internal constructor(
     private val requireHttps: Boolean,
     private val allowedPorts: Set<Int>,
     private val retryExecutor: SteamHttpRetryExecutor = SteamHttpRetryExecutor(),
+    private val diagnostics: SteamCommunityDiagnosticSink = NoOpSteamCommunityDiagnostics,
 ) : SteamReviewPageSource {
     @Inject
     constructor() : this(
@@ -50,6 +54,7 @@ class SteamReviewPageProvider internal constructor(
         allowedHosts = setOf(STEAM_STORE_HOST),
         requireHttps = true,
         allowedPorts = setOf(443),
+        diagnostics = FeatureSteamCommunityDiagnostics(),
     )
 
     override suspend fun fetch(
@@ -57,12 +62,68 @@ class SteamReviewPageProvider internal constructor(
         query: SteamReviewQuery,
         cursor: String?,
     ): SteamReviewPage {
+        val startedAt = System.nanoTime()
+        val transport = TransportDiagnostic()
+        return try {
+            val parsed = fetchPage(steamAppId, query, cursor, transport)
+            recordDiagnostic(
+                SteamCommunityPageDiagnostic(
+                    operation = SteamCommunityPageOperation.REVIEWS,
+                    outcome = DiagnosticOutcome.SUCCEEDED,
+                    durationMs = elapsedMs(startedAt),
+                    httpStatus = transport.httpStatus,
+                    attemptCount = transport.attemptCount,
+                    itemCount = parsed.page.reviews.size,
+                    skippedItemCount = parsed.skippedItemCount,
+                    blankItemCount = parsed.blankItemCount,
+                    duplicateItemCount = parsed.duplicateItemCount,
+                ),
+            )
+            parsed.page
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: SteamReviewsUnavailable) {
+            recordDiagnostic(
+                SteamCommunityPageDiagnostic(
+                    operation = SteamCommunityPageOperation.REVIEWS,
+                    outcome = error.reason.diagnosticOutcome,
+                    durationMs = elapsedMs(startedAt),
+                    httpStatus = transport.httpStatus,
+                    attemptCount = transport.attemptCount,
+                    failureReason = error.reason,
+                ),
+            )
+            throw error
+        } catch (_: IOException) {
+            val failure = SteamReviewsUnavailable(
+                SteamCommunityFailureReason.NETWORK_UNAVAILABLE,
+            )
+            recordDiagnostic(
+                SteamCommunityPageDiagnostic(
+                    operation = SteamCommunityPageOperation.REVIEWS,
+                    outcome = DiagnosticOutcome.UNAVAILABLE,
+                    durationMs = elapsedMs(startedAt),
+                    httpStatus = transport.httpStatus,
+                    attemptCount = transport.attemptCount,
+                    failureReason = failure.reason,
+                ),
+            )
+            throw failure
+        }
+    }
+
+    private suspend fun fetchPage(
+        steamAppId: Int,
+        query: SteamReviewQuery,
+        cursor: String?,
+        transport: TransportDiagnostic,
+    ): ParsedReviewPage {
         if (
             steamAppId <= 0 ||
             !isAllowedEndpoint(endpoint) ||
             cursor != null && (cursor.isBlank() || cursor.length > MAX_CURSOR_LENGTH)
         ) {
-            throw SteamReviewsUnavailable()
+            throw SteamReviewsUnavailable(SteamCommunityFailureReason.INVALID_REQUEST)
         }
         val requestUrl = endpoint.newBuilder()
             .addPathSegment(steamAppId.toString())
@@ -74,50 +135,82 @@ class SteamReviewPageProvider internal constructor(
             .addQueryParameter("num_per_page", MAX_REVIEWS.toString())
             .apply { cursor?.let { addQueryParameter("cursor", it) } }
             .build()
-        if (!isAllowedNetworkUrl(requestUrl)) throw SteamReviewsUnavailable()
+        if (!isAllowedNetworkUrl(requestUrl)) {
+            throw SteamReviewsUnavailable(SteamCommunityFailureReason.INVALID_REQUEST)
+        }
         val request = Request.Builder()
             .url(requestUrl)
             .header("Cache-Control", "no-store")
             .get()
             .build()
         val response = try {
-            retryExecutor.execute { client.newCall(request).awaitSteamReviewResponse() }
+            retryExecutor.execute {
+                transport.attemptCount++
+                client.newCall(request).awaitSteamReviewResponse().also { response ->
+                    transport.httpStatus = response.code
+                }
+            }
         } catch (_: SteamRateLimitExhaustedException) {
-            throw SteamReviewsUnavailable()
+            throw SteamReviewsUnavailable(SteamCommunityFailureReason.RATE_LIMITED)
         }
         response.use {
-            if (
-                !it.isSuccessful ||
-                !it.hasJsonContentType() ||
-                !isAllowedNetworkUrl(it.request.url) ||
-                it.code in REDIRECT_CODES
-            ) {
-                throw SteamReviewsUnavailable()
+            transport.httpStatus = it.code
+            if (!isAllowedNetworkUrl(it.request.url) || it.code in REDIRECT_CODES) {
+                throw SteamReviewsUnavailable(SteamCommunityFailureReason.REDIRECT_REJECTED)
             }
-            return parse(it.readBoundedBody())
+            if (!it.isSuccessful) {
+                throw SteamReviewsUnavailable(SteamCommunityFailureReason.HTTP_STATUS)
+            }
+            if (!it.hasJsonContentType()) {
+                throw SteamReviewsUnavailable(SteamCommunityFailureReason.CONTENT_TYPE)
+            }
+            return parse(
+                body = it.readBoundedBody(),
+                pageScope = "$steamAppId:${cursor.orEmpty()}",
+            )
         }
     }
 
-    private fun parse(body: String): SteamReviewPage = try {
+    private fun parse(body: String, pageScope: String): ParsedReviewPage = try {
         val root = JSON.parseToJsonElement(body).jsonObject
-        if (root["success"]?.jsonPrimitive?.intOrNull != 1) throw SteamReviewsUnavailable()
-        val reviews = root["reviews"]?.jsonArray.orEmpty()
-            .take(MAX_REVIEWS)
-            .mapNotNull { parseReview(it.jsonObject) }
+        if (root["success"]?.jsonPrimitive?.intOrNull != 1) {
+            throw SteamReviewsUnavailable(SteamCommunityFailureReason.MALFORMED_REPRESENTATION)
+        }
+        val boundedReviews = (root["reviews"] as? JsonArray)
+            ?.take(MAX_REVIEWS)
+            ?: throw SteamReviewsUnavailable(
+                SteamCommunityFailureReason.MALFORMED_REPRESENTATION,
+            )
+        val reviews = boundedReviews.mapIndexedNotNull { index, value ->
+            parseReview(
+                value = value.jsonObject,
+                fallbackIdentity = pageIdentity(pageScope, index),
+            )
+        }
         val nextCursor = root.string("cursor")
             ?.takeIf { it.isNotBlank() && it.length <= MAX_CURSOR_LENGTH }
-        SteamReviewPage(reviews = reviews, nextCursor = nextCursor)
+        ParsedReviewPage(
+            page = SteamReviewPage(reviews = reviews, nextCursor = nextCursor),
+            skippedItemCount = boundedReviews.size - reviews.size,
+            blankItemCount = boundedReviews.count { value ->
+                (value as? JsonObject)?.string("review")?.isBlank() == true
+            },
+            duplicateItemCount = reviews.size - reviews.distinctBy { it.recommendationId }.size,
+        )
     } catch (_: SerializationException) {
-        throw SteamReviewsUnavailable()
+        throw SteamReviewsUnavailable(SteamCommunityFailureReason.MALFORMED_REPRESENTATION)
     } catch (_: IllegalArgumentException) {
-        throw SteamReviewsUnavailable()
+        throw SteamReviewsUnavailable(SteamCommunityFailureReason.MALFORMED_REPRESENTATION)
     }
 
-    private fun parseReview(value: JsonObject): SteamReviewCard? {
+    private fun parseReview(
+        value: JsonObject,
+        fallbackIdentity: String,
+    ): SteamReviewCard? {
         val recommendationId = value.string("recommendationid")
             ?.takeIf(String::isNotBlank)
             ?.takeIf { it.length <= MAX_RECOMMENDATION_ID_LENGTH }
-            ?: return null
+            ?: fallbackIdentity
         val text = value.string("review")
             ?.takeIf(String::isNotBlank)
             ?.take(MAX_REVIEW_TEXT_LENGTH)
@@ -148,10 +241,14 @@ class SteamReviewPageProvider internal constructor(
     }
 
     private fun Response.readBoundedBody(): String {
-        if (body.contentLength() > MAX_RESPONSE_BYTES) throw SteamReviewsUnavailable()
+        if (body.contentLength() > MAX_RESPONSE_BYTES) {
+            throw SteamReviewsUnavailable(SteamCommunityFailureReason.BODY_LIMIT)
+        }
         val source = body.source()
         source.request(MAX_RESPONSE_BYTES + 1L)
-        if (source.buffer.size > MAX_RESPONSE_BYTES) throw SteamReviewsUnavailable()
+        if (source.buffer.size > MAX_RESPONSE_BYTES) {
+            throw SteamReviewsUnavailable(SteamCommunityFailureReason.BODY_LIMIT)
+        }
         return source.readUtf8()
     }
 
@@ -192,6 +289,29 @@ class SteamReviewPageProvider internal constructor(
     private val SteamReviewPurchaseType.parameter: String
         get() = name.lowercase()
 
+    private fun pageIdentity(pageScope: String, index: Int): String =
+        "page:${DiagnosticRedactor.correlationId("review:$pageScope:$index")}"
+
+    private fun recordDiagnostic(event: SteamCommunityPageDiagnostic) {
+        runCatching { diagnostics.record(event) }
+    }
+
+    private fun elapsedMs(startedAt: Long): Long =
+        ((System.nanoTime() - startedAt) / NANOS_PER_MILLISECOND)
+            .coerceIn(0L, MAX_DIAGNOSTIC_DURATION_MS)
+
+    private data class TransportDiagnostic(
+        var attemptCount: Int = 0,
+        var httpStatus: Int? = null,
+    )
+
+    private data class ParsedReviewPage(
+        val page: SteamReviewPage,
+        val skippedItemCount: Int,
+        val blankItemCount: Int,
+        val duplicateItemCount: Int,
+    )
+
     private companion object {
         const val DEFAULT_ENDPOINT = "https://store.steampowered.com/appreviews"
         const val STEAM_STORE_HOST = "store.steampowered.com"
@@ -202,12 +322,16 @@ class SteamReviewPageProvider internal constructor(
         const val MAX_REVIEW_TEXT_LENGTH = 16 * 1024
         const val MAX_DEVELOPER_RESPONSE_LENGTH = 8 * 1024
         const val MAX_RESPONSE_BYTES = 1024L * 1024L
+        const val NANOS_PER_MILLISECOND = 1_000_000L
+        const val MAX_DIAGNOSTIC_DURATION_MS = 300_000L
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
         val JSON = Json { ignoreUnknownKeys = true }
     }
 }
 
-private class SteamReviewsUnavailable : IOException("Steam reviews unavailable")
+private class SteamReviewsUnavailable(
+    val reason: SteamCommunityFailureReason,
+) : IOException("Steam reviews unavailable")
 
 private suspend fun Call.awaitSteamReviewResponse(): Response = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }
@@ -219,7 +343,9 @@ private suspend fun Call.awaitSteamReviewResponse(): Response = suspendCancellab
 
             override fun onResponse(call: Call, response: Response) {
                 if (continuation.isActive) {
-                    continuation.resumeWith(Result.success(response))
+                    continuation.resume(response) { _, deliveredResponse, _ ->
+                        deliveredResponse.close()
+                    }
                 } else {
                     response.close()
                 }
