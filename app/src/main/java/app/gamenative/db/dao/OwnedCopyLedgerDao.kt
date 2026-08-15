@@ -10,6 +10,7 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.OwnedCopyPresenceEntity
 import app.gamenative.data.canonical.OwnedCopySyncEntity
+import app.gamenative.data.canonical.StableSourceIdValidation
 import kotlinx.coroutines.flow.Flow
 
 data class CompletedOwnedCopySnapshot(
@@ -156,6 +157,9 @@ interface OwnedCopyLedgerDao {
         AccountScope.parse(accountScope)
         require(lifecycleGeneration >= 0)
         require(stableSourceIds.all { it.isNotBlank() && it == it.trim() })
+        if (source == GameSource.GOG || source == GameSource.AMAZON) {
+            StableSourceIdValidation.requireAllValid(source, stableSourceIds)
+        }
         val normalizedIds = stableSourceIds.distinct().sorted()
         require(resolvedSourceIds.keys.all(normalizedIds::contains))
         require(resolvedSourceIds.values.all { it.isNotBlank() && it == it.trim() })

@@ -56,4 +56,10 @@ data class StoreMatchEntity(
     val evidenceReleaseYear: Int?,
     @ColumnInfo("evidence_app_type")
     val evidenceAppType: CanonicalAppType,
-)
+) {
+    fun ownedCopyKeyOrNull(): OwnedCopyKey? = OwnedCopyKey.fromPersistedOrNull(
+        accountScope = accountScope,
+        source = source,
+        stableSourceId = stableSourceId,
+    )
+}

@@ -28,6 +28,8 @@ class AccountScopedOwnershipLedgerTest {
     private lateinit var lifecycleState: InMemoryAccountLifecycleState
     private val scopeA = AccountScope.parse("a".repeat(64))
     private val scopeB = AccountScope.parse("b".repeat(64))
+    private val amazonProductId =
+        "amzn1.adg.product.11111111-1111-1111-1111-111111111111"
 
     @Before
     fun setUp() {
@@ -46,7 +48,7 @@ class AccountScopedOwnershipLedgerTest {
     @Test
     fun materializationFailureLeavesPriorLedgerAndSanitizesFailure() = runTest {
         val dao = database.ownedCopyLedgerDao()
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L, 0L)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("1"), 1L, 0L)
         val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao, lifecycleState)
 
         val result: Result<Int> = ledger.runCompleteSnapshot(GameSource.GOG) {
@@ -56,7 +58,7 @@ class AccountScopedOwnershipLedgerTest {
         assertTrue(result.isFailure)
         assertEquals(OwnedCopySyncFailure.MATERIALIZATION_FAILED.name, result.exceptionOrNull()?.message)
         assertFalse(result.exceptionOrNull().toString().contains("private account"))
-        assertEquals(listOf("old"), dao.getCompletedStableSourceIds(scopeA.value, GameSource.GOG))
+        assertEquals(listOf("1"), dao.getCompletedStableSourceIds(scopeA.value, GameSource.GOG))
     }
 
     @Test
@@ -79,18 +81,18 @@ class AccountScopedOwnershipLedgerTest {
     @Test
     fun accountLifecycleAbaChangeBeforeCommitLeavesPriorLedger() = runTest {
         val dao = database.ownedCopyLedgerDao()
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L, 0L)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("1"), 1L, 0L)
         val ledger = AccountScopedOwnershipLedger(fixedScopes(scopeA), dao, lifecycleState)
 
         val result = ledger.runCompleteSnapshot(GameSource.GOG) {
             lifecycleState.advanceGeneration(GameSource.GOG)
             lifecycleState.advanceGeneration(GameSource.GOG)
-            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("wrong-account"))
+            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("2"))
         }
 
         assertTrue(result.isFailure)
         assertEquals(OwnedCopySyncFailure.ACCOUNT_SCOPE_CHANGED.name, result.exceptionOrNull()?.message)
-        assertEquals(listOf("old"), dao.getCompletedStableSourceIds(scopeA.value, GameSource.GOG))
+        assertEquals(listOf("1"), dao.getCompletedStableSourceIds(scopeA.value, GameSource.GOG))
     }
 
     @Test
@@ -102,7 +104,7 @@ class AccountScopedOwnershipLedgerTest {
         assertEquals(
             1,
             ledger.runCompleteSnapshot(GameSource.GOG) {
-                MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("owned-a"))
+                MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("1"))
             }.getOrThrow(),
         )
         assertEquals(
@@ -114,7 +116,7 @@ class AccountScopedOwnershipLedgerTest {
         lifecycleState.advanceGeneration(GameSource.GOG)
         scopes.value = scopeB
         ledger.runCompleteSnapshot(GameSource.GOG) {
-            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("owned-b"))
+            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("2"))
         }.getOrThrow()
 
         lifecycleState.advanceGeneration(GameSource.GOG)
@@ -122,7 +124,7 @@ class AccountScopedOwnershipLedgerTest {
 
         assertNull(dao.getCompletedSnapshotForLifecycle(scopeA.value, GameSource.GOG, 2L))
         assertEquals(
-            listOf("owned-a"),
+            listOf("1"),
             dao.getCompletedSnapshot(scopeA.value, GameSource.GOG)?.stableSourceIds,
         )
     }
@@ -155,7 +157,13 @@ class AccountScopedOwnershipLedgerTest {
             val result = ledger.runCompleteSnapshot(source) {
                 MaterializedOwnedCopySnapshot(
                     value = source,
-                    stableSourceIds = listOf(source.name.lowercase()),
+                    stableSourceIds = listOf(
+                        when (source) {
+                            GameSource.GOG -> "1"
+                            GameSource.AMAZON -> amazonProductId
+                            else -> source.name.lowercase()
+                        },
+                    ),
                 )
             }
 
@@ -179,7 +187,7 @@ class AccountScopedOwnershipLedgerTest {
             )
 
             ledger.runCompleteSnapshot(GameSource.GOG) {
-                MaterializedOwnedCopySnapshot(value = Unit, stableSourceIds = listOf("owned"))
+                MaterializedOwnedCopySnapshot(value = Unit, stableSourceIds = listOf("1"))
             }.getOrThrow()
 
             assertEquals(Unit, invalidation.await())
@@ -204,7 +212,7 @@ class AccountScopedOwnershipLedgerTest {
         )
 
         val result = ledger.runCompleteSnapshot(GameSource.AMAZON) {
-            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf("owned"))
+            MaterializedOwnedCopySnapshot(value = 1, stableSourceIds = listOf(amazonProductId))
         }
 
         assertTrue(result.isFailure)

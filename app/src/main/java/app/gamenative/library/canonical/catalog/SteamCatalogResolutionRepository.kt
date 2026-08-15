@@ -180,6 +180,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
 
     private suspend fun eligibleMatches(force: Boolean): List<StoreMatchEntity> = storeMatchDao
         .getPresentWithoutSteamIdentity(GameSource.STEAM)
+        .filter { match -> match.ownedCopyKeyOrNull() != null }
         .groupBy(StoreMatchEntity::canonicalId)
         .toSortedMap()
         .values
@@ -574,11 +575,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     )
 
     private fun StoreMatchEntity.expectedState() = ExpectedMatchState(
-        key = OwnedCopyKey(
-            accountScope = AccountScope.parse(accountScope),
-            source = source,
-            stableSourceId = stableSourceId,
-        ),
+        key = checkNotNull(ownedCopyKeyOrNull()) { "Malformed persisted owned-copy identity" },
         canonicalId = canonicalId,
         matchMethod = matchMethod,
         confidence = confidence,

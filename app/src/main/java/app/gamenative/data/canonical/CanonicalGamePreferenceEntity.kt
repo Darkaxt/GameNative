@@ -38,12 +38,10 @@ data class CanonicalGamePreferenceEntity(
         val accountScope = preferredAccountScope ?: return null
         val source = preferredSource ?: return null
         val stableSourceId = preferredStableSourceId ?: return null
-        return runCatching {
-            OwnedCopyKey(
-                accountScope = AccountScope.parse(accountScope),
-                source = source,
-                stableSourceId = stableSourceId,
-            )
-        }.getOrNull()
+        return OwnedCopyKey.fromPersistedOrNull(
+            accountScope = accountScope,
+            source = source,
+            stableSourceId = stableSourceId,
+        )
     }
 }

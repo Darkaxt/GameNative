@@ -54,15 +54,21 @@ class GogOwnedCopySourceAdapter @Inject constructor(
                     .filter { it.id.isNotBlank() }
                     .associateBy { it.id }
             }
+            var malformedId = false
             var missingRow = false
             val copies = ledger.stableSourceIds.mapNotNull { stableSourceId ->
+                val key = OwnedCopyKey.createOrNull(accountScope, source, stableSourceId)
+                if (key == null) {
+                    malformedId = true
+                    return@mapNotNull null
+                }
                 val game = rowsById[stableSourceId]
                 if (game == null) {
                     missingRow = true
                     return@mapNotNull null
                 }
                 OwnedCopyProjection(
-                    key = OwnedCopyKey(accountScope, source, stableSourceId),
+                    key = key,
                     displayName = game.title,
                     developer = game.developer,
                     releaseYear = CanonicalNormalization.releaseYear(game.releaseDate),
@@ -84,7 +90,11 @@ class GogOwnedCopySourceAdapter @Inject constructor(
                     source = source,
                     accountScope = accountScope,
                     copies = copies,
-                    partialReason = SnapshotReason.MISSING_MATERIALIZED_ROW.takeIf { missingRow },
+                    partialReason = when {
+                        malformedId -> SnapshotReason.MALFORMED_SOURCE_ID
+                        missingRow -> SnapshotReason.MISSING_MATERIALIZED_ROW
+                        else -> null
+                    },
                     lifecycleGeneration = accountGeneration,
                 )
             }

@@ -1,8 +1,7 @@
 package app.gamenative.ui.screen.library
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -282,8 +281,7 @@ class CanonicalGameDetailScreenTest {
             PluviaTheme {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(650.dp)
+                        .requiredSize(width = 1691.dp, height = 1056.dp)
                         .testTag("detail-height-host"),
                 ) {
                     CanonicalGameDetailScreen(
@@ -309,12 +307,15 @@ class CanonicalGameDetailScreenTest {
             }
         }
 
-        val hostBottom = composeRule.onNodeWithTag("detail-height-host")
-            .fetchSemanticsNode().boundsInRoot.bottom
+        val hostBounds = composeRule.onNodeWithTag("detail-height-host")
+            .fetchSemanticsNode().boundsInRoot
+        val galleryBounds = composeRule.onNodeWithTag("steam-media-gallery")
+            .fetchSemanticsNode().boundsInRoot
         val carouselBottom = composeRule.onNodeWithTag("steam-media-thumbnails")
             .fetchSemanticsNode().boundsInRoot.bottom
 
-        assertTrue(carouselBottom <= hostBottom)
+        assertTrue(galleryBounds.width <= hostBounds.width * 0.6f)
+        assertTrue(carouselBottom <= hostBounds.bottom)
         composeRule.onNodeWithTag("steam-media-gallery-viewport").assertIsDisplayed()
         composeRule.onNodeWithTag("steam-media-thumbnails").assertIsDisplayed()
     }

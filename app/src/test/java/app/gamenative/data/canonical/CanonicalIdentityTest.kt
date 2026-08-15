@@ -90,6 +90,35 @@ class CanonicalIdentityTest {
     }
 
     @Test
+    fun `owned copy keys enforce provider stable ID formats`() {
+        val scope = AccountScope.parse("d".repeat(64))
+
+        listOf("01", "gog-1").forEach { stableSourceId ->
+            assertThrows(IllegalArgumentException::class.java) {
+                OwnedCopyKey(scope, GameSource.GOG, stableSourceId)
+            }
+        }
+        listOf(
+            "11111111-1111-1111-1111-111111111111",
+            "amzn1.adg.product.11111111-1111-1111-1111-11111111111A",
+        ).forEach { stableSourceId ->
+            assertThrows(IllegalArgumentException::class.java) {
+                OwnedCopyKey(scope, GameSource.AMAZON, stableSourceId)
+            }
+        }
+
+        assertEquals("1", OwnedCopyKey(scope, GameSource.GOG, "1").stableSourceId)
+        assertEquals(
+            "amzn1.adg.product.11111111-1111-1111-1111-111111111111",
+            OwnedCopyKey(
+                scope,
+                GameSource.AMAZON,
+                "amzn1.adg.product.11111111-1111-1111-1111-111111111111",
+            ).stableSourceId,
+        )
+    }
+
+    @Test
     fun `Epic stable IDs round trip delimiters and Unicode`() {
         val namespace = "namespace:with.dots/and spaces"
         val catalogId = "商品/id:ß.δ"

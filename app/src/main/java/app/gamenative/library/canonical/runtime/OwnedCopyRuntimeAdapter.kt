@@ -4,6 +4,7 @@ import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.data.canonical.StableSourceIdValidation
 import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.library.canonical.CanonicalDiagnosticSink
 import app.gamenative.library.canonical.CopyUnavailableReason
@@ -64,19 +65,26 @@ class OwnedCopyRuntimeRegistry @Inject constructor(
         }.toTypedArray(),
     )
 
-    suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult =
-        bySource.getValue(key.source).resolve(key).also { result ->
+    suspend fun resolve(key: OwnedCopyKey): OwnedCopyRuntimeResult {
+        if (!key.hasValidProviderIdentity()) return OwnedCopyRuntimeResult.Hidden
+        return bySource.getValue(key.source).resolve(key).also { result ->
             result.requireIdentity(key)
         }
+    }
 
     suspend fun resolveAll(
         source: GameSource,
         keys: Set<OwnedCopyKey>,
     ): Map<OwnedCopyKey, OwnedCopyRuntimeResult> {
         require(keys.all { it.source == source })
-        return bySource.getValue(source).resolveAll(keys).also { results ->
-            check(results.keys == keys) { "Runtime adapter returned an incomplete key set" }
+        val validKeys = keys.filterTo(mutableSetOf(), OwnedCopyKey::hasValidProviderIdentity)
+        if (validKeys.isEmpty()) return keys.hiddenResults()
+        val validResults = bySource.getValue(source).resolveAll(validKeys).also { results ->
+            check(results.keys == validKeys) { "Runtime adapter returned an incomplete key set" }
             results.forEach { (key, result) -> result.requireIdentity(key) }
+        }
+        return keys.associateWith { key ->
+            validResults[key] ?: OwnedCopyRuntimeResult.Hidden
         }
     }
 
@@ -219,6 +227,13 @@ internal fun sourceAppId(source: GameSource, id: Any): String = "${source.name}_
 
 internal fun Set<OwnedCopyKey>.hiddenResults(): Map<OwnedCopyKey, OwnedCopyRuntimeResult> =
     associateWith { OwnedCopyRuntimeResult.Hidden }
+
+private fun OwnedCopyKey.hasValidProviderIdentity(): Boolean = when (source) {
+    GameSource.GOG,
+    GameSource.AMAZON,
+    -> StableSourceIdValidation.isValid(source, stableSourceId)
+    else -> true
+}
 
 internal fun OwnedCopyRuntimeResult.requireIdentity(requestedKey: OwnedCopyKey) {
     when (this) {

@@ -96,6 +96,11 @@ class CanonicalEntityTest {
         assertEquals("valve", match.evidenceDeveloperKey)
         assertEquals(2011, match.evidenceReleaseYear)
         assertEquals(CanonicalAppType.GAME, match.evidenceAppType)
+        assertNull(match.ownedCopyKeyOrNull())
+        assertEquals(
+            OwnedCopyKey(AccountScope.parse(accountScope), GameSource.GOG, "620"),
+            match.copy(stableSourceId = "620").ownedCopyKeyOrNull(),
+        )
     }
 
     @Test

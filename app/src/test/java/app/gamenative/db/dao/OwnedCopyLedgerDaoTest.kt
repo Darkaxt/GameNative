@@ -34,6 +34,8 @@ class OwnedCopyLedgerDaoTest {
     private lateinit var dao: OwnedCopyLedgerDao
     private val scopeA = AccountScope.parse("a".repeat(64))
     private val scopeB = AccountScope.parse("b".repeat(64))
+    private val amazonProductId =
+        "amzn1.adg.product.11111111-1111-1111-1111-111111111111"
 
     @Before
     fun setUp() {
@@ -54,7 +56,7 @@ class OwnedCopyLedgerDaoTest {
         dao.replaceCompletedSnapshot(
             accountScope = scopeA.value,
             source = GameSource.GOG,
-            stableSourceIds = listOf("z", "a", "z"),
+            stableSourceIds = listOf("2", "1", "2"),
             completedAt = 17L,
             lifecycleGeneration = 0L,
         )
@@ -64,27 +66,57 @@ class OwnedCopyLedgerDaoTest {
         assertNotNull(snapshot)
         assertEquals(17L, snapshot?.completedAt)
         assertEquals(0L, snapshot?.lifecycleGeneration)
-        assertEquals(listOf("a", "z"), snapshot?.stableSourceIds)
-        assertTrue(dao.isPresent(scopeA.value, GameSource.GOG, "a"))
+        assertEquals(listOf("1", "2"), snapshot?.stableSourceIds)
+        assertTrue(dao.isPresent(scopeA.value, GameSource.GOG, "1"))
         assertFalse(dao.isPresent(scopeA.value, GameSource.GOG, "missing"))
     }
 
     @Test
     fun malformedIdsRejectReplacementWithoutChangingPriorSnapshot() = runTest {
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L, 0L)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("1"), 1L, 0L)
+
+        listOf(listOf(" 2 "), listOf(""), listOf("01"), listOf("gog-2")).forEach { ids ->
+            val result = runCatching {
+                dao.replaceCompletedSnapshot(
+                    accountScope = scopeA.value,
+                    source = GameSource.GOG,
+                    stableSourceIds = ids,
+                    completedAt = 2L,
+                    lifecycleGeneration = 0L,
+                )
+            }
+
+            assertTrue(result.isFailure)
+            assertEquals(listOf("1"), dao.getCompletedStableSourceIds(scopeA.value, GameSource.GOG))
+        }
+    }
+
+    @Test
+    fun malformedAmazonIdRejectsReplacementWithoutChangingPriorSnapshot() = runTest {
+        dao.replaceCompletedSnapshot(
+            accountScope = scopeA.value,
+            source = GameSource.AMAZON,
+            stableSourceIds = listOf(amazonProductId),
+            completedAt = 1L,
+            lifecycleGeneration = 0L,
+            resolvedSourceIds = mapOf(amazonProductId to "entitlement-a"),
+        )
 
         val result = runCatching {
             dao.replaceCompletedSnapshot(
                 accountScope = scopeA.value,
-                source = GameSource.GOG,
-                stableSourceIds = listOf(" valid ", ""),
+                source = GameSource.AMAZON,
+                stableSourceIds = listOf("11111111-1111-1111-1111-111111111111"),
                 completedAt = 2L,
                 lifecycleGeneration = 0L,
             )
         }
 
         assertTrue(result.isFailure)
-        assertEquals(listOf("old"), dao.getCompletedStableSourceIds(scopeA.value, GameSource.GOG))
+        assertEquals(
+            listOf(amazonProductId),
+            dao.getCompletedStableSourceIds(scopeA.value, GameSource.AMAZON),
+        )
     }
 
     @Test
@@ -92,27 +124,27 @@ class OwnedCopyLedgerDaoTest {
         dao.replaceCompletedSnapshot(
             accountScope = scopeA.value,
             source = GameSource.AMAZON,
-            stableSourceIds = listOf("product"),
+            stableSourceIds = listOf(amazonProductId),
             completedAt = 1L,
             lifecycleGeneration = 0L,
-            resolvedSourceIds = mapOf("product" to "entitlement-a"),
+            resolvedSourceIds = mapOf(amazonProductId to "entitlement-a"),
         )
         dao.replaceCompletedSnapshot(
             accountScope = scopeB.value,
             source = GameSource.AMAZON,
-            stableSourceIds = listOf("product"),
+            stableSourceIds = listOf(amazonProductId),
             completedAt = 2L,
             lifecycleGeneration = 0L,
-            resolvedSourceIds = mapOf("product" to "entitlement-b"),
+            resolvedSourceIds = mapOf(amazonProductId to "entitlement-b"),
         )
 
         assertEquals(
             "entitlement-a",
-            dao.getPresence(scopeA.value, GameSource.AMAZON, "product")?.resolvedSourceId,
+            dao.getPresence(scopeA.value, GameSource.AMAZON, amazonProductId)?.resolvedSourceId,
         )
         assertEquals(
             "entitlement-b",
-            dao.getPresence(scopeB.value, GameSource.AMAZON, "product")?.resolvedSourceId,
+            dao.getPresence(scopeB.value, GameSource.AMAZON, amazonProductId)?.resolvedSourceId,
         )
     }
 
@@ -130,7 +162,7 @@ class OwnedCopyLedgerDaoTest {
 
     @Test
     fun replacementDoesNotChangeAnotherSourceForTheSameAccount() = runTest {
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("gog"), 1L, 0L)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("1"), 1L, 0L)
         dao.replaceCompletedSnapshot(scopeA.value, GameSource.EPIC, listOf("epic"), 2L, 0L)
 
         dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, emptyList(), 3L, 0L)
@@ -144,11 +176,23 @@ class OwnedCopyLedgerDaoTest {
 
     @Test
     fun sameStableIdIsIndependentAcrossAccountScopes() = runTest {
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.AMAZON, listOf("shared"), 1L, 0L)
-        dao.replaceCompletedSnapshot(scopeB.value, GameSource.AMAZON, listOf("shared"), 2L, 0L)
+        dao.replaceCompletedSnapshot(
+            scopeA.value,
+            GameSource.AMAZON,
+            listOf(amazonProductId),
+            1L,
+            0L,
+        )
+        dao.replaceCompletedSnapshot(
+            scopeB.value,
+            GameSource.AMAZON,
+            listOf(amazonProductId),
+            2L,
+            0L,
+        )
 
-        assertTrue(dao.isPresent(scopeA.value, GameSource.AMAZON, "shared"))
-        assertTrue(dao.isPresent(scopeB.value, GameSource.AMAZON, "shared"))
+        assertTrue(dao.isPresent(scopeA.value, GameSource.AMAZON, amazonProductId))
+        assertTrue(dao.isPresent(scopeB.value, GameSource.AMAZON, amazonProductId))
         assertEquals(1L, dao.getCompletedHeader(scopeA.value, GameSource.AMAZON)?.completedAt)
         assertEquals(2L, dao.getCompletedHeader(scopeB.value, GameSource.AMAZON)?.completedAt)
     }
@@ -158,22 +202,22 @@ class OwnedCopyLedgerDaoTest {
         dao.replaceCompletedSnapshot(
             accountScope = scopeA.value,
             source = GameSource.GOG,
-            stableSourceIds = listOf("owned"),
+            stableSourceIds = listOf("1"),
             completedAt = 1L,
             lifecycleGeneration = 2L,
         )
 
         assertNull(dao.getCompletedSnapshotForLifecycle(scopeA.value, GameSource.GOG, 1L))
         assertFalse(
-            dao.isPresentForLifecycle(scopeA.value, GameSource.GOG, "owned", 1L),
+            dao.isPresentForLifecycle(scopeA.value, GameSource.GOG, "1", 1L),
         )
         assertEquals(
-            listOf("owned"),
+            listOf("1"),
             dao.getCompletedSnapshotForLifecycle(scopeA.value, GameSource.GOG, 2L)
                 ?.stableSourceIds,
         )
         assertTrue(
-            dao.isPresentForLifecycle(scopeA.value, GameSource.GOG, "owned", 2L),
+            dao.isPresentForLifecycle(scopeA.value, GameSource.GOG, "1", 2L),
         )
     }
 
@@ -207,7 +251,7 @@ class OwnedCopyLedgerDaoTest {
         dao.replaceCompletedSnapshot(
             accountScope = scopeA.value,
             source = GameSource.GOG,
-            stableSourceIds = listOf("new"),
+            stableSourceIds = listOf("2"),
             completedAt = 2L,
             lifecycleGeneration = 2L,
         )
@@ -215,7 +259,7 @@ class OwnedCopyLedgerDaoTest {
         val replaced = dao.replaceCompletedSnapshot(
             accountScope = scopeA.value,
             source = GameSource.GOG,
-            stableSourceIds = listOf("stale"),
+            stableSourceIds = listOf("1"),
             completedAt = 3L,
             lifecycleGeneration = 1L,
         )
@@ -223,17 +267,17 @@ class OwnedCopyLedgerDaoTest {
         assertFalse(replaced)
         val snapshot = dao.getCompletedSnapshot(scopeA.value, GameSource.GOG)
         assertEquals(2L, snapshot?.lifecycleGeneration)
-        assertEquals(listOf("new"), snapshot?.stableSourceIds)
+        assertEquals(listOf("2"), snapshot?.stableSourceIds)
     }
 
     @Test
     fun failedReplacementPreservesPreviousSnapshot() = runTest {
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("old"), 1L, 0L)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("1"), 1L, 0L)
         database.openHelper.writableDatabase.execSQL(
             """
             CREATE TRIGGER fail_owned_copy_presence
             BEFORE INSERT ON owned_copy_presence
-            WHEN NEW.stable_source_id = 'fail'
+            WHEN NEW.stable_source_id = '2'
             BEGIN
                 SELECT RAISE(ABORT, 'injected failure');
             END
@@ -241,13 +285,13 @@ class OwnedCopyLedgerDaoTest {
         )
 
         val result = runCatching {
-            dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("fail"), 2L, 0L)
+            dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("2"), 2L, 0L)
         }
 
         assertTrue(result.isFailure)
         val snapshot = dao.getCompletedSnapshot(scopeA.value, GameSource.GOG)
         assertEquals(1L, snapshot?.completedAt)
-        assertEquals(listOf("old"), snapshot?.stableSourceIds)
+        assertEquals(listOf("1"), snapshot?.stableSourceIds)
     }
 
     @Test
@@ -263,7 +307,7 @@ class OwnedCopyLedgerDaoTest {
         }
         assertTrue(initial.await().isEmpty())
 
-        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("owned"), 1L, 0L)
+        dao.replaceCompletedSnapshot(scopeA.value, GameSource.GOG, listOf("1"), 1L, 0L)
 
         assertEquals(
             listOf(scopeA.value),

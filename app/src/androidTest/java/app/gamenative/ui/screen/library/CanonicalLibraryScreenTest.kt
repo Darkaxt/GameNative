@@ -222,6 +222,49 @@ class CanonicalLibraryScreenTest {
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Test
+    fun copiesSheetShowsFourCompactAccessibleActionsInSourceHeader() {
+        val actions = listOf(
+            OwnedCopyOperation.INSTALL,
+            OwnedCopyOperation.IMPORT_SAVES,
+            OwnedCopyOperation.EXPORT_SAVES,
+            OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+        )
+        val card = canonicalCard().copy(
+            copies = listOf(copy(gogKey, capabilities = actions.toSet())),
+            ownedSources = setOf(GameSource.GOG),
+            preferredCopy = null,
+        )
+        val operations = mutableListOf<OwnedCopyOperation>()
+
+        composeRule.setContent {
+            PluviaTheme {
+                CanonicalCopiesSheet(
+                    card = card,
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                    onDismissRequest = {},
+                    onOperation = { _, operation, _ -> operations += operation },
+                    onUseAutomaticSelection = {},
+                    onSeparateCopy = {},
+                    onResetDecision = {},
+                )
+            }
+        }
+
+        listOf("Install", "Import saves", "Export saves", "Source details").forEach { label ->
+            composeRule.onAllNodesWithContentDescription(label).assertCountEquals(1)
+            composeRule.onNodeWithText(label).assertDoesNotExist()
+        }
+        actions.forEach { operation ->
+            composeRule.onNodeWithTag("copy-operation:GOG:${operation.name}")
+                .assertIsDisplayed()
+                .assertHasClickAction()
+                .performClick()
+        }
+        composeRule.runOnIdle { assertEquals(actions, operations) }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
     fun legacyBridgeUnsupportedCopyStillOffersSeparateWhenMatchAuthorityAllowsIt() {
         val unsupported = copy(
             key = epicKey,

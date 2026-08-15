@@ -1,7 +1,6 @@
 package app.gamenative.library.canonical
 
 import app.gamenative.data.GameSource
-import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.data.canonical.StoreMatchEntity
@@ -383,16 +382,6 @@ class CanonicalLibraryRepository @Inject constructor(
             GameSource.EPIC -> 2
             GameSource.AMAZON -> 3
             GameSource.CUSTOM_GAME -> 4
-        }
-
-        fun StoreMatchEntity.ownedCopyKeyOrNull(): OwnedCopyKey? = try {
-            OwnedCopyKey(
-                accountScope = AccountScope.parse(accountScope),
-                source = source,
-                stableSourceId = stableSourceId,
-            )
-        } catch (_: IllegalArgumentException) {
-            null
         }
 
         fun String.positiveExactDecimalIntOrNull(): Int? =

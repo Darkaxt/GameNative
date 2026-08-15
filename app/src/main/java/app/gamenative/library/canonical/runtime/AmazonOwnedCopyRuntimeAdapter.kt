@@ -355,7 +355,12 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 )
             }
             val game = amazonGameDao.getByAppId(reference.localRowId)
-            if (game == null || game.appId != reference.localRowId || game.productId != reference.productId) {
+            if (
+                game == null ||
+                game.appId != reference.localRowId ||
+                game.productId != reference.productId ||
+                game.entitlementId != entitlementId
+            ) {
                 return unavailableIfFresh(
                     key,
                     accountScope,
@@ -442,7 +447,12 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
             val requestedRows = keys.asSequence()
                 .filter { it.source == source && it.accountScope == accountScope }
                 .filter { it.stableSourceId in ownedIds }
-                .mapNotNull { rowsByProduct[it.stableSourceId] }
+                .mapNotNull { key ->
+                    val entitlementId = ledger.resolvedSourceIds[key.stableSourceId]
+                    rowsByProduct[key.stableSourceId]?.takeIf { game ->
+                        !entitlementId.isNullOrBlank() && game.entitlementId == entitlementId
+                    }
+                }
                 .distinctBy(AmazonGame::appId)
                 .toList()
             val stateBatch = runtimeState.readBatch(requestedRows, accountScope, generation)
@@ -467,7 +477,10 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                         CopyUnavailableReason.SOURCE_READ_FAILED,
                         stateFailure,
                     )
-                    entitlementId.isNullOrBlank() || game == null || sourceState == null ->
+                    entitlementId.isNullOrBlank() ||
+                        game == null ||
+                        game.entitlementId != entitlementId ||
+                        sourceState == null ->
                         unavailable(key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
                     else -> available(
                         key = key,

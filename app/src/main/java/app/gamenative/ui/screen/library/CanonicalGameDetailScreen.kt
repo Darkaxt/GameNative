@@ -389,8 +389,8 @@ private fun DetailOverview(
                         contentDescription = title,
                         provider = mediaProvider,
                         modifier = Modifier
-                            .fillMaxWidth()
                             .widthIn(max = galleryWidth)
+                            .fillMaxWidth()
                             .align(Alignment.CenterHorizontally),
                     )
                 }

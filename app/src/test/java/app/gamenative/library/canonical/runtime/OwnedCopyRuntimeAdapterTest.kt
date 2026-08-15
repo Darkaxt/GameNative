@@ -109,6 +109,10 @@ class OwnedCopyRuntimeAdapterTest {
     private lateinit var context: Context
     private val scope = AccountScope.parse("a".repeat(64))
     private val otherScope = AccountScope.parse("b".repeat(64))
+    private val amazonProductId =
+        "amzn1.adg.product.11111111-1111-1111-1111-111111111111"
+    private val secondAmazonProductId =
+        "amzn1.adg.product.22222222-2222-2222-2222-222222222222"
 
     @Before
     fun setUp() {
@@ -603,7 +607,7 @@ class OwnedCopyRuntimeAdapterTest {
 
     @Test
     fun amazonPointAndBatchCaptureCurrentProductEntitlementAndArtwork() = runTest {
-        val key = key(GameSource.AMAZON, "product-id")
+        val key = key(GameSource.AMAZON, amazonProductId)
         val productJson = JSONObject().put(
             "productDetail",
             JSONObject().put(
@@ -615,8 +619,8 @@ class OwnedCopyRuntimeAdapterTest {
         ).toString()
         val game = AmazonGame(
             appId = 88,
-            productId = "product-id",
-            entitlementId = "stale-row-entitlement",
+            productId = amazonProductId,
+            entitlementId = "current-entitlement",
             title = "Amazon Native",
             developer = "Amazon Studio GmbH",
             releaseDate = "2021-06-01",
@@ -631,20 +635,20 @@ class OwnedCopyRuntimeAdapterTest {
             playTimeMinutes = 71L,
         )
         val dao = mockk<AmazonGameDao>()
-        val ledgerEntries = mapOf("product-id" to "current-entitlement")
+        val ledgerEntries = mapOf(amazonProductId to "current-entitlement")
         val ledger = ledger(GameSource.AMAZON, ledgerEntries)
         val lifecycle = lifecycleReadyFromCompletedLedger(GameSource.AMAZON, ledger, ledgerEntries)
         val reference = SourceOwnedCopyReference.Amazon(
             key = key,
             localRowId = 88,
-            productId = "product-id",
+            productId = amazonProductId,
             entitlementId = "current-entitlement",
         )
         val source = sourceAdapter<AmazonOwnedCopySourceAdapter>(key, reference)
         val history = historyDao("AMAZON_88", 999L)
         val runtimeState = mockk<AmazonOwnedCopyRuntimeState>()
         coEvery { dao.getByAppId(88) } returns game
-        coEvery { dao.getByProductId("product-id") } returns game
+        coEvery { dao.getByProductId(amazonProductId) } returns game
         coEvery { dao.getAllAsList() } returns listOf(game)
         val currentState = state(
             installPath = game.installPath,
@@ -696,6 +700,55 @@ class OwnedCopyRuntimeAdapterTest {
         coVerify(exactly = 1) { history.get("AMAZON_88") }
         verify(exactly = 1) { history.getAll() }
         coVerify(exactly = 1) { dao.getAllAsList() }
+    }
+
+    @Test
+    fun amazonEntitlementDriftFailsClosedInPointAndBatchResolution() = runTest {
+        val key = key(GameSource.AMAZON, amazonProductId)
+        val game = AmazonGame(
+            appId = 88,
+            productId = amazonProductId,
+            entitlementId = "source-row-entitlement",
+            title = "Amazon Native",
+        )
+        val ledgerEntries = mapOf(amazonProductId to "ledger-entitlement")
+        val ledger = ledger(GameSource.AMAZON, ledgerEntries)
+        val reference = SourceOwnedCopyReference.Amazon(
+            key = key,
+            localRowId = game.appId,
+            productId = amazonProductId,
+            entitlementId = "ledger-entitlement",
+        )
+        val dao = mockk<AmazonGameDao>()
+        coEvery { dao.getByAppId(game.appId) } returns game
+        coEvery { dao.getAllAsList() } returns listOf(game)
+        val runtimeState = mockk<AmazonOwnedCopyRuntimeState>(relaxed = true)
+        val adapter = AmazonOwnedCopyRuntimeAdapter(
+            amazonGameDao = dao,
+            accountScopeProvider = scopes(GameSource.AMAZON),
+            ownedCopyLedgerDao = ledger,
+            accountLifecycleState = lifecycleReadyFromCompletedLedger(
+                GameSource.AMAZON,
+                ledger,
+                ledgerEntries,
+            ),
+            sourceAdapter = sourceAdapter(key, reference),
+            playHistoryDao = mockk(relaxed = true),
+            runtimeState = runtimeState,
+        )
+
+        assertUnavailable(
+            adapter.resolve(key),
+            key,
+            CopyUnavailableReason.SOURCE_ROW_CHANGED,
+        )
+        assertUnavailable(
+            adapter.resolveAll(setOf(key)).getValue(key),
+            key,
+            CopyUnavailableReason.SOURCE_ROW_CHANGED,
+        )
+        coVerify(exactly = 0) { runtimeState.readPoint(game, scope, 1L) }
+        coVerify(exactly = 1) { runtimeState.readBatch(emptyList(), scope, 1L) }
     }
 
     @Test
@@ -1611,13 +1664,27 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(2, epicScopes.calls)
 
         val amazonRows = listOf(
-            AmazonGame(appId = 1, productId = "1"),
-            AmazonGame(appId = 2, productId = "2"),
+            AmazonGame(
+                appId = 1,
+                productId = amazonProductId,
+                entitlementId = "entitlement-1",
+            ),
+            AmazonGame(
+                appId = 2,
+                productId = secondAmazonProductId,
+                entitlementId = "entitlement-2",
+            ),
         )
         val amazonKeys = amazonRows.map { key(GameSource.AMAZON, it.productId) }.toSet()
         val amazonDao = mockk<AmazonGameDao>()
         coEvery { amazonDao.getAllAsList() } returns amazonRows
-        val amazonLedger = ledger(GameSource.AMAZON, mapOf("1" to "entitlement-1", "2" to "entitlement-2"))
+        val amazonLedger = ledger(
+            GameSource.AMAZON,
+            mapOf(
+                amazonProductId to "entitlement-1",
+                secondAmazonProductId to "entitlement-2",
+            ),
+        )
         val amazonHistory = batchHistory()
         val amazonState = mockk<AmazonOwnedCopyRuntimeState>()
         coEvery { amazonState.readBatch(amazonRows, scope, 0L) } returns AmazonRuntimeBatchResult(
@@ -1638,7 +1705,15 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(amazonKeys, amazonResults.keys)
         amazonResults.forEach { (copyKey, result) ->
             val runtime = available(result)
-            assertEquals("entitlement-${copyKey.stableSourceId}", (runtime.reference as SourceOwnedCopyReference.Amazon).entitlementId)
+            val expectedEntitlement = if (copyKey.stableSourceId == amazonProductId) {
+                "entitlement-1"
+            } else {
+                "entitlement-2"
+            }
+            assertEquals(
+                expectedEntitlement,
+                (runtime.reference as SourceOwnedCopyReference.Amazon).entitlementId,
+            )
         }
         coVerify(exactly = 1) { amazonDao.getAllAsList() }
         coVerify(exactly = 2) { amazonLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.AMAZON, 0L) }
@@ -1758,9 +1833,17 @@ class OwnedCopyRuntimeAdapterTest {
             epicLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.EPIC, 0L)
         }
 
-        val amazonKey = key(GameSource.AMAZON, "product")
-        val amazonGame = AmazonGame(appId = 3, productId = "product", title = "Amazon")
-        val amazonLedger = ledger(GameSource.AMAZON, mapOf("product" to "entitlement"))
+        val amazonKey = key(GameSource.AMAZON, amazonProductId)
+        val amazonGame = AmazonGame(
+            appId = 3,
+            productId = amazonProductId,
+            entitlementId = "entitlement",
+            title = "Amazon",
+        )
+        val amazonLedger = ledger(
+            GameSource.AMAZON,
+            mapOf(amazonProductId to "entitlement"),
+        )
         val amazonState = mockk<AmazonOwnedCopyRuntimeState>()
         coEvery { amazonState.readBatch(listOf(amazonGame), scope, 0L) } returns
             AmazonRuntimeBatchResult(
@@ -1835,18 +1918,21 @@ class OwnedCopyRuntimeAdapterTest {
             ledgerDao.replaceCompletedSnapshot(
                 accountScope = scope.value,
                 source = GameSource.AMAZON,
-                stableSourceIds = listOf("product"),
+                stableSourceIds = listOf(amazonProductId),
                 completedAt = 1L,
                 lifecycleGeneration = 4L,
-                resolvedSourceIds = mapOf("product" to "entitlement"),
+                resolvedSourceIds = mapOf(amazonProductId to "entitlement"),
             )
             val ledger = ledgerDao.getCompletedSnapshotForLifecycle(
                 accountScope = scope.value,
                 source = GameSource.AMAZON,
                 lifecycleGeneration = 4L,
             )
-            assertEquals(listOf("product"), ledger?.stableSourceIds)
-            assertEquals(mapOf("product" to "entitlement"), ledger?.resolvedSourceIds)
+            assertEquals(listOf(amazonProductId), ledger?.stableSourceIds)
+            assertEquals(
+                mapOf(amazonProductId to "entitlement"),
+                ledger?.resolvedSourceIds,
+            )
         } finally {
             databaseExecutor.submit {}.get()
             database.close()
@@ -2176,8 +2262,27 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
+    fun registryHidesMalformedLegacyProviderIdsWithoutCallingAdapters() = runTest {
+        listOf(
+            GameSource.GOG to "007",
+            GameSource.AMAZON to "11111111-1111-1111-1111-111111111111",
+        ).forEach { (source, stableSourceId) ->
+            val malformedKey = key(source, stableSourceId)
+            val fixture = identityRegistry(source, OwnedCopyRuntimeResult.Hidden)
+
+            assertSame(OwnedCopyRuntimeResult.Hidden, fixture.registry.resolve(malformedKey))
+            assertEquals(0, fixture.selected.pointCalls)
+            assertEquals(
+                mapOf(malformedKey to OwnedCopyRuntimeResult.Hidden),
+                fixture.registry.resolveAll(source, setOf(malformedKey)),
+            )
+            assertEquals(0, fixture.selected.batchCalls)
+        }
+    }
+
+    @Test
     fun registryAllowsNullExecutableOnlyForExactUnbridgeableGogProviderIds() = runTest {
-        listOf("0", "-7", "+7", "007", "2147483648", "not-decimal").forEach { gameId ->
+        listOf("0", "-7", "+7", "007", "not-decimal").forEach { gameId ->
             val gogKey = key(GameSource.GOG, gameId)
             val fixture = identityRegistry(
                 GameSource.GOG,
@@ -2188,8 +2293,21 @@ class OwnedCopyRuntimeAdapterTest {
                 ),
             )
 
-            assertTrue(fixture.registry.resolve(gogKey) is OwnedCopyRuntimeResult.Available)
+            assertSame(OwnedCopyRuntimeResult.Hidden, fixture.registry.resolve(gogKey))
+            assertEquals(0, fixture.selected.pointCalls)
         }
+
+        val unbridgeableGog = key(GameSource.GOG, "2147483648")
+        val unbridgeableFixture = identityRegistry(
+            GameSource.GOG,
+            runtimeResult(
+                unbridgeableGog,
+                SourceOwnedCopyReference.Gog(unbridgeableGog, "2147483648"),
+                libraryItem = null,
+            ),
+        )
+        assertTrue(unbridgeableFixture.registry.resolve(unbridgeableGog) is OwnedCopyRuntimeResult.Available)
+        assertEquals(1, unbridgeableFixture.selected.pointCalls)
 
         val bridgeableGog = key(GameSource.GOG, "123")
         assertSuspendThrows(IllegalStateException::class.java) {
@@ -3471,17 +3589,30 @@ class OwnedCopyRuntimeAdapterTest {
 
     @Test
     fun amazonTypedBatchMapperFailureIsSourceReadFailedForFreshKey() = runTest {
-        val healthyKey = key(GameSource.AMAZON, "healthy")
-        val failedKey = key(GameSource.AMAZON, "malformed")
+        val healthyKey = key(GameSource.AMAZON, amazonProductId)
+        val failedKey = key(GameSource.AMAZON, secondAmazonProductId)
         val rows = listOf(
-            AmazonGame(appId = 1, productId = "healthy", title = "Available"),
-            AmazonGame(appId = 2, productId = "malformed", title = "Failed"),
+            AmazonGame(
+                appId = 1,
+                productId = amazonProductId,
+                entitlementId = "entitlement-a",
+                title = "Available",
+            ),
+            AmazonGame(
+                appId = 2,
+                productId = secondAmazonProductId,
+                entitlementId = "entitlement-b",
+                title = "Failed",
+            ),
         )
         val dao = mockk<AmazonGameDao>()
         coEvery { dao.getAllAsList() } returns rows
         val ledger = ledger(
             GameSource.AMAZON,
-            mapOf("healthy" to "entitlement-a", "malformed" to "entitlement-b"),
+            mapOf(
+                amazonProductId to "entitlement-a",
+                secondAmazonProductId to "entitlement-b",
+            ),
         )
         val runtimeState = mockk<AmazonOwnedCopyRuntimeState>()
         coEvery { runtimeState.readBatch(rows, scope, 0L) } returns AmazonRuntimeBatchResult(
@@ -3595,19 +3726,37 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(5, (epicPoint.reference as SourceOwnedCopyReference.Epic).localRowId)
         assertEquals(epicPoint, epicBatch)
 
-        val amazonKey = key(GameSource.AMAZON, "product")
+        val amazonKey = key(GameSource.AMAZON, amazonProductId)
         val amazonRows = listOf(
-            AmazonGame(appId = 1, productId = "product", isInstalled = false),
-            AmazonGame(appId = 3, productId = "product", isInstalled = true),
-            AmazonGame(appId = 2, productId = "product", isInstalled = true),
+            AmazonGame(
+                appId = 1,
+                productId = amazonProductId,
+                entitlementId = "entitlement",
+                isInstalled = false,
+            ),
+            AmazonGame(
+                appId = 3,
+                productId = amazonProductId,
+                entitlementId = "entitlement",
+                isInstalled = true,
+            ),
+            AmazonGame(
+                appId = 2,
+                productId = amazonProductId,
+                entitlementId = "entitlement",
+                isInstalled = true,
+            ),
         )
         val preferredAmazon = amazonRows.last()
         val amazonDao = mockk<AmazonGameDao>()
-        coEvery { amazonDao.getByProductId("product") } returns preferredAmazon
+        coEvery { amazonDao.getByProductId(amazonProductId) } returns preferredAmazon
         coEvery { amazonDao.getByAppId(2) } returns preferredAmazon
         coEvery { amazonDao.getAllAsList() } returns amazonRows
         every { amazonDao.getAll() } returns emptyFlow()
-        val amazonLedger = ledger(GameSource.AMAZON, mapOf("product" to "entitlement"))
+        val amazonLedger = ledger(
+            GameSource.AMAZON,
+            mapOf(amazonProductId to "entitlement"),
+        )
         val amazonSource = AmazonOwnedCopySourceAdapter(
             amazonDao,
             scopes(GameSource.AMAZON),
@@ -5004,7 +5153,7 @@ class OwnedCopyRuntimeAdapterTest {
             GameSource.EPIC,
             EpicStableSourceId.encode("namespace", "catalog"),
         )
-        val amazon = key(GameSource.AMAZON, "product")
+        val amazon = key(GameSource.AMAZON, amazonProductId)
         val custom = key(GameSource.CUSTOM_GAME, "5")
         return listOf(
             ExactIdentityCase(
@@ -5047,7 +5196,7 @@ class OwnedCopyRuntimeAdapterTest {
                 validReference = SourceOwnedCopyReference.Amazon(
                     amazon,
                     localRowId = 8,
-                    productId = "product",
+                    productId = amazonProductId,
                     entitlementId = "entitlement",
                 ),
                 wrongReference = SourceOwnedCopyReference.Amazon(

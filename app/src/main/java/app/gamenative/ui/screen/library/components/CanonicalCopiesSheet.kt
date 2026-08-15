@@ -14,6 +14,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -21,6 +26,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -34,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -261,8 +269,12 @@ private fun CanonicalCopyRow(
             }
 
             if (copy.capabilities.isNotEmpty()) {
+                val sortedOperations = copy.capabilities.sortedBy(::operationRank)
+                val regularOperations = sortedOperations.filterNot(COMPACT_OPERATIONS::contains)
+                val compactOperations = sortedOperations.filter(COMPACT_OPERATIONS::contains)
+
                 HorizontalDivider()
-                copy.capabilities.sortedBy(::operationRank).forEach { operation ->
+                regularOperations.forEach { operation ->
                     Button(
                         onClick = { onOperation(copy, operation, rememberChoice) },
                         enabled = !actionInProgress && !unavailable,
@@ -271,6 +283,30 @@ private fun CanonicalCopyRow(
                             .testTag("copy-operation:${copy.source.name}:${operation.name}"),
                     ) {
                         Text(operationLabel(operation, copy))
+                    }
+                }
+                if (compactOperations.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        compactOperations.forEach { operation ->
+                            val label = operationLabel(operation, copy)
+                            IconButton(
+                                onClick = { onOperation(copy, operation, rememberChoice) },
+                                enabled = !actionInProgress && !unavailable,
+                                modifier = Modifier
+                                    .testTag(
+                                        "copy-operation:${copy.source.name}:${operation.name}",
+                                    )
+                                    .semantics { contentDescription = label },
+                            ) {
+                                Icon(
+                                    imageVector = compactOperationIcon(operation),
+                                    contentDescription = null,
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -400,6 +436,21 @@ private fun operationLabel(
         OwnedCopyOperation.OPEN_SOURCE_DETAILS -> R.string.canonical_open_source_details
     },
 )
+
+private val COMPACT_OPERATIONS = setOf(
+    OwnedCopyOperation.INSTALL,
+    OwnedCopyOperation.EXPORT_SAVES,
+    OwnedCopyOperation.IMPORT_SAVES,
+    OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+)
+
+private fun compactOperationIcon(operation: OwnedCopyOperation): ImageVector = when (operation) {
+    OwnedCopyOperation.INSTALL -> Icons.Default.CloudDownload
+    OwnedCopyOperation.EXPORT_SAVES -> Icons.Default.ArrowUpward
+    OwnedCopyOperation.IMPORT_SAVES -> Icons.Default.ArrowDownward
+    OwnedCopyOperation.OPEN_SOURCE_DETAILS -> Icons.AutoMirrored.Filled.OpenInNew
+    else -> error("Operation does not have a compact icon")
+}
 
 private fun operationRank(operation: OwnedCopyOperation): Int = when (operation) {
     OwnedCopyOperation.PLAY -> 0

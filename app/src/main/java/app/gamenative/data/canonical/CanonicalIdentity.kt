@@ -43,6 +43,29 @@ data class OwnedCopyKey(
 ) {
     init {
         require(stableSourceId.isNotBlank())
+        if (source == GameSource.GOG || source == GameSource.AMAZON) {
+            require(StableSourceIdValidation.isValid(source, stableSourceId)) {
+                "Malformed ${source.name} stable source ID"
+            }
+        }
+    }
+
+    companion object {
+        fun createOrNull(
+            accountScope: AccountScope,
+            source: GameSource,
+            stableSourceId: String,
+        ): OwnedCopyKey? = runCatching {
+            OwnedCopyKey(accountScope, source, stableSourceId)
+        }.getOrNull()
+
+        fun fromPersistedOrNull(
+            accountScope: String,
+            source: GameSource,
+            stableSourceId: String,
+        ): OwnedCopyKey? = runCatching {
+            OwnedCopyKey(AccountScope.parse(accountScope), source, stableSourceId)
+        }.getOrNull()
     }
 }
 
