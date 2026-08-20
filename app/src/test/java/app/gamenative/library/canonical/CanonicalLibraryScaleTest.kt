@@ -484,7 +484,8 @@ class CanonicalLibraryScaleTest {
                 namespace = "private-namespace-$gameNumber-qzx",
                 catalogId = "private-catalog-$gameNumber-qzx",
             )
-            GameSource.AMAZON -> "private-product-$gameNumber-qzx"
+            GameSource.AMAZON ->
+                "amzn1.adg.product.00000000-0000-0000-0000-${gameNumber.toString().padStart(12, '0')}"
             GameSource.CUSTOM_GAME -> (3_000_000 + gameNumber).toString()
         }
 

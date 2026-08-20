@@ -57,6 +57,10 @@ class OwnedCopySourceAdapterTest {
     private lateinit var testRoot: File
     private val scope = AccountScope.parse("a".repeat(64))
     private val otherScope = AccountScope.parse("b".repeat(64))
+    private val amazonProductA =
+        "amzn1.adg.product.11111111-1111-1111-1111-111111111111"
+    private val amazonProductB =
+        "amzn1.adg.product.22222222-2222-2222-2222-222222222222"
 
     @Before
     fun setUp() {
@@ -165,9 +169,9 @@ class OwnedCopySourceAdapterTest {
     fun gogKeepsProviderIdsAndQualifiesGenres() = runTest {
         val dao = mockk<GOGGameDao>()
         val games = listOf(
-            GOGGame(id = "z-id", title = "Zulu"),
+            GOGGame(id = "2", title = "Zulu"),
             GOGGame(
-                id = "gog-id",
+                id = "1",
                 title = "Game",
                 developer = "Studio",
                 releaseDate = "2023-04-01",
@@ -176,22 +180,22 @@ class OwnedCopySourceAdapterTest {
             ),
         )
         coEvery { dao.getAllAsList() } returns games
-        coEvery { dao.getById("gog-id") } returns games[1]
+        coEvery { dao.getById("1") } returns games[1]
         every { dao.getAll() } returns flowOf(games, games)
         val adapter = GogOwnedCopySourceAdapter(
             dao,
             scopes(GameSource.GOG),
-            completedLedger(GameSource.GOG, "gog-id", "z-id"),
+            completedLedger(GameSource.GOG, "1", "2"),
         )
 
         val batch = adapter.snapshot()
 
-        assertEquals(listOf("gog-id", "z-id"), batch.copies.map { it.key.stableSourceId })
+        assertEquals(listOf("1", "2"), batch.copies.map { it.key.stableSourceId })
         val projected = batch.copies.first()
         assertEquals(setOf("gog:action", "gog:role playing"), projected.genreKeys)
         assertEquals(CanonicalAppType.APPLICATION, projected.appType)
         assertEquals(
-            SourceOwnedCopyReference.Gog(projected.key, "gog-id"),
+            SourceOwnedCopyReference.Gog(projected.key, "1"),
             adapter.resolve(projected.key),
         )
         assertEquals(2, adapter.invalidations().take(2).toList().size)
@@ -345,10 +349,10 @@ class OwnedCopySourceAdapterTest {
     fun amazonUsesProductIdAndKeepsEntitlementOnlyInReference() = runTest {
         val dao = mockk<AmazonGameDao>()
         val games = listOf(
-            AmazonGame(appId = 8, productId = "z-product", title = "Zulu"),
+            AmazonGame(appId = 8, productId = amazonProductB, title = "Zulu"),
             AmazonGame(
                 appId = 9,
-                productId = "product-id",
+                productId = amazonProductA,
                 entitlementId = "stale-account-entitlement",
                 title = "Amazon Game",
                 developer = "Studio",
@@ -356,25 +360,25 @@ class OwnedCopySourceAdapterTest {
             ),
         )
         coEvery { dao.getAllAsList() } returns games
-        coEvery { dao.getByProductId("product-id") } returns games[1]
+        coEvery { dao.getByProductId(amazonProductA) } returns games[1]
         every { dao.getAll() } returns flowOf(games, games)
         val adapter = AmazonOwnedCopySourceAdapter(
             dao,
             scopes(GameSource.AMAZON),
-            completedLedger(GameSource.AMAZON, "product-id", "z-product"),
+            completedLedger(GameSource.AMAZON, amazonProductA, amazonProductB),
         )
 
         val batch = adapter.snapshot()
 
-        assertEquals(listOf("product-id", "z-product"), batch.copies.map { it.key.stableSourceId })
+        assertEquals(listOf(amazonProductA, amazonProductB), batch.copies.map { it.key.stableSourceId })
         val projected = batch.copies.first()
         assertEquals(CanonicalAppType.GAME, projected.appType)
-        assertEquals("product-id", projected.key.stableSourceId)
+        assertEquals(amazonProductA, projected.key.stableSourceId)
         assertEquals(
             SourceOwnedCopyReference.Amazon(
                 key = projected.key,
                 localRowId = 9,
-                productId = "product-id",
+                productId = amazonProductA,
                 entitlementId = "entitlement-id",
             ),
             adapter.resolve(projected.key),
@@ -404,17 +408,17 @@ class OwnedCopySourceAdapterTest {
         assertEquals(5, (epic.resolve(epicCopy.key) as SourceOwnedCopyReference.Epic).localRowId)
 
         val amazonRows = listOf(
-            AmazonGame(appId = 1, productId = "product-id", title = "Uninstalled", isInstalled = false),
-            AmazonGame(appId = 3, productId = "product-id", title = "Installed Three", isInstalled = true),
-            AmazonGame(appId = 2, productId = "product-id", title = "Installed Two", isInstalled = true),
+            AmazonGame(appId = 1, productId = amazonProductA, title = "Uninstalled", isInstalled = false),
+            AmazonGame(appId = 3, productId = amazonProductA, title = "Installed Three", isInstalled = true),
+            AmazonGame(appId = 2, productId = amazonProductA, title = "Installed Two", isInstalled = true),
         )
         val amazonDao = mockk<AmazonGameDao>()
         coEvery { amazonDao.getAllAsList() } returns amazonRows
-        coEvery { amazonDao.getByProductId("product-id") } returns amazonRows.last()
+        coEvery { amazonDao.getByProductId(amazonProductA) } returns amazonRows.last()
         val amazon = AmazonOwnedCopySourceAdapter(
             amazonDao,
             scopes(GameSource.AMAZON),
-            completedLedger(GameSource.AMAZON, "product-id"),
+            completedLedger(GameSource.AMAZON, amazonProductA),
         )
 
         val amazonCopy = amazon.snapshot().copies.single()
@@ -618,7 +622,7 @@ class OwnedCopySourceAdapterTest {
             GogOwnedCopySourceAdapter(
                 gogDao,
                 scopes(GameSource.GOG),
-                completedLedger(GameSource.GOG, "owned"),
+                completedLedger(GameSource.GOG, "1"),
             ).snapshot(),
             EpicOwnedCopySourceAdapter(
                 epicDao,
@@ -628,7 +632,7 @@ class OwnedCopySourceAdapterTest {
             AmazonOwnedCopySourceAdapter(
                 amazonDao,
                 scopes(GameSource.AMAZON),
-                completedLedger(GameSource.AMAZON, "owned"),
+                completedLedger(GameSource.AMAZON, amazonProductA),
             ).snapshot(),
         )
 
@@ -658,7 +662,7 @@ class OwnedCopySourceAdapterTest {
         )
         assertNull(
             GogOwnedCopySourceAdapter(gogDao, scopes(GameSource.GOG), emptyLedger()).resolve(
-                OwnedCopyKey(otherScope, GameSource.GOG, "gog-id"),
+                OwnedCopyKey(otherScope, GameSource.GOG, "1"),
             ),
         )
         assertNull(
@@ -668,7 +672,7 @@ class OwnedCopySourceAdapterTest {
         )
         assertNull(
             AmazonOwnedCopySourceAdapter(amazonDao, scopes(GameSource.AMAZON), emptyLedger()).resolve(
-                OwnedCopyKey(otherScope, GameSource.AMAZON, "product"),
+                OwnedCopyKey(otherScope, GameSource.AMAZON, amazonProductA),
             ),
         )
         assertNull(
@@ -683,12 +687,12 @@ class OwnedCopySourceAdapterTest {
         )
         assertNull(
             GogOwnedCopySourceAdapter(gogDao, scopes(GameSource.GOG), emptyLedger()).resolve(
-                OwnedCopyKey(scope, GameSource.EPIC, "gog-id"),
+                OwnedCopyKey(scope, GameSource.EPIC, "1"),
             ),
         )
         assertNull(
             EpicOwnedCopySourceAdapter(epicDao, scopes(GameSource.EPIC), emptyLedger()).resolve(
-                OwnedCopyKey(scope, GameSource.AMAZON, EpicStableSourceId.encode("ns", "catalog")),
+                OwnedCopyKey(scope, GameSource.AMAZON, amazonProductA),
             ),
         )
         assertNull(
@@ -745,7 +749,7 @@ class OwnedCopySourceAdapterTest {
             GogOwnedCopySourceAdapter(
                 gogDao,
                 scopes(GameSource.GOG),
-                completedLedger(GameSource.GOG, "owned"),
+                completedLedger(GameSource.GOG, "1"),
             ).snapshot(),
             EpicOwnedCopySourceAdapter(
                 epicDao,
@@ -755,7 +759,7 @@ class OwnedCopySourceAdapterTest {
             AmazonOwnedCopySourceAdapter(
                 amazonDao,
                 scopes(GameSource.AMAZON),
-                completedLedger(GameSource.AMAZON, "owned"),
+                completedLedger(GameSource.AMAZON, amazonProductA),
             ).snapshot(),
         )
 
@@ -765,6 +769,39 @@ class OwnedCopySourceAdapterTest {
             assertEquals(SnapshotCompleteness.PARTIAL, it.completeness)
             assertTrue(it.copies.isEmpty())
         }
+    }
+
+    @Test
+    fun malformedPersistedProviderIdsAreOmittedWithoutHidingValidSiblings() = runTest {
+        val gogDao = mockk<GOGGameDao>()
+        coEvery { gogDao.getAllAsList() } returns listOf(GOGGame(id = "1", title = "GOG"))
+        val amazonDao = mockk<AmazonGameDao>()
+        coEvery { amazonDao.getAllAsList() } returns listOf(
+            AmazonGame(productId = amazonProductA, title = "Amazon"),
+        )
+
+        val gogBatch = GogOwnedCopySourceAdapter(
+            gogDao,
+            scopes(GameSource.GOG),
+            completedLedger(GameSource.GOG, "01", "1"),
+        ).snapshot()
+        val amazonBatch = AmazonOwnedCopySourceAdapter(
+            amazonDao,
+            scopes(GameSource.AMAZON),
+            completedLedger(
+                GameSource.AMAZON,
+                "11111111-1111-1111-1111-111111111111",
+                amazonProductA,
+            ),
+        ).snapshot()
+
+        listOf(gogBatch, amazonBatch).forEach { batch ->
+            assertEquals(SnapshotCompleteness.PARTIAL, batch.completeness)
+            assertEquals(SnapshotReason.MALFORMED_SOURCE_ID, batch.reason)
+            assertEquals(1, batch.copies.size)
+        }
+        assertEquals("1", gogBatch.copies.single().key.stableSourceId)
+        assertEquals(amazonProductA, amazonBatch.copies.single().key.stableSourceId)
     }
 
     @Test
@@ -861,26 +898,26 @@ class OwnedCopySourceAdapterTest {
     fun ownedLedgerMissingRowIsPartialAndNeverIncludesAnotherAccountsRows() = runTest {
         val dao = mockk<GOGGameDao>()
         coEvery { dao.getAllAsList() } returns listOf(
-            GOGGame(id = "owned-b", title = "Owned"),
+            GOGGame(id = "2", title = "Owned"),
             GOGGame(id = "stale-a", title = "Stale"),
         )
         val adapter = GogOwnedCopySourceAdapter(
             dao,
             scopes(GameSource.GOG),
-            completedLedger(GameSource.GOG, "owned-b", "missing-b"),
+            completedLedger(GameSource.GOG, "2", "3"),
         )
 
         val batch = adapter.snapshot()
 
         assertEquals(SnapshotCompleteness.PARTIAL, batch.completeness)
         assertEquals(SnapshotReason.MISSING_MATERIALIZED_ROW, batch.reason)
-        assertEquals(listOf("owned-b"), batch.copies.map { it.key.stableSourceId })
+        assertEquals(listOf("2"), batch.copies.map { it.key.stableSourceId })
     }
 
     @Test
     fun accountSwitchDuringSnapshotFailsClosedWithoutReturningOldAccountRows() = runTest {
         val dao = mockk<GOGGameDao>()
-        coEvery { dao.getAllAsList() } returns listOf(GOGGame(id = "owned-a", title = "Old account"))
+        coEvery { dao.getAllAsList() } returns listOf(GOGGame(id = "1", title = "Old account"))
         val scopeProvider = object : AccountScopeProvider {
             private var calls = 0
             override suspend fun current(source: GameSource): AccountScope = if (calls++ == 0) scope else otherScope
@@ -888,7 +925,7 @@ class OwnedCopySourceAdapterTest {
         val adapter = GogOwnedCopySourceAdapter(
             dao,
             scopeProvider,
-            completedLedger(GameSource.GOG, "owned-a"),
+            completedLedger(GameSource.GOG, "1"),
         )
 
         val batch = adapter.snapshot()
@@ -936,7 +973,7 @@ class OwnedCopySourceAdapterTest {
                     accountScope = scope.value,
                     source = source,
                     stableSourceId = it,
-                    resolvedSourceId = if (it == "product-id") "entitlement-id" else null,
+                    resolvedSourceId = if (it == amazonProductA) "entitlement-id" else null,
                 )
             }
         }

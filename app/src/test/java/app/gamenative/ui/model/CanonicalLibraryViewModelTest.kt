@@ -1141,7 +1141,7 @@ class CanonicalLibraryViewModelTest {
     @Test
     fun `mixed-source shared aggregate is excluded from cards tabs and pre-page counts`() {
         val mixedSteam = key(GameSource.STEAM, "shared-steam")
-        val mixedGog = key(GameSource.GOG, "owned-gog")
+        val mixedGog = key(GameSource.GOG, "1001")
         val mixed = card(
             canonicalId = canonicalId(41),
             name = "Mixed Shared",
@@ -1235,7 +1235,7 @@ class CanonicalLibraryViewModelTest {
         val soleInstalled = card(
             canonicalId = canonicalId(2),
             name = "Sole",
-            copyKeys = listOf(soleInstalledKey, key(GameSource.AMAZON, "103")),
+            copyKeys = listOf(soleInstalledKey, key(GameSource.AMAZON, amazonProductId)),
             installedKeys = setOf(soleInstalledKey),
             sizes = mapOf(soleInstalledKey to 1_000L),
             lastPlayed = mapOf(soleInstalledKey to 800L),
@@ -1903,7 +1903,7 @@ class CanonicalLibraryViewModelTest {
         val gogOnly = card(
             canonicalId = canonicalId(76),
             name = "GOG Stale All",
-            copyKeys = listOf(key(GameSource.GOG, "gog-stale")),
+            copyKeys = listOf(key(GameSource.GOG, "1002")),
         )
         val oldDone = CountDownLatch(1)
 
@@ -4087,7 +4087,12 @@ class CanonicalLibraryViewModelTest {
             GameSource.STEAM -> SourceOwnedCopyReference.Steam(key, key.stableSourceId.toIntOrNull() ?: 10)
             GameSource.GOG -> SourceOwnedCopyReference.Gog(key, key.stableSourceId)
             GameSource.EPIC -> SourceOwnedCopyReference.Epic(key, 31, "current-namespace", "current-catalog")
-            GameSource.AMAZON -> SourceOwnedCopyReference.Amazon(key, 41, "current-product", "current-entitlement")
+            GameSource.AMAZON -> SourceOwnedCopyReference.Amazon(
+                key,
+                41,
+                key.stableSourceId,
+                "current-entitlement",
+            )
             GameSource.CUSTOM_GAME -> SourceOwnedCopyReference.Custom(key, key.stableSourceId.toIntOrNull() ?: 50)
         }
         return OwnedCopyRuntime(
@@ -4208,6 +4213,8 @@ class CanonicalLibraryViewModelTest {
         val steamKey = OwnedCopyKey(accountScope, GameSource.STEAM, "10")
         val gogKey = OwnedCopyKey(accountScope, GameSource.GOG, "11")
         val epicKey = OwnedCopyKey(accountScope, GameSource.EPIC, "epic-current")
+        const val amazonProductId =
+            "amzn1.adg.product.11111111-1111-1111-1111-111111111111"
         val otherCanonicalId = CanonicalGameId.parse("99999999-9999-9999-9999-999999999999")
     }
 }

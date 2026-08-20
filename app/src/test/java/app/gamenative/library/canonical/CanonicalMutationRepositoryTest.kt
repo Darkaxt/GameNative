@@ -1590,11 +1590,21 @@ class CanonicalMutationRepositoryTest {
         featureKeys = features,
     )
 
-    private fun key(source: GameSource, stableSourceId: String): OwnedCopyKey = OwnedCopyKey(
-        accountScope = primaryScope,
-        source = source,
-        stableSourceId = stableSourceId,
-    )
+    private fun key(source: GameSource, stableSourceId: String): OwnedCopyKey {
+        val canonicalStableSourceId = when (source) {
+            GameSource.GOG -> stableSourceId.takeIf { value ->
+                value.toLongOrNull()?.let { it > 0L && it.toString() == value } == true
+            } ?: (stableSourceId.hashCode().toUInt().toLong() + 1L).toString()
+            GameSource.AMAZON -> stableSourceId.takeIf { it.startsWith("amzn1.adg.product.") }
+                ?: "amzn1.adg.product.${UUID.nameUUIDFromBytes(stableSourceId.toByteArray())}"
+            else -> stableSourceId
+        }
+        return OwnedCopyKey(
+            accountScope = primaryScope,
+            source = source,
+            stableSourceId = canonicalStableSourceId,
+        )
+    }
 
     private suspend fun app.gamenative.db.dao.StoreMatchDao.get(
         key: OwnedCopyKey,

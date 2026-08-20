@@ -166,7 +166,7 @@ class OwnedCopyRuntimeAdapterTest {
 
     @Test
     fun emptyAmazonOwnershipSnapshotSubmitsCompleteEmptyRuntimeSnapshot() = runTest {
-        val key = key(GameSource.AMAZON, "removed")
+        val key = key(GameSource.AMAZON, amazonProductId)
         val runtimeState = mockk<AmazonOwnedCopyRuntimeState>()
         coEvery {
             runtimeState.readBatch(emptyList(), scope, 0L)
@@ -845,7 +845,7 @@ class OwnedCopyRuntimeAdapterTest {
                 mockk(relaxed = true),
                 history,
                 mockk(relaxed = true),
-            ) to key(GameSource.AMAZON, "product"),
+            ) to key(GameSource.AMAZON, amazonProductId),
             CustomOwnedCopyRuntimeAdapter(
                 scopes(GameSource.CUSTOM_GAME, value = otherScope),
                 mockk(relaxed = true),
@@ -895,16 +895,16 @@ class OwnedCopyRuntimeAdapterTest {
 
     @Test
     fun entitlementLossIsHiddenWhileProvenMissingRowsAreTypedUnavailable() = runTest {
-        val lostKey = key(GameSource.GOG, "lost")
-        val changedKey = key(GameSource.GOG, "changed")
+        val lostKey = key(GameSource.GOG, "1")
+        val changedKey = key(GameSource.GOG, "2")
         val dao = mockk<GOGGameDao>()
-        val ledger = ledger(GameSource.GOG, mapOf("changed" to null))
+        val ledger = ledger(GameSource.GOG, mapOf("2" to null))
         val source = mockk<GogOwnedCopySourceAdapter>()
         every { source.invalidations() } returns emptyFlow()
-        coEvery { source.resolve(changedKey) } returns SourceOwnedCopyReference.Gog(changedKey, "changed")
+        coEvery { source.resolve(changedKey) } returns SourceOwnedCopyReference.Gog(changedKey, "2")
         val history = historyDao("GOG_changed", 1L)
         val state = mockk<GogOwnedCopyRuntimeState>(relaxed = true)
-        coEvery { dao.getById("changed") } returns null
+        coEvery { dao.getById("2") } returns null
         coEvery { dao.getAllAsList() } returns emptyList()
         val adapter = GogOwnedCopyRuntimeAdapter(
             dao,
@@ -979,8 +979,8 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
-    fun unsupportedGogProviderIdsStayVisibleWithoutBridgeOrCapabilities() = runTest {
-        val unsupportedIds = listOf("0", "-7", "+7", " 7", "7 ", "2147483648", "not-decimal")
+    fun canonicalUnbridgeableGogProviderIdStaysVisibleWithoutBridgeOrCapabilities() = runTest {
+        val unsupportedIds = listOf("2147483648")
         val keys = unsupportedIds.map { key(GameSource.GOG, it) }.toSet()
         val games = unsupportedIds.map { id ->
             GOGGame(
@@ -1035,11 +1035,11 @@ class OwnedCopyRuntimeAdapterTest {
 
     @Test
     fun runtimeNeverSwitchesToSiblingRowsWhenExactReferenceChanges() = runTest {
-        val key = key(GameSource.AMAZON, "product-a")
-        val sibling = AmazonGame(appId = 2, productId = "product-b", title = "Sibling")
+        val key = key(GameSource.AMAZON, amazonProductId)
+        val sibling = AmazonGame(appId = 2, productId = secondAmazonProductId, title = "Sibling")
         val dao = mockk<AmazonGameDao>()
-        val ledger = ledger(GameSource.AMAZON, mapOf("product-a" to "entitlement-a"))
-        val reference = SourceOwnedCopyReference.Amazon(key, 1, "product-a", "entitlement-a")
+        val ledger = ledger(GameSource.AMAZON, mapOf(amazonProductId to "entitlement-a"))
+        val reference = SourceOwnedCopyReference.Amazon(key, 1, amazonProductId, "entitlement-a")
         val source = sourceAdapter<AmazonOwnedCopySourceAdapter>(key, reference)
         coEvery { dao.getByAppId(1) } returns sibling
         val adapter = AmazonOwnedCopyRuntimeAdapter(
@@ -1053,7 +1053,7 @@ class OwnedCopyRuntimeAdapterTest {
         )
 
         assertUnavailable(adapter.resolve(key), key, CopyUnavailableReason.SOURCE_ROW_CHANGED)
-        coVerify(exactly = 0) { dao.getByProductId("product-b") }
+        coVerify(exactly = 0) { dao.getByProductId(secondAmazonProductId) }
     }
 
     @Test
@@ -1231,7 +1231,7 @@ class OwnedCopyRuntimeAdapterTest {
     fun ledgerBackedBatchesHideEntitlementLossBeforeSourceReads() = runTest {
         val gogKey = key(GameSource.GOG, "1")
         val epicKey = key(GameSource.EPIC, EpicStableSourceId.encode("ns", "catalog"))
-        val amazonKey = key(GameSource.AMAZON, "product")
+        val amazonKey = key(GameSource.AMAZON, amazonProductId)
         val gogDao = mockk<GOGGameDao>(relaxed = true)
         val epicDao = mockk<EpicGameDao>(relaxed = true)
         val amazonDao = mockk<AmazonGameDao>(relaxed = true)
@@ -1320,7 +1320,7 @@ class OwnedCopyRuntimeAdapterTest {
                 mockk(relaxed = true),
                 history,
                 mockk(relaxed = true),
-            ) to key(GameSource.AMAZON, "product"),
+            ) to key(GameSource.AMAZON, amazonProductId),
             CustomOwnedCopyRuntimeAdapter(
                 scopes(GameSource.CUSTOM_GAME, value = otherScope),
                 mockk(relaxed = true),
@@ -1411,7 +1411,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertSame(OwnedCopyRuntimeResult.Hidden, epic.resolve(epicKey))
         coVerify(exactly = 0) { epicDao.getById(any()) }
 
-        val amazonKey = key(GameSource.AMAZON, "product")
+        val amazonKey = key(GameSource.AMAZON, amazonProductId)
         val amazonDao = mockk<AmazonGameDao>(relaxed = true)
         val amazon = AmazonOwnedCopyRuntimeAdapter(
             amazonDao,
@@ -1484,7 +1484,12 @@ class OwnedCopyRuntimeAdapterTest {
         )
 
         adapters.forEach { adapter ->
-            val key = key(adapter.source, "77")
+            val stableSourceId = if (adapter.source == GameSource.AMAZON) {
+                amazonProductId
+            } else {
+                "77"
+            }
+            val key = key(adapter.source, stableSourceId)
             assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolve(key))
             assertSame(OwnedCopyRuntimeResult.Hidden, adapter.resolveAll(setOf(key)).getValue(key))
         }
@@ -1963,14 +1968,14 @@ class OwnedCopyRuntimeAdapterTest {
             steamDiagnostics.runtimeReadFailed(GameSource.STEAM, SensitiveFailure::class)
         }
 
-        val nestedKey = key(GameSource.GOG, "nested")
+        val nestedKey = key(GameSource.GOG, "123")
         val nestedSource = mockk<GogOwnedCopySourceAdapter>()
         every { nestedSource.invalidations() } returns emptyFlow()
         coEvery { nestedSource.resolve(nestedKey) } throws SensitiveFailure()
         val nestedFailureAfterSwitch = GogOwnedCopyRuntimeAdapter(
             mockk(relaxed = true),
             SequencedScopeProvider(listOf(scope, otherScope)),
-            ledger(GameSource.GOG, mapOf("nested" to null)),
+            ledger(GameSource.GOG, mapOf("123" to null)),
             readyLifecycle(GameSource.GOG),
             nestedSource,
             mockk(relaxed = true),
@@ -2027,16 +2032,16 @@ class OwnedCopyRuntimeAdapterTest {
 
     @Test
     fun amazonBlankResolvedEntitlementIsUnavailableOnlyWhilePresenceRemainsCurrent() = runTest {
-        val key = key(GameSource.AMAZON, "product")
+        val key = key(GameSource.AMAZON, amazonProductId)
         val presence = OwnedCopyPresenceEntity(
             accountScope = scope.value,
             source = GameSource.AMAZON,
-            stableSourceId = "product",
+            stableSourceId = amazonProductId,
             resolvedSourceId = null,
         )
         val ledger = mockk<OwnedCopyLedgerDao>()
         coEvery {
-            ledger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, "product", 0L)
+            ledger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, amazonProductId, 0L)
         } returns presence
         val adapter = AmazonOwnedCopyRuntimeAdapter(
             mockk(relaxed = true),
@@ -2054,12 +2059,12 @@ class OwnedCopyRuntimeAdapterTest {
             CopyUnavailableReason.SOURCE_ROW_CHANGED,
         )
         coVerify(exactly = 2) {
-            ledger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, "product", 0L)
+            ledger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, amazonProductId, 0L)
         }
 
         val removedLedger = mockk<OwnedCopyLedgerDao>()
         coEvery {
-            removedLedger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, "product", 0L)
+            removedLedger.getPresenceForLifecycle(scope.value, GameSource.AMAZON, amazonProductId, 0L)
         } returnsMany listOf(presence, null)
         val removed = AmazonOwnedCopyRuntimeAdapter(
             mockk(relaxed = true),
@@ -2072,7 +2077,7 @@ class OwnedCopyRuntimeAdapterTest {
         )
         assertSame(OwnedCopyRuntimeResult.Hidden, removed.resolve(key))
 
-        val batchLedger = ledger(GameSource.AMAZON, mapOf("product" to null))
+        val batchLedger = ledger(GameSource.AMAZON, mapOf(amazonProductId to null))
         val batchDao = mockk<AmazonGameDao>()
         coEvery { batchDao.getAllAsList() } returns emptyList()
         val batchState = mockk<AmazonOwnedCopyRuntimeState>()
@@ -2120,14 +2125,14 @@ class OwnedCopyRuntimeAdapterTest {
         )
         assertSame(OwnedCopyRuntimeResult.Hidden, gog.resolveAll(setOf(gogKey)).getValue(gogKey))
 
-        val amazonKey = key(GameSource.AMAZON, "product")
-        val amazonGame = AmazonGame(appId = 7, productId = "product", title = "Amazon")
+        val amazonKey = key(GameSource.AMAZON, amazonProductId)
+        val amazonGame = AmazonGame(appId = 7, productId = amazonProductId, title = "Amazon")
         val amazonLedger = mockk<OwnedCopyLedgerDao>()
         coEvery {
             amazonLedger.getCompletedSnapshotForLifecycle(scope.value, GameSource.AMAZON, 0L)
         } returnsMany listOf(
-            completedSnapshot(mapOf("product" to "entitlement-a")),
-            completedSnapshot(mapOf("product" to "entitlement-b")),
+            completedSnapshot(mapOf(amazonProductId to "entitlement-a")),
+            completedSnapshot(mapOf(amazonProductId to "entitlement-b")),
         )
         val amazonDao = mockk<AmazonGameDao>()
         coEvery { amazonDao.getAllAsList() } returns listOf(amazonGame)
@@ -2262,41 +2267,7 @@ class OwnedCopyRuntimeAdapterTest {
     }
 
     @Test
-    fun registryHidesMalformedLegacyProviderIdsWithoutCallingAdapters() = runTest {
-        listOf(
-            GameSource.GOG to "007",
-            GameSource.AMAZON to "11111111-1111-1111-1111-111111111111",
-        ).forEach { (source, stableSourceId) ->
-            val malformedKey = key(source, stableSourceId)
-            val fixture = identityRegistry(source, OwnedCopyRuntimeResult.Hidden)
-
-            assertSame(OwnedCopyRuntimeResult.Hidden, fixture.registry.resolve(malformedKey))
-            assertEquals(0, fixture.selected.pointCalls)
-            assertEquals(
-                mapOf(malformedKey to OwnedCopyRuntimeResult.Hidden),
-                fixture.registry.resolveAll(source, setOf(malformedKey)),
-            )
-            assertEquals(0, fixture.selected.batchCalls)
-        }
-    }
-
-    @Test
-    fun registryAllowsNullExecutableOnlyForExactUnbridgeableGogProviderIds() = runTest {
-        listOf("0", "-7", "+7", "007", "not-decimal").forEach { gameId ->
-            val gogKey = key(GameSource.GOG, gameId)
-            val fixture = identityRegistry(
-                GameSource.GOG,
-                runtimeResult(
-                    gogKey,
-                    SourceOwnedCopyReference.Gog(gogKey, gameId),
-                    libraryItem = null,
-                ),
-            )
-
-            assertSame(OwnedCopyRuntimeResult.Hidden, fixture.registry.resolve(gogKey))
-            assertEquals(0, fixture.selected.pointCalls)
-        }
-
+    fun registryAllowsNullExecutableOnlyForCanonicalUnbridgeableGogProviderId() = runTest {
         val unbridgeableGog = key(GameSource.GOG, "2147483648")
         val unbridgeableFixture = identityRegistry(
             GameSource.GOG,
@@ -3280,7 +3251,7 @@ class OwnedCopyRuntimeAdapterTest {
         val owner = UpdateObservationOwner(scope, 1L)
         val game = AmazonGame(
             appId = 1,
-            productId = "product",
+            productId = amazonProductId,
             versionId = "version",
             isInstalled = true,
         )
@@ -3297,14 +3268,14 @@ class OwnedCopyRuntimeAdapterTest {
     @Test
     fun amazonObservedRefreshUsesOneBatchGatewayCallAndPreservesPerKeyFailure() = runTest {
         val games = listOf(
-            AmazonGame(appId = 1, productId = "product-a", versionId = "v1", isInstalled = true),
-            AmazonGame(appId = 2, productId = "product-b", versionId = "v2", isInstalled = true),
+            AmazonGame(appId = 1, productId = amazonProductId, versionId = "v1", isInstalled = true),
+            AmazonGame(appId = 2, productId = secondAmazonProductId, versionId = "v2", isInstalled = true),
         )
         val owner = UpdateObservationOwner(scope, 1L)
         val gateway = mockk<AmazonOwnedCopyRuntimeGateway>()
         coEvery { gateway.refreshUpdates(owner, any()) } returns mapOf(
-            "product-a" to UpdateRefreshOutcome.Observed(updateAvailable = true),
-            "product-b" to UpdateRefreshOutcome.Failed(SensitiveFailure::class),
+            amazonProductId to UpdateRefreshOutcome.Observed(updateAvailable = true),
+            secondAmazonProductId to UpdateRefreshOutcome.Failed(SensitiveFailure::class),
         )
         val observed = AmazonObservedUpdateState(gateway, backgroundScope) { 0L }
 
@@ -3312,8 +3283,8 @@ class OwnedCopyRuntimeAdapterTest {
         runCurrent()
 
         val state = observed.snapshot(owner, games)
-        assertEquals(UpdateObservation.UPDATE_AVAILABLE, state["product-a"])
-        assertEquals(UpdateObservation.UNKNOWN, state["product-b"])
+        assertEquals(UpdateObservation.UPDATE_AVAILABLE, state[amazonProductId])
+        assertEquals(UpdateObservation.UNKNOWN, state[secondAmazonProductId])
         coVerify(exactly = 1) { gateway.refreshUpdates(owner, any()) }
     }
 
@@ -3321,7 +3292,7 @@ class OwnedCopyRuntimeAdapterTest {
     fun amazonObservedRefreshReportsTypedProviderFailure() = runTest {
         val game = AmazonGame(
             appId = 1,
-            productId = "product",
+            productId = amazonProductId,
             versionId = "version",
             isInstalled = true,
         )
@@ -3349,7 +3320,7 @@ class OwnedCopyRuntimeAdapterTest {
     fun amazonColdUpdateRefreshRunsOutsideAssemblyThenInvalidatesTrue() = runTest {
         val game = AmazonGame(
             appId = 1,
-            productId = "product",
+            productId = amazonProductId,
             versionId = "version-a",
             isInstalled = true,
         )
@@ -3452,7 +3423,7 @@ class OwnedCopyRuntimeAdapterTest {
     fun amazonPointAndBatchShareObservedStateAndVersionFingerprintConvergesBothDirections() = runTest {
         val versionA = AmazonGame(
             appId = 1,
-            productId = "product",
+            productId = amazonProductId,
             versionId = "version-a",
             isInstalled = true,
         )

@@ -16,6 +16,7 @@ import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.PluviaDatabase
+import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -374,7 +375,17 @@ class PreferredCopyRepositoryTest {
         accountScope: String,
         source: GameSource,
         stableSourceId: String,
-    ) = OwnedCopyKey(AccountScope.parse(accountScope), source, stableSourceId)
+    ): OwnedCopyKey {
+        val canonicalStableSourceId = when (source) {
+            GameSource.GOG -> stableSourceId.takeIf { value ->
+                value.toLongOrNull()?.let { it > 0L && it.toString() == value } == true
+            } ?: (stableSourceId.hashCode().toUInt().toLong() + 1L).toString()
+            GameSource.AMAZON -> stableSourceId.takeIf { it.startsWith("amzn1.adg.product.") }
+                ?: "amzn1.adg.product.${UUID.nameUUIDFromBytes(stableSourceId.toByteArray())}"
+            else -> stableSourceId
+        }
+        return OwnedCopyKey(AccountScope.parse(accountScope), source, canonicalStableSourceId)
+    }
 
     private fun match(
         key: OwnedCopyKey,

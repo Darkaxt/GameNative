@@ -254,6 +254,15 @@ class CanonicalLibraryScreenTest {
             composeRule.onAllNodesWithContentDescription(label).assertCountEquals(1)
             composeRule.onNodeWithText(label).assertDoesNotExist()
         }
+        val headerBounds = composeRule.onNodeWithTag("copy-header:GOG")
+            .fetchSemanticsNode().boundsInRoot
+        actions.forEach { operation ->
+            val actionBounds = composeRule
+                .onNodeWithTag("copy-operation:GOG:${operation.name}")
+                .fetchSemanticsNode().boundsInRoot
+            assertTrue(actionBounds.top >= headerBounds.top)
+            assertTrue(actionBounds.bottom <= headerBounds.bottom)
+        }
         actions.forEach { operation ->
             composeRule.onNodeWithTag("copy-operation:GOG:${operation.name}")
                 .assertIsDisplayed()
@@ -1206,7 +1215,7 @@ class CanonicalLibraryScreenTest {
         val accountScope = AccountScope("f".repeat(64))
         val canonicalId = CanonicalGameId.parse("11111111-1111-1111-1111-111111111111")
         val steamKey = OwnedCopyKey(accountScope, GameSource.STEAM, "raw-steam-id")
-        val gogKey = OwnedCopyKey(accountScope, GameSource.GOG, "raw-gog-id")
+        val gogKey = OwnedCopyKey(accountScope, GameSource.GOG, "42")
         val epicKey = OwnedCopyKey(accountScope, GameSource.EPIC, "raw-epic-id")
     }
 }

@@ -148,7 +148,7 @@ class CanonicalProjectionScaleTest {
         OwnedCopyKey(steamScope, GameSource.STEAM, appId.toString())
 
     private fun gogKey(appId: Int): OwnedCopyKey =
-        OwnedCopyKey(gogScope, GameSource.GOG, "gog-$appId")
+        OwnedCopyKey(gogScope, GameSource.GOG, appId.toString())
 
     private fun title(appId: Int): String = "Scale Game $appId"
 

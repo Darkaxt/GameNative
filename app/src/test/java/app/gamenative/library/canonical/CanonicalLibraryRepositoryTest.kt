@@ -27,6 +27,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import java.util.Collections
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -304,12 +305,12 @@ class CanonicalLibraryRepositoryTest {
     }
 
     @Test
-    fun unsupportedNonblankGogBridgeRemainsVisibleWithArtworkAndNoCapability() = runTest {
+    fun canonicalUnbridgeableGogIdRemainsVisibleWithArtworkAndNoCapability() = runTest {
         val game = game(ID_A, primarySource = GameSource.GOG)
         val relationship = match(
             game,
             GameSource.GOG,
-            "+123",
+            "2147483648",
             MatchConfidence.HIGH,
             evidenceName = "GOG Evidence",
         )
@@ -906,7 +907,13 @@ class CanonicalLibraryRepositoryTest {
     ) = StoreMatchEntity(
         accountScope = SCOPE.value,
         source = source,
-        stableSourceId = stableSourceId,
+        stableSourceId = if (
+            source == GameSource.AMAZON && !stableSourceId.startsWith("amzn1.adg.product.")
+        ) {
+            "amzn1.adg.product.${UUID.nameUUIDFromBytes(stableSourceId.toByteArray())}"
+        } else {
+            stableSourceId
+        },
         canonicalId = game.canonicalId,
         candidateSteamAppId = null,
         matchMethod = when (confidence) {

@@ -258,7 +258,7 @@ class CanonicalProjectionEngineTest {
             releaseYear = 2020,
         )
         val second = first.copy(
-            key = first.key.copy(stableSourceId = "b"),
+            key = first.key.copy(stableSourceId = "2"),
         )
         engine.rebuild(
             batches = listOf(batch(GameSource.GOG, copies = listOf(first, second))),
@@ -296,8 +296,14 @@ class CanonicalProjectionEngineTest {
 
         val matches = db.storeMatchDao().getAll().associateBy { it.stableSourceId }
         val steamCanonicalId = requireNotNull(matches["10"]).canonicalId
-        assertEquals(steamCanonicalId, requireNotNull(matches["a"]).canonicalId)
-        assertEquals(sharedCanonicalId, requireNotNull(matches["b"]).canonicalId)
+        assertEquals(
+            steamCanonicalId,
+            requireNotNull(matches[first.key.stableSourceId]).canonicalId,
+        )
+        assertEquals(
+            sharedCanonicalId,
+            requireNotNull(matches[second.key.stableSourceId]).canonicalId,
+        )
         assertEquals(2, db.canonicalGameDao().getAll().size)
         assertEquals(
             "Keep with shared canonical",
@@ -784,21 +790,31 @@ class CanonicalProjectionEngineTest {
         genreKeys: Set<String> = emptySet(),
         tagIds: Set<Int> = emptySet(),
         featureKeys: Set<String> = emptySet(),
-    ): OwnedCopyProjection = OwnedCopyProjection(
-        key = OwnedCopyKey(
-            accountScope = accountScope,
-            source = source,
-            stableSourceId = stableSourceId,
-        ),
-        displayName = displayName,
-        developer = developer,
-        releaseYear = releaseYear,
-        appType = CanonicalAppType.GAME,
-        directSteamAppId = directSteamAppId,
-        genreKeys = genreKeys,
-        tagIds = tagIds,
-        featureKeys = featureKeys,
-    )
+    ): OwnedCopyProjection {
+        val canonicalStableSourceId = when (source) {
+            GameSource.GOG -> stableSourceId.takeIf { value ->
+                value.toLongOrNull()?.let { it > 0L && it.toString() == value } == true
+            } ?: (stableSourceId.hashCode().toUInt().toLong() + 1L).toString()
+            GameSource.AMAZON -> stableSourceId.takeIf { it.startsWith("amzn1.adg.product.") }
+                ?: "amzn1.adg.product.${UUID.nameUUIDFromBytes(stableSourceId.toByteArray())}"
+            else -> stableSourceId
+        }
+        return OwnedCopyProjection(
+            key = OwnedCopyKey(
+                accountScope = accountScope,
+                source = source,
+                stableSourceId = canonicalStableSourceId,
+            ),
+            displayName = displayName,
+            developer = developer,
+            releaseYear = releaseYear,
+            appType = CanonicalAppType.GAME,
+            directSteamAppId = directSteamAppId,
+            genreKeys = genreKeys,
+            tagIds = tagIds,
+            featureKeys = featureKeys,
+        )
+    }
 
     private class SequentialCanonicalIdGenerator(
         start: Long = 1_000,

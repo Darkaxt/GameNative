@@ -204,6 +204,47 @@ class SteamMatchViewModelTest {
     }
 
     @Test
+    fun malformedPersistedProviderIdentityIsExcludedFromCoverageAndReview() = runTest(scheduler) {
+        val malformed = match(1, GameSource.GOG).copy(
+            stableSourceId = "gog-1",
+            confidence = MatchConfidence.REVIEW_REQUIRED,
+        )
+        aggregates.value = listOf(aggregate(game(1), malformed))
+        val viewModel = viewModel()
+        runCurrent()
+
+        assertEquals(SteamResolutionCoverage(), viewModel.state.value.coverage)
+
+        viewModel.openReviewMatches()
+
+        assertEquals(SteamMatchPickerState.Closed, viewModel.state.value.picker)
+    }
+
+    @Test
+    fun malformedPersistedProviderIdentityDoesNotBlockValidReviewSibling() = runTest(scheduler) {
+        val malformed = match(1, GameSource.GOG).copy(
+            stableSourceId = "gog-1",
+            confidence = MatchConfidence.REVIEW_REQUIRED,
+        )
+        val valid = match(2, GameSource.GOG).copy(
+            confidence = MatchConfidence.REVIEW_REQUIRED,
+        )
+        aggregates.value = listOf(
+            aggregate(game(1), malformed),
+            aggregate(game(2), valid),
+        )
+        val viewModel = viewModel()
+        runCurrent()
+
+        viewModel.openReviewMatches()
+
+        assertEquals(
+            SteamMatchPickerState.Empty(valid.expectedState()),
+            viewModel.state.value.picker,
+        )
+    }
+
+    @Test
     fun openingPickerPrefillsSourceTitleAndRetainsExactExpectedState() = runTest(scheduler) {
         val source = match(1, GameSource.GOG).copy(
             evidenceDisplayName = "Source title",
@@ -360,7 +401,11 @@ class SteamMatchViewModelTest {
     private fun match(index: Long, source: GameSource) = StoreMatchEntity(
         accountScope = ACCOUNT_SCOPE.value,
         source = source,
-        stableSourceId = "copy-$index",
+        stableSourceId = when (source) {
+            GameSource.GOG -> index.toString()
+            GameSource.AMAZON -> "amzn1.adg.product.${UUID(0, index)}"
+            else -> "copy-$index"
+        },
         canonicalId = UUID(0, index).toString(),
         candidateSteamAppId = null,
         matchMethod = MatchMethod.UNMATCHED,

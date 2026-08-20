@@ -16,6 +16,7 @@ import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.dao.CanonicalGameDao
 import app.gamenative.db.dao.StoreMatchDao
 import app.gamenative.library.canonical.source.OwnedCopyProjection
+import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -1078,14 +1079,24 @@ class CanonicalGameResolverTest {
         releaseYear: Int? = 2019,
         type: CanonicalAppType = CanonicalAppType.GAME,
         directSteamAppId: Int? = null,
-    ): OwnedCopyProjection = OwnedCopyProjection(
-        key = OwnedCopyKey(accountScope, source, stableSourceId),
-        displayName = displayName,
-        developer = developer,
-        releaseYear = releaseYear,
-        appType = type,
-        directSteamAppId = directSteamAppId,
-    )
+    ): OwnedCopyProjection {
+        val canonicalStableSourceId = when (source) {
+            GameSource.GOG -> stableSourceId.takeIf { value ->
+                value.toLongOrNull()?.let { it > 0L && it.toString() == value } == true
+            } ?: (stableSourceId.hashCode().toUInt().toLong() + 1L).toString()
+            GameSource.AMAZON -> stableSourceId.takeIf { it.startsWith("amzn1.adg.product.") }
+                ?: "amzn1.adg.product.${UUID.nameUUIDFromBytes(stableSourceId.toByteArray())}"
+            else -> stableSourceId
+        }
+        return OwnedCopyProjection(
+            key = OwnedCopyKey(accountScope, source, canonicalStableSourceId),
+            displayName = displayName,
+            developer = developer,
+            releaseYear = releaseYear,
+            appType = type,
+            directSteamAppId = directSteamAppId,
+        )
+    }
 
     private fun canonical(
         index: Int,

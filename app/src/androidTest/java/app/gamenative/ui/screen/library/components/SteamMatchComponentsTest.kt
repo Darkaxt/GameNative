@@ -141,7 +141,7 @@ class SteamMatchComponentsTest {
         key = OwnedCopyKey(
             accountScope = AccountScope.parse("a".repeat(64)),
             source = GameSource.GOG,
-            stableSourceId = "fixture",
+            stableSourceId = "1",
         ),
         canonicalId = "11111111-1111-1111-1111-111111111111",
         matchMethod = MatchMethod.MANUAL,

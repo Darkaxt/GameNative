@@ -3,7 +3,6 @@ package app.gamenative.ui.model
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.gamenative.data.GameSource
-import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -166,8 +165,7 @@ class SteamMatchViewModel @Inject constructor(
                 aggregate.matches.asSequence().map { match -> aggregate to match }
             }
             .filter { (_, match) ->
-                match.isPresent &&
-                    match.source != GameSource.STEAM &&
+                match.isEligibleNonSteamCopy() &&
                     match.confidence == MatchConfidence.REVIEW_REQUIRED
             }
             .sortedWith(
@@ -179,14 +177,17 @@ class SteamMatchViewModel @Inject constructor(
             )
             .firstOrNull()
             ?: return
-        openMatch(reviewTarget.second.key())
+        val key = reviewTarget.second.ownedCopyKeyOrNull() ?: return
+        openMatch(key)
     }
 
     fun openMatch(key: OwnedCopyKey) {
         val match = aggregates.value.asSequence()
             .flatMap { it.matches.asSequence() }
             .firstOrNull { candidate ->
-                candidate.isPresent && candidate.source != GameSource.STEAM && candidate.key() == key
+                candidate.isPresent &&
+                    candidate.source != GameSource.STEAM &&
+                    candidate.ownedCopyKeyOrNull() == key
             }
             ?: return
         val expected = match.expectedState()
@@ -266,7 +267,9 @@ class SteamMatchViewModel @Inject constructor(
         val steamAppId = (picker as? SteamMatchPickerState.Results)?.selectedSteamAppId
             ?: expected.candidateSteamAppId
             ?: aggregates.value.firstNotNullOfOrNull { aggregate ->
-                aggregate.takeIf { it.matches.any { match -> match.key() == expected.key } }
+                aggregate.takeIf { current ->
+                    current.matches.any { match -> match.ownedCopyKeyOrNull() == expected.key }
+                }
                     ?.game
                     ?.steamAppId
             }
@@ -329,41 +332,38 @@ class SteamMatchViewModel @Inject constructor(
     ): Boolean = projectionReady && publicLibraryGate.isEnabled() && current.hasEligibleCopy()
 
     private fun List<CanonicalLibraryAggregate>.hasEligibleCopy(): Boolean = any { aggregate ->
-        aggregate.matches.any { match -> match.isPresent && match.source != GameSource.STEAM }
+        aggregate.matches.any { match ->
+            match.isEligibleNonSteamCopy()
+        }
     }
 
     private fun List<CanonicalLibraryAggregate>.toCoverage(): SteamResolutionCoverage {
         val eligible = filter { aggregate ->
-            aggregate.matches.any { match -> match.isPresent && match.source != GameSource.STEAM }
+            aggregate.matches.any { match -> match.isEligibleNonSteamCopy() }
         }
         return SteamResolutionCoverage(
             resolved = eligible.count { aggregate -> aggregate.game.steamAppId?.let { it > 0 } == true },
             eligible = eligible.size,
             needsReview = eligible.count { aggregate ->
                 aggregate.matches.any { match ->
-                    match.isPresent &&
-                        match.source != GameSource.STEAM &&
+                    match.isEligibleNonSteamCopy() &&
                         match.confidence == MatchConfidence.REVIEW_REQUIRED
                 }
             },
             unmatched = eligible.count { aggregate ->
                 aggregate.game.steamAppId == null && aggregate.matches.any { match ->
-                    match.isPresent &&
-                        match.source != GameSource.STEAM &&
+                    match.isEligibleNonSteamCopy() &&
                         match.confidence == MatchConfidence.UNMATCHED
                 }
             },
         )
     }
 
-    private fun StoreMatchEntity.key() = OwnedCopyKey(
-        accountScope = AccountScope.parse(accountScope),
-        source = source,
-        stableSourceId = stableSourceId,
-    )
+    private fun StoreMatchEntity.isEligibleNonSteamCopy(): Boolean =
+        isPresent && source != GameSource.STEAM && ownedCopyKeyOrNull() != null
 
     private fun StoreMatchEntity.expectedState() = ExpectedMatchState(
-        key = key(),
+        key = checkNotNull(ownedCopyKeyOrNull()) { "Malformed persisted owned-copy identity" },
         canonicalId = canonicalId,
         matchMethod = matchMethod,
         confidence = confidence,

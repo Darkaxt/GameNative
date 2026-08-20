@@ -41,6 +41,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -201,6 +204,10 @@ private fun CanonicalCopyRow(
         else -> stringResource(R.string.not_installed)
     }
     var rememberChoice by remember(card.key, copy.key) { mutableStateOf(false) }
+    val sortedOperations = copy.capabilities.sortedBy(::operationRank)
+    val regularOperations = sortedOperations.filterNot(COMPACT_OPERATIONS::contains)
+    val compactOperations = sortedOperations.filter(COMPACT_OPERATIONS::contains)
+    val sourceDetailsFocusRequester = remember(copy.key) { FocusRequester() }
 
     Card(
         modifier = Modifier
@@ -219,7 +226,9 @@ private fun CanonicalCopyRow(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("copy-header:${copy.source.name}"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 GameSourceIcon(
@@ -241,14 +250,42 @@ private fun CanonicalCopyRow(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (isPreferred) {
+                        Text(
+                            text = stringResource(R.string.canonical_preferred_copy),
+                            modifier = Modifier.testTag("preferred-copy"),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
-                if (isPreferred) {
-                    Text(
-                        text = stringResource(R.string.canonical_preferred_copy),
-                        modifier = Modifier.testTag("preferred-copy"),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                if (compactOperations.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        compactOperations.forEach { operation ->
+                            val label = operationLabel(operation, copy)
+                            IconButton(
+                                onClick = { onOperation(copy, operation, rememberChoice) },
+                                enabled = !actionInProgress && !unavailable,
+                                modifier = Modifier
+                                    .testTag(
+                                        "copy-operation:${copy.source.name}:${operation.name}",
+                                    )
+                                    .semantics { contentDescription = label }
+                                    .then(
+                                        if (operation == OwnedCopyOperation.OPEN_SOURCE_DETAILS) {
+                                            Modifier.focusRequester(sourceDetailsFocusRequester)
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                            ) {
+                                Icon(
+                                    imageVector = compactOperationIcon(operation),
+                                    contentDescription = null,
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -269,10 +306,6 @@ private fun CanonicalCopyRow(
             }
 
             if (copy.capabilities.isNotEmpty()) {
-                val sortedOperations = copy.capabilities.sortedBy(::operationRank)
-                val regularOperations = sortedOperations.filterNot(COMPACT_OPERATIONS::contains)
-                val compactOperations = sortedOperations.filter(COMPACT_OPERATIONS::contains)
-
                 HorizontalDivider()
                 regularOperations.forEach { operation ->
                     Button(
@@ -280,33 +313,21 @@ private fun CanonicalCopyRow(
                         enabled = !actionInProgress && !unavailable,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("copy-operation:${copy.source.name}:${operation.name}"),
+                            .testTag("copy-operation:${copy.source.name}:${operation.name}")
+                            .then(
+                                if (
+                                    operation == OwnedCopyOperation.PLAY &&
+                                    OwnedCopyOperation.OPEN_SOURCE_DETAILS in compactOperations
+                                ) {
+                                    Modifier.focusProperties {
+                                        down = sourceDetailsFocusRequester
+                                    }
+                                } else {
+                                    Modifier
+                                },
+                            ),
                     ) {
                         Text(operationLabel(operation, copy))
-                    }
-                }
-                if (compactOperations.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        compactOperations.forEach { operation ->
-                            val label = operationLabel(operation, copy)
-                            IconButton(
-                                onClick = { onOperation(copy, operation, rememberChoice) },
-                                enabled = !actionInProgress && !unavailable,
-                                modifier = Modifier
-                                    .testTag(
-                                        "copy-operation:${copy.source.name}:${operation.name}",
-                                    )
-                                    .semantics { contentDescription = label },
-                            ) {
-                                Icon(
-                                    imageVector = compactOperationIcon(operation),
-                                    contentDescription = null,
-                                )
-                            }
-                        }
                     }
                 }
 

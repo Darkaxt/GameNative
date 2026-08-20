@@ -38,6 +38,8 @@ import org.junit.Test
 
 class OwnedCopyActionGuardTest {
     private val scope = AccountScope.parse("a".repeat(64))
+    private val amazonProductId =
+        "amzn1.adg.product.11111111-1111-1111-1111-111111111111"
 
     @Test
     fun everyCapturedTargetMutationThatRetainsKeyIdentityFailsWithoutSiblingFallback() = runTest {
@@ -204,11 +206,11 @@ class OwnedCopyActionGuardTest {
 
     @Test
     fun capabilityLossCoversInstalledDownloadAndUpdateStateMutations() = runTest {
-        val key = key(GameSource.AMAZON, "product")
+        val key = key(GameSource.AMAZON, amazonProductId)
         val reference = SourceOwnedCopyReference.Amazon(
             key,
             localRowId = 8,
-            productId = "product",
+            productId = amazonProductId,
             entitlementId = "entitlement",
         )
         val stateOperations = listOf(
@@ -363,8 +365,8 @@ class OwnedCopyActionGuardTest {
 
     @Test
     fun eachRevalidationResolvesTheExactKeyOnceAndNeverCallsSiblingAdapters() = runTest {
-        val key = key(GameSource.AMAZON, "product")
-        val reference = SourceOwnedCopyReference.Amazon(key, 8, "product", "entitlement")
+        val key = key(GameSource.AMAZON, amazonProductId)
+        val reference = SourceOwnedCopyReference.Amazon(key, 8, amazonProductId, "entitlement")
         val fixture = fixture(key)
         fixture.selected.handler = { requested ->
             assertEquals(key, requested)
@@ -576,7 +578,7 @@ class OwnedCopyActionGuardTest {
             GameSource.EPIC,
             EpicStableSourceId.encode("namespace", "catalog"),
         )
-        val amazon = key(GameSource.AMAZON, "product")
+        val amazon = key(GameSource.AMAZON, amazonProductId)
         return listOf(
             ReferenceMutation(
                 "Epic local row ID",
@@ -587,14 +589,14 @@ class OwnedCopyActionGuardTest {
             ReferenceMutation(
                 "Amazon local row ID",
                 amazon,
-                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
-                SourceOwnedCopyReference.Amazon(amazon, 9, "product", "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, amazonProductId, "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 9, amazonProductId, "entitlement"),
             ),
             ReferenceMutation(
                 "Amazon entitlement ID",
                 amazon,
-                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
-                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "other-entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, amazonProductId, "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, amazonProductId, "other-entitlement"),
             ),
         )
     }
@@ -606,7 +608,7 @@ class OwnedCopyActionGuardTest {
             GameSource.EPIC,
             EpicStableSourceId.encode("namespace", "catalog"),
         )
-        val amazon = key(GameSource.AMAZON, "product")
+        val amazon = key(GameSource.AMAZON, amazonProductId)
         val custom = key(GameSource.CUSTOM_GAME, "5")
         return listOf(
             ExactIdentityCase(
@@ -636,7 +638,7 @@ class OwnedCopyActionGuardTest {
             ExactIdentityCase(
                 "Amazon",
                 amazon,
-                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, amazonProductId, "entitlement"),
                 SourceOwnedCopyReference.Amazon(amazon, 8, "other-product", "entitlement"),
                 "AMAZON_8",
                 "AMAZON_9",

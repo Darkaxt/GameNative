@@ -1,7 +1,6 @@
 package app.gamenative.library.canonical.catalog
 
 import app.gamenative.data.GameSource
-import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource

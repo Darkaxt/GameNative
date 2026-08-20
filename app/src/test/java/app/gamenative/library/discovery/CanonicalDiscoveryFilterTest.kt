@@ -24,6 +24,7 @@ import app.gamenative.ui.enums.SortOption
 import app.gamenative.ui.model.CanonicalLibraryFilter
 import app.gamenative.utils.DeviceGameStatsService.DeviceGameStats
 import java.util.EnumSet
+import java.util.UUID
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -596,7 +597,15 @@ class CanonicalDiscoveryFilterTest {
     }
 
     private fun copy(source: GameSource, id: String, name: String): OwnedCopySummary {
-        val key = OwnedCopyKey(AccountScope.parse("a".repeat(64)), source, id)
+        val stableSourceId = when (source) {
+            GameSource.GOG -> id.takeIf { value ->
+                value.toLongOrNull()?.let { it > 0L && it.toString() == value } == true
+            } ?: (id.hashCode().toUInt().toLong() + 1L).toString()
+            GameSource.AMAZON -> id.takeIf { it.startsWith("amzn1.adg.product.") }
+                ?: "amzn1.adg.product.${UUID.nameUUIDFromBytes(id.toByteArray())}"
+            else -> id
+        }
+        val key = OwnedCopyKey(AccountScope.parse("a".repeat(64)), source, stableSourceId)
         return OwnedCopySummary(
             key = key,
             source = source,

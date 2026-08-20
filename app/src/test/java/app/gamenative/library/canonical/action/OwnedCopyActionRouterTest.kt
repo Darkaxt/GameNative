@@ -56,6 +56,10 @@ import org.robolectric.annotation.Config
 class OwnedCopyActionRouterTest {
     private val scope = AccountScope.parse("a".repeat(64))
     private val canonicalId = CanonicalGameId.parse("11111111-1111-1111-1111-111111111111")
+    private val amazonProductId =
+        "amzn1.adg.product.11111111-1111-1111-1111-111111111111"
+    private val otherAmazonProductId =
+        "amzn1.adg.product.22222222-2222-2222-2222-222222222222"
 
     @Test
     fun explicitSelectionWinsOverPreferredAndMostRecentAcrossThreeCopies() = runTest {
@@ -274,7 +278,7 @@ class OwnedCopyActionRouterTest {
     @Test
     fun chooserUsesFixedSourceOrderForDisplayWithoutSelecting() = runTest {
         val custom = key(GameSource.CUSTOM_GAME, "5")
-        val amazon = key(GameSource.AMAZON, "4")
+        val amazon = key(GameSource.AMAZON, amazonProductId)
         val steam = key(GameSource.STEAM, "1")
         val epic = key(GameSource.EPIC, "3")
         val gog = key(GameSource.GOG, "2")
@@ -1043,7 +1047,7 @@ class OwnedCopyActionRouterTest {
             GameSource.EPIC,
             EpicStableSourceId.encode("namespace", "catalog"),
         )
-        val amazon = key(GameSource.AMAZON, "product")
+        val amazon = key(GameSource.AMAZON, amazonProductId)
         val custom = key(GameSource.CUSTOM_GAME, "5")
         return listOf(
             ExactIdentityCase(
@@ -1073,8 +1077,8 @@ class OwnedCopyActionRouterTest {
             ExactIdentityCase(
                 "Amazon",
                 amazon,
-                SourceOwnedCopyReference.Amazon(amazon, 8, "product", "entitlement"),
-                SourceOwnedCopyReference.Amazon(amazon, 8, "other-product", "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, amazonProductId, "entitlement"),
+                SourceOwnedCopyReference.Amazon(amazon, 8, otherAmazonProductId, "entitlement"),
                 "AMAZON_8",
                 "AMAZON_9",
             ),

@@ -498,6 +498,44 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
+    fun `automatic scan ignores malformed persisted identity and keeps valid sibling eligible`() = runTest {
+        val canonical = canonical(1, steamAppId = null)
+        db.canonicalGameDao().insert(canonical)
+        seedMatch(
+            match(
+                key(GameSource.GOG, "malformed"),
+                canonical.canonicalId,
+                title = "Malformed Marker",
+                developer = "stronger studio",
+                year = 2020,
+            ).copy(stableSourceId = "01"),
+        )
+        seedMatch(
+            match(
+                key(GameSource.GOG, "valid"),
+                canonical.canonicalId,
+                title = "Valid Marker",
+                developer = "",
+                year = null,
+            ),
+        )
+        val queries = mutableListOf<String>()
+        val repository = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                queries += query
+                emptyList()
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(listOf("Valid Marker"), queries)
+        assertEquals(1, progress.total)
+        assertEquals(1, progress.completed)
+        assertEquals(1, progress.unmatched)
+    }
+
+    @Test
     fun `automatic scan serializes and paces provider work while isolating item failures`() = runTest {
         repeat(4) { index ->
             val canonical = canonical(index + 1L, steamAppId = null)
@@ -1299,11 +1337,21 @@ class SteamCatalogResolutionRepositoryTest {
         decisionRevision = match.matchedAt,
     )
 
-    private fun key(source: GameSource, stableSourceId: String) = OwnedCopyKey(
-        accountScope = scope,
-        source = source,
-        stableSourceId = stableSourceId,
-    )
+    private fun key(source: GameSource, stableSourceId: String): OwnedCopyKey {
+        val canonicalStableSourceId = when (source) {
+            GameSource.GOG -> stableSourceId.takeIf { value ->
+                value.toLongOrNull()?.let { it > 0L && it.toString() == value } == true
+            } ?: (stableSourceId.hashCode().toUInt().toLong() + 1L).toString()
+            GameSource.AMAZON -> stableSourceId.takeIf { it.startsWith("amzn1.adg.product.") }
+                ?: "amzn1.adg.product.${UUID.nameUUIDFromBytes(stableSourceId.toByteArray())}"
+            else -> stableSourceId
+        }
+        return OwnedCopyKey(
+            accountScope = scope,
+            source = source,
+            stableSourceId = canonicalStableSourceId,
+        )
+    }
 
     private fun epicRecord(
         stableSourceId: String,
