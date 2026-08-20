@@ -8,7 +8,7 @@
 
 **Tech Stack:** Kotlin, Jetpack Compose, Room, DataStore Preferences, Hilt, Kotlin coroutines/Flow, kotlinx.serialization, OkHttp, Coil, Media3, Timber, JUnit 4, Robolectric, MockWebServer, Compose UI tests, GitHub Actions
 
-> **Execution update — 2026-07-31:** Remaining user-visible delivery after commit `fedf889c` follows `docs/superpowers/plans/2026-07-31-steam-first-visible-delivery.md`. Its vertical-slice process and review/test budget supersede the stage-by-stage execution rule below; the approved safety and privacy contracts remain in force.
+> **Execution update — 2026-07-31:** Remaining user-visible delivery after commit `fedf889c` follows `docs/superpowers/plans/2026-07-31-steam-first-visible-delivery.md`. Its vertical-slice process and review/test budget supersede the stage-by-stage execution rule below; the approved safety and field-sensitive data-protection contracts remain in force.
 >
 > **Execution update — 2026-08-08:** After signed RC4, the highest-priority missing core is automatic/manual Steam catalog resolution followed by native Reviews and Discussions. Execute `docs/superpowers/plans/2026-08-08-steam-resolution-community-visible-core.md` against `docs/superpowers/specs/2026-08-08-steam-resolution-community-visible-core-design.md`; its 80/20 classification, per-deliverable cross-checks, and completion ledger supersede older remaining tasks. Unresolved work must retain a named target or explicit user-approved boundary.
 
@@ -83,7 +83,7 @@ Deliver:
 - Deterministic title/developer/year/type normalization.
 - Direct Steam identity, validated direct mappings, conservative exact matching, stored user decisions, and unmatched fallback.
 - Idempotent projection that runs beside the legacy library without changing cards or actions.
-- Index diagnostics containing counts and confidence categories, never game titles or account identifiers.
+- Index diagnostics containing counts, confidence categories, and bounded public game titles/AppIDs where useful, never account identifiers, credentials, entitlement associations, install paths, or private user-entered search text.
 
 Exit criterion: repeated projection produces stable identities and the legacy library remains unchanged.
 

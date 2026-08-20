@@ -383,7 +383,7 @@ class PcGamingWikiCurrentAvailabilityProviderTest {
 
     private fun assertSafeHeaders(request: RecordedRequest) {
         assertEquals(USER_AGENT, request.getHeader("User-Agent"))
-        assertEquals("no-store", request.getHeader("Cache-Control"))
+        assertNull(request.getHeader("Cache-Control"))
         assertEquals("application/json", request.getHeader("Accept"))
         assertNull(request.getHeader("Authorization"))
         assertNull(request.getHeader("Cookie"))

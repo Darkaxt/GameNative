@@ -27,23 +27,17 @@
 - Review-required, rejected, and unmatched relationships remain independent cards. Only `VERIFIED` and `HIGH` relationships share a grouped card.
 - Stage 1’s low Epic visibility and coordinator fallback-generation findings are closed before any public-card work.
 
-### Mandatory diagnostics/privacy contract
+### Mandatory diagnostics/data-protection contract
 
 Do not persist or export:
 
-- Tokens.
-- Account IDs.
-- SteamIDs.
-- Usernames.
-- Game titles.
-- Match-candidate titles.
-- Search text.
-- Install paths.
-- Full URLs.
-- Review bodies.
-- Discussion bodies.
+- Passwords, API keys, signing secrets, authentication headers, cookies, or tokens.
+- SteamIDs, usernames/profiles, account IDs/scopes, or personal/account associations.
+- Ownership/entitlement associations or raw `OwnedCopyKey` values.
+- Private user-entered search text.
+- Install paths or other personal filesystem locations.
 
-Feature diagnostics remain bounded and manual-export only. There is no automatic diagnostic upload. New APIs accept only typed source, operation, selection, capability, fixed reason, outcome, aggregate count, duration, HTTP status, exception class, or short hashed correlation values. They do not accept canonical IDs, `OwnedCopyKey`, raw source IDs, account scopes, titles, paths, URLs, arbitrary error strings, or source objects.
+Feature diagnostics remain bounded and manual-export only. There is no automatic diagnostic upload. New APIs accept typed source, operation, selection, capability, fixed reason, outcome, aggregate count, duration, HTTP status, exception class, short hashed correlations, and explicit bounded public title/AppID/storefront-ID/route/URL/content-ID fields. Public game/catalog/community data is not private. APIs do not accept credentials, account/profile or entitlement associations, paths, private search text, arbitrary error strings, or source objects.
 
 ## Stage 2 operation matrix
 

@@ -55,7 +55,7 @@ Out of scope until later stages:
 8. Projection collection occurs outside Room, then every canonical write for that run occurs in one `withTransaction` block. Process death or any exception rolls the run back.
 9. User-confirmed and user-rejected decisions outrank every automatic result until explicit reset.
 10. Unknown app type, incompatible app type, conflicting known developers, release-year differences greater than one, multiple exact candidates, indirect GOG joins, and unverified resolver candidates never auto-merge.
-11. Stage 1 diagnostics contain aggregate source names, counts, durations, methods, confidence values, reason codes, and error classes only. They never contain titles, candidate titles, copy keys, account scopes, source-native IDs, paths, URLs, credentials, or user text.
+11. Stage 1 diagnostics contain aggregate source names, counts, durations, methods, confidence values, reason codes, error classes, and bounded typed public titles/AppIDs/source-product IDs where useful. They never contain passwords, API keys, authentication material, account scopes, ownership/entitlement associations, private user-entered text, install paths, or arbitrary exception payloads.
 12. `LibraryViewModel`, `PluviaMain`, source app screens/managers, existing external launch contracts, and frontend sync ID formats do not consume canonical data in this stage.
 
 ## File map
@@ -1531,12 +1531,12 @@ Use fake adapters, projection runner, gate, clock, and aggregate diagnostic sink
 - one invalidation-flow failure records only source/exception class and restarts that collector with bounded backoff without terminating the coordinator;
 - engine or gate failure records FAILED and the collection job remains alive for a later invalidation;
 - disabled gate records SKIPPED and never calls adapters/engine;
-- emitted attributes contain only source, reason, error class, aggregate counts, match method, and confidence;
-- raw account IDs, account scopes, stable IDs, titles, candidate titles, paths, and exception messages are absent from both the diagnostic API and adapter batch error field by construction.
+- emitted attributes contain source, reason, error class, aggregate counts, match method, confidence, and any explicitly typed bounded public title/AppID/source-product evidence needed for reproducibility;
+- raw account IDs/scopes, ownership or entitlement associations, private user-entered text, install paths, credentials, and arbitrary exception messages are absent by construction.
 
-- [ ] **Step 2: Add a narrow aggregate-only diagnostic wrapper**
+- [ ] **Step 2: Add a narrow typed diagnostic wrapper**
 
-Expose methods whose signatures cannot accept private strings:
+Expose methods whose signatures accept only fixed categories, aggregates, and explicit typed public fields—not credentials or personal/account strings:
 
 ```kotlin
 interface CanonicalDiagnosticSink {

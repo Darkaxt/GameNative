@@ -115,7 +115,7 @@ class GameDetailViewModelTest {
     }
 
     @Test
-    fun reviewsLoadAppendAndClearOnlyInMemoryContent() = runTest(scheduler) {
+    fun reviewsLoadAppendAndClearVisibleDetailState() = runTest(scheduler) {
         val cursors = mutableListOf<String?>()
         val reviewSource = SteamReviewPageSource { _, _, cursor ->
             cursors += cursor

@@ -37,7 +37,6 @@ class SteamDiscussionProvider internal constructor(
     @Inject
     constructor() : this(
         client = Net.http.newBuilder()
-            .cache(null)
             .cookieJar(CookieJar.NO_COOKIES)
             .followRedirects(false)
             .followSslRedirects(false)
@@ -563,7 +562,6 @@ class SteamDiscussionProvider internal constructor(
     private fun requestFor(url: HttpUrl): Request = Request.Builder()
         .url(url)
         .header("User-Agent", DISCUSSION_USER_AGENT)
-        .header("Cache-Control", "no-store")
         .get()
         .build()
 

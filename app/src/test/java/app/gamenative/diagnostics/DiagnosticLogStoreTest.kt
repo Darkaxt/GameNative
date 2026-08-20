@@ -63,16 +63,16 @@ class DiagnosticLogStoreTest {
     }
 
     @Test
-    fun `append drops unknown keys and redacts forbidden approved values`() {
+    fun `append drops unknown keys and redacts credential-bearing approved values`() {
         val store = DiagnosticLogStore(
-            temporaryFolder.newFolder("privacy"),
+            temporaryFolder.newFolder("redaction"),
             json,
         )
         store.append(
             event(1).copy(
                 attributes = mapOf(
                     "unapproved" to "steam:76561198000000000:620",
-                    "reason" to "failed at https://example.invalid/private",
+                    "reason" to "failed at https://example.invalid/path?api_key=secret-value",
                 ),
             ),
         )
@@ -80,6 +80,32 @@ class DiagnosticLogStoreTest {
         val attributes = store.recent(1).single().attributes
         assertFalse(attributes.containsKey("unapproved"))
         assertEquals("[redacted]", attributes["reason"])
+    }
+
+    @Test
+    fun `append preserves approved typed public values`() {
+        val store = DiagnosticLogStore(
+            temporaryFolder.newFolder("public-values"),
+            json,
+        )
+        store.append(
+            event(2).copy(
+                attributes = mapOf(
+                    "steam_app_id" to "620",
+                    "public_url" to "https://store.steampowered.com/app/620/Portal_2/",
+                    "public_content_id" to "123456789012345678901234567890123456",
+                ),
+            ),
+        )
+
+        assertEquals(
+            mapOf(
+                "steam_app_id" to "620",
+                "public_url" to "https://store.steampowered.com/app/620/Portal_2/",
+                "public_content_id" to "123456789012345678901234567890123456",
+            ),
+            store.recent(1).single().attributes,
+        )
     }
 
     @Test

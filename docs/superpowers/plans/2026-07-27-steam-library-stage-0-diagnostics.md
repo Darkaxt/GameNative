@@ -28,12 +28,12 @@
 
 - `app/src/main/java/app/gamenative/PluviaApp.kt:52-79` — initialize diagnostics before the crash handler.
 - `app/src/main/java/app/gamenative/CrashHandler.kt:92-129` — record crashes and append diagnostic tail.
-- `app/src/main/java/app/gamenative/ui/model/LibraryViewModel.kt:566-1045` — record filter duration/result counts without search text or titles.
+- `app/src/main/java/app/gamenative/ui/model/LibraryViewModel.kt:566-1045` — record filter duration/result counts and bounded public titles/AppIDs where useful without private user-entered search text, account associations, or paths.
 - `app/src/main/java/app/gamenative/ui/PluviaMain.kt:160-217,263-269` — record game-resolution and launch-request outcomes.
 - `app/src/main/java/app/gamenative/ui/screen/settings/SettingsGroupDebug.kt:98-129,180-187` — export and clear diagnostics.
 - `app/src/main/res/values/strings.xml` — diagnostics setting labels.
 
-Do not modify `ReleaseTree.kt`: release logcat remains independent, and arbitrary existing Timber messages must not enter the persistent report. Diagnostic values must be fixed programmatic categories or aggregate numbers; never pass user/provider text into an approved attribute just because its key is allowlisted.
+Do not modify `ReleaseTree.kt`: release logcat remains independent, and arbitrary existing Timber messages must not enter the persistent report. Diagnostics use enum-defined attributes. Bounded public catalog/community text belongs only in explicit typed public attributes; arbitrary provider errors, credentials, account/profile/entitlement data, paths, and private user-entered search text do not.
 
 ### Task 1: Define the safe diagnostic vocabulary
 
@@ -67,9 +67,9 @@ class DiagnosticRedactorTest {
     }
 
     @Test
-    fun `sanitize redacts urls paths bearer values and jwt values`() {
+    fun `sanitize redacts credentials paths bearer values and jwt values`() {
         val values = listOf(
-            "request failed: https://example.invalid/private",
+            "request failed: https://example.invalid/path?api_key=secret-value",
             "/storage/emulated/0/Games/Secret",
             "Bearer abcdef",
             "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature",
@@ -81,6 +81,21 @@ class DiagnosticRedactorTest {
             )
             assertEquals("[redacted]", result.getValue("reason"))
         }
+    }
+
+    @Test
+    fun `sanitize preserves typed public values`() {
+        val result = DiagnosticRedactor.sanitize(
+            mapOf(
+                DiagnosticAttribute.STEAM_APP_ID to "620",
+                DiagnosticAttribute.PUBLIC_URL to "https://store.steampowered.com/app/620/",
+                DiagnosticAttribute.PUBLIC_CONTENT_ID to "123456789012345678901234567890123456",
+            ),
+        )
+
+        assertEquals("620", result["steam_app_id"])
+        assertEquals("https://store.steampowered.com/app/620/", result["public_url"])
+        assertEquals("123456789012345678901234567890123456", result["public_content_id"])
     }
 
     @Test
@@ -188,6 +203,12 @@ enum class DiagnosticAttribute(val wireName: String) {
     MATCH_METHOD("match_method"),
     CONFIDENCE("confidence"),
     PROVIDER("provider"),
+    STEAM_APP_ID("steam_app_id"),
+    STOREFRONT_PRODUCT_ID("storefront_product_id"),
+    PUBLIC_TITLE("public_title"),
+    PUBLIC_URL("public_url"),
+    PUBLIC_ROUTE("public_route"),
+    PUBLIC_CONTENT_ID("public_content_id"),
     CACHE_STATE("cache_state"),
     HTTP_STATUS("http_status"),
     FILTER_GROUPS("filter_groups"),
@@ -213,26 +234,42 @@ import java.security.MessageDigest
 object DiagnosticRedactor {
     private const val MAX_VALUE_LENGTH = 120
 
-    private val forbiddenPatterns = listOf(
-        Regex("(?i)https?://"),
+    private val alwaysForbiddenPatterns = listOf(
         Regex("(?i)(?:/storage/|/sdcard/|/data/user/)"),
-        Regex("(?i)[a-z]:[\\\\/]"),
+        Regex("(?i)(?:^|\\s)[a-z]:(?:\\\\|/)"),
         Regex("(?i)bearer\\s+"),
-        Regex("(?i)(?:token|secret|authorization|cookie)\\s*[=:]"),
+        Regex(
+            "(?i)(?:api[_-]?key|access[_-]?token|auth(?:orization|[_-]?token)?|" +
+                "password|passwd|token|secret|cookie|session(?:id)?)\\s*[=:]",
+        ),
+        Regex("(?i)https?://[^/\\s:@]+:[^/@\\s]+@"),
         Regex("eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"),
+    )
+    private val untypedForbiddenPatterns = listOf(
+        Regex("(?i)https?://"),
         Regex("[A-Za-z0-9_-]{32,}"),
     )
-    private val allowedWireNames = DiagnosticAttribute.values().mapTo(mutableSetOf()) { it.wireName }
+    private val typedPublicAttributes = setOf(
+        DiagnosticAttribute.STEAM_APP_ID,
+        DiagnosticAttribute.STOREFRONT_PRODUCT_ID,
+        DiagnosticAttribute.PUBLIC_TITLE,
+        DiagnosticAttribute.PUBLIC_URL,
+        DiagnosticAttribute.PUBLIC_ROUTE,
+        DiagnosticAttribute.PUBLIC_CONTENT_ID,
+    )
+    private val attributesByWireName = DiagnosticAttribute.entries.associateBy { it.wireName }
 
     fun sanitize(attributes: Map<DiagnosticAttribute, String>): Map<String, String> =
         attributes.entries.associate { (key, rawValue) ->
-            key.wireName to sanitizeValue(rawValue)
+            key.wireName to sanitizeValue(key, rawValue)
         }
 
     internal fun sanitizePersisted(attributes: Map<String, String>): Map<String, String> =
-        attributes
-            .filterKeys(allowedWireNames::contains)
-            .mapValues { (_, rawValue) -> sanitizeValue(rawValue) }
+        attributes.mapNotNull { (wireName, rawValue) ->
+            attributesByWireName[wireName]?.let { attribute ->
+                wireName to sanitizeValue(attribute, rawValue)
+            }
+        }.toMap()
 
     fun correlationId(raw: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -240,11 +277,20 @@ object DiagnosticRedactor {
         return digest.take(6).joinToString("") { byte -> "%02x".format(byte) }
     }
 
-    private fun sanitizeValue(rawValue: String): String {
+    private fun sanitizeValue(
+        attribute: DiagnosticAttribute,
+        rawValue: String,
+    ): String {
         val singleLine = rawValue
             .replace(Regex("[\\r\\n\\t]+"), " ")
             .trim()
-        if (forbiddenPatterns.any { it.containsMatchIn(singleLine) }) return "[redacted]"
+        if (alwaysForbiddenPatterns.any { it.containsMatchIn(singleLine) }) return "[redacted]"
+        if (
+            attribute !in typedPublicAttributes &&
+            untypedForbiddenPatterns.any { it.containsMatchIn(singleLine) }
+        ) {
+            return "[redacted]"
+        }
         return singleLine.take(MAX_VALUE_LENGTH)
     }
 }
@@ -304,16 +350,16 @@ class DiagnosticLogStoreTest {
     }
 
     @Test
-    fun `append drops unknown keys and redacts forbidden approved values`() {
+    fun `append drops unknown keys and redacts credential-bearing approved values`() {
         val store = DiagnosticLogStore(
-            temporaryFolder.newFolder("privacy"),
+            temporaryFolder.newFolder("redaction"),
             json,
         )
         store.append(
             event(1).copy(
                 attributes = mapOf(
                     "unapproved" to "steam:76561198000000000:620",
-                    "reason" to "failed at https://example.invalid/private",
+                    "reason" to "failed at https://example.invalid/path?api_key=secret-value",
                 ),
             ),
         )
@@ -869,7 +915,7 @@ git commit -m "feat: export and clear feature diagnostics"
 - Modify: `app/src/main/java/app/gamenative/ui/model/LibraryViewModel.kt:566-1045`
 - Modify: `app/src/main/java/app/gamenative/ui/PluviaMain.kt:160-217,263-269`
 
-- [ ] **Step 1: Add filtering instrumentation without recording search text or titles**
+- [ ] **Step 1: Add filtering instrumentation without recording private user-entered search text or account associations**
 
 Add imports to `LibraryViewModel.kt`:
 
@@ -1000,7 +1046,7 @@ FeatureDiagnostics.record(
 )
 ```
 
-Do not record `appId`, `gameId`, game title, account data, or path.
+Do not record account IDs/scopes, ownership or entitlement associations, private user-entered search text, install paths, credentials, or arbitrary untyped error payloads. Public AppIDs, source product IDs, titles, routes, and validated URLs may use their typed diagnostic attributes.
 
 - [ ] **Step 3: Record launch requests through the existing analytics entry point**
 
@@ -1072,7 +1118,7 @@ Expected: BUILD SUCCESSFUL. This does not publish anything.
 4. Open `Settings → Debug → Export feature diagnostics`.
 5. Save the report.
 6. Confirm it contains `APP_STARTED`, `LIBRARY_FILTER`, and `GAME_RESOLUTION` or `ACTION_ROUTE`.
-7. Search the report for a known game title, search query, account ID, install path, and token fragment; confirm none appears.
+7. Search the report for a known account ID/profile identifier, private user-entered search query, install path, credential-bearing URL, and token fragment; confirm none appears. If typed public game data was recorded, confirm its title/AppID/route/URL remains bounded and readable.
 8. Use Clear feature diagnostics, export again, and confirm only events created after clearing remain.
 
 - [ ] **Step 5: Write the Stage 0 design cross-check using observed evidence**

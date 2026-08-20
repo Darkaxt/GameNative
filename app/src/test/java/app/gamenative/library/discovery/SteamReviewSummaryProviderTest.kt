@@ -14,6 +14,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -56,8 +57,8 @@ class SteamReviewSummaryProviderTest {
                 """
                 {
                   "success": 1,
-                  "query_summary": {"total_reviews": 12345, "review_score_desc": "private-summary"},
-                  "reviews": [{"author": {"steamid": "private-steamid"}, "review": "private-review-body"}]
+                  "query_summary": {"total_reviews": 12345, "review_score_desc": "public-summary"},
+                  "reviews": [{"author": {"steamid": "private-steamid"}, "review": "public-review-body"}]
                 }
                 """.trimIndent(),
             ),
@@ -79,7 +80,8 @@ class SteamReviewSummaryProviderTest {
         assertEquals("all", request.requestUrl?.queryParameter("language"))
         assertEquals("all", request.requestUrl?.queryParameter("purchase_type"))
         assertEquals("0", request.requestUrl?.queryParameter("num_per_page"))
-        assertFalse(logs.joinToString("\n").contains("private-"))
+        assertNull(request.getHeader("Cache-Control"))
+        assertFalse(logs.joinToString("\n").contains("private-steamid"))
     }
 
     @Test
@@ -96,11 +98,11 @@ class SteamReviewSummaryProviderTest {
     }
 
     @Test
-    fun malformedPrivateContentFailsWithFixedSafeException() = runTest {
+    fun malformedPublicContentFailsWithFixedSafeException() = runTest {
         server.enqueue(
             MockResponse().setBody(
                 "{\"query_summary\":{\"total_reviews\":5}," +
-                    "\"reviews\":[{\"review\":\"private-malformed-body\"}",
+                    "\"reviews\":[{\"review\":\"public-malformed-body\"}",
             ),
         )
 
@@ -110,16 +112,15 @@ class SteamReviewSummaryProviderTest {
         } catch (error: IOException) {
             assertEquals("Steam review summary unavailable", error.message)
         }
-        assertFalse(logs.joinToString("\n").contains("private-malformed-body"))
     }
 
     @Test
     fun oversizedReviewContentIsDiscardedWithFixedSafeFailure() = runTest {
-        val privateBody = "private-review-body".repeat(8_000)
+        val publicBody = "public-review-body".repeat(8_000)
         server.enqueue(
             MockResponse().setBody(
                 "{\"query_summary\":{\"total_reviews\":5}," +
-                    "\"reviews\":[{\"review\":\"$privateBody\"}]}",
+                    "\"reviews\":[{\"review\":\"$publicBody\"}]}",
             ),
         )
 
@@ -129,7 +130,6 @@ class SteamReviewSummaryProviderTest {
         } catch (error: IOException) {
             assertEquals("Steam review summary unavailable", error.message)
         }
-        assertFalse(logs.joinToString("\n").contains("private-review-body"))
     }
 
     @Test
@@ -180,6 +180,8 @@ class SteamReviewSummaryProviderTest {
 
         assertEquals(SteamReviewSummary(7), provider().fetch(480))
         assertEquals(2, server.requestCount)
+        assertNull(server.takeRequest().getHeader("Cache-Control"))
+        assertNull(server.takeRequest().getHeader("Cache-Control"))
     }
 
     @Test
@@ -188,7 +190,7 @@ class SteamReviewSummaryProviderTest {
             MockResponse()
                 .setBody(
                     "{\"query_summary\":{\"total_reviews\":9}," +
-                        "\"reviews\":[{\"review\":\"private-review-body\"}]}",
+                        "\"reviews\":[{\"review\":\"public-review-body\"}]}",
                 )
                 .setBodyDelay(1, TimeUnit.MINUTES),
         )
@@ -198,11 +200,6 @@ class SteamReviewSummaryProviderTest {
         job.cancelAndJoin()
 
         assertTrue(job.isCancelled)
-        val output = logs.joinToString("\n")
-        assertFalse(output.contains("987654"))
-        assertFalse(output.contains("appreviews"))
-        assertFalse(output.contains(server.hostName))
-        assertFalse(output.contains("private-review-body"))
     }
 
     private fun provider(client: OkHttpClient = client()) = SteamReviewSummaryProvider(

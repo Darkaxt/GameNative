@@ -44,7 +44,6 @@ class SteamReviewPageProvider internal constructor(
     @Inject
     constructor() : this(
         client = Net.http.newBuilder()
-            .cache(null)
             .cookieJar(CookieJar.NO_COOKIES)
             .followRedirects(false)
             .followSslRedirects(false)
@@ -140,7 +139,6 @@ class SteamReviewPageProvider internal constructor(
         }
         val request = Request.Builder()
             .url(requestUrl)
-            .header("Cache-Control", "no-store")
             .get()
             .build()
         val response = try {

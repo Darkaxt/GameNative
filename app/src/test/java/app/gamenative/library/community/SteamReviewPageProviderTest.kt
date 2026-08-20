@@ -93,7 +93,7 @@ class SteamReviewPageProviderTest {
         assertEquals("steam", request.requestUrl?.queryParameter("purchase_type"))
         assertEquals("20", request.requestUrl?.queryParameter("num_per_page"))
         assertEquals("start cursor", request.requestUrl?.queryParameter("cursor"))
-        assertEquals("no-store", request.getHeader("Cache-Control"))
+        assertNull(request.getHeader("Cache-Control"))
         assertNull(request.getHeader("Cookie"))
         assertFalse(page.toString().contains("private-steamid"))
         assertFalse(page.toString().contains("private-review-id"))
@@ -146,7 +146,7 @@ class SteamReviewPageProviderTest {
                 {
                   "success": 1,
                   "reviews": [
-                    {"recommendationid":"private-review-id","review":"Private review body"},
+                    {"recommendationid":"public-review-id","review":"Public review body"},
                     {"review":"Skipped review body"},
                     {"recommendationid":"blank-review-id","review":""}
                   ]
@@ -169,8 +169,6 @@ class SteamReviewPageProviderTest {
         assertEquals(1, event.blankItemCount)
         assertEquals(0, event.duplicateItemCount)
         assertNull(event.failureReason)
-        assertFalse(event.toString().contains("private-review-id"))
-        assertFalse(event.toString().contains("Private review body"))
     }
 
     @Test
@@ -264,7 +262,6 @@ class SteamReviewPageProviderTest {
         diagnostics: SteamCommunityDiagnosticSink = NoOpSteamCommunityDiagnostics,
     ) = SteamReviewPageProvider(
         client = OkHttpClient.Builder()
-            .cache(null)
             .cookieJar(CookieJar.NO_COOKIES)
             .followRedirects(false)
             .followSslRedirects(false)

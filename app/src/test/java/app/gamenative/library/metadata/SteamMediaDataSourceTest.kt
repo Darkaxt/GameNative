@@ -13,6 +13,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -84,14 +85,14 @@ class SteamMediaDataSourceTest {
     }
 
     @Test
-    fun sessionOnlyMediaRequestsAreNoStoreAcrossRedirects() = runTest {
+    fun publicMediaRequestsRemainCacheEligibleAcrossRedirects() = runTest {
         server.enqueue(redirectTo("/final.jpg"))
         server.enqueue(MockResponse().setBody("image bytes"))
 
-        source(noStore = true).open(server.url("/start.jpg").toString()).close()
+        source().open(server.url("/start.jpg").toString()).close()
 
-        assertEquals("no-store", server.takeRequest().getHeader("Cache-Control"))
-        assertEquals("no-store", server.takeRequest().getHeader("Cache-Control"))
+        assertNull(server.takeRequest().getHeader("Cache-Control"))
+        assertNull(server.takeRequest().getHeader("Cache-Control"))
     }
 
     @Test
@@ -206,7 +207,6 @@ class SteamMediaDataSourceTest {
     private fun source(
         client: OkHttpClient = OkHttpClient(),
         maxRedirects: Int = 3,
-        noStore: Boolean = false,
     ): SteamMediaDataSource = SteamMediaDataSource(
         baseClient = client,
         urlPolicy = SteamUrlPolicy(
@@ -216,7 +216,6 @@ class SteamMediaDataSourceTest {
             allowedPorts = setOf(server.port),
         ),
         maxRedirects = maxRedirects,
-        noStore = noStore,
     )
 
     private fun epicSource(): SteamMediaDataSource = SteamMediaDataSource(

@@ -37,7 +37,6 @@ class SteamReviewSummaryProvider internal constructor(
     @Inject
     constructor() : this(
         client = Net.http.newBuilder()
-            .cache(null)
             .cookieJar(CookieJar.NO_COOKIES)
             .followRedirects(false)
             .followSslRedirects(false)
@@ -61,7 +60,6 @@ class SteamReviewSummaryProvider internal constructor(
         val body = executeValidated(
             Request.Builder()
                 .url(requestUrl)
-                .header("Cache-Control", "no-store")
                 .get()
                 .build(),
         )
@@ -83,7 +81,6 @@ class SteamReviewSummaryProvider internal constructor(
                 if (next == null || !isAllowedNetworkUrl(next)) throw SteamReviewSummaryUnavailable()
                 request = Request.Builder()
                     .url(next)
-                    .header("Cache-Control", "no-store")
                     .get()
                     .build()
             } else {

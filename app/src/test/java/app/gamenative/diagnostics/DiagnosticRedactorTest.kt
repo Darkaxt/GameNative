@@ -20,9 +20,9 @@ class DiagnosticRedactorTest {
     }
 
     @Test
-    fun `sanitize redacts urls paths bearer values jwt values and opaque secrets`() {
+    fun `sanitize redacts credentials paths and untyped opaque values`() {
         val values = listOf(
-            "request failed: https://example.invalid/private",
+            "request failed: https://example.invalid/private?api_key=0123456789abcdef",
             "/storage/emulated/0/Games/Secret",
             "Bearer abcdef",
             "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature",
@@ -35,6 +35,57 @@ class DiagnosticRedactorTest {
             )
             assertEquals("[redacted]", result.getValue("reason"))
         }
+    }
+
+    @Test
+    fun `sanitize preserves bounded typed public catalog and community values`() {
+        val attributes = DiagnosticRedactor.sanitize(
+            mapOf(
+                DiagnosticAttribute.STEAM_APP_ID to "620",
+                DiagnosticAttribute.STOREFRONT_PRODUCT_ID to
+                    "amzn1.adg.product.11111111-1111-1111-1111-111111111111",
+                DiagnosticAttribute.PUBLIC_TITLE to "Portal 2",
+                DiagnosticAttribute.PUBLIC_URL to
+                    "https://shared.akamai.steamstatic.com/store_item_assets/header.jpg",
+                DiagnosticAttribute.PUBLIC_ROUTE to
+                    "/app/620/discussions/0/1234567890123456789/",
+                DiagnosticAttribute.PUBLIC_CONTENT_ID to
+                    "123456789012345678901234567890123456",
+            ),
+        )
+
+        assertEquals("620", attributes["steam_app_id"])
+        assertEquals(
+            "amzn1.adg.product.11111111-1111-1111-1111-111111111111",
+            attributes["storefront_product_id"],
+        )
+        assertEquals("Portal 2", attributes["public_title"])
+        assertEquals(
+            "https://shared.akamai.steamstatic.com/store_item_assets/header.jpg",
+            attributes["public_url"],
+        )
+        assertEquals(
+            "/app/620/discussions/0/1234567890123456789/",
+            attributes["public_route"],
+        )
+        assertEquals(
+            "123456789012345678901234567890123456",
+            attributes["public_content_id"],
+        )
+    }
+
+    @Test
+    fun `typed public values still redact credentials and local paths`() {
+        val attributes = DiagnosticRedactor.sanitize(
+            mapOf(
+                DiagnosticAttribute.PUBLIC_URL to
+                    "https://example.invalid/header.jpg?access_token=secret-value",
+                DiagnosticAttribute.PUBLIC_ROUTE to "C:\\Users\\person\\Games\\Portal 2",
+            ),
+        )
+
+        assertEquals("[redacted]", attributes["public_url"])
+        assertEquals("[redacted]", attributes["public_route"])
     }
 
     @Test

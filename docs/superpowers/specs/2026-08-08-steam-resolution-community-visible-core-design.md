@@ -41,7 +41,7 @@ The design succeeds when the user can:
 - Automatic handoff from a newly accepted Steam identity to existing metadata and review-count enrichment.
 - Public Epic CMS presentation fallback for genuine Epic exclusives only after a complete, nonpartial Steam `UNMATCHED` result with no plausible Steam candidate.
 - Best-effort public PICS facet enrichment for a trusted non-owned AppID while a Steam client session is active.
-- Native Reviews and Discussions tabs using process-memory-only user-generated content.
+- Native Reviews and Discussions tabs using bounded public content with field-sensitive credential and account-identity protection.
 - One focused design cross-check and at most one consolidated blocker correction after each core deliverable.
 - One signed fork RC after each core deliverable.
 
@@ -61,7 +61,7 @@ These items are not removed from the project. Section 15 assigns each one a name
 
 These are explicit rejected designs rather than forgotten features. Reconsidering one requires a new user-approved design that changes the named invariant:
 
-- Persisting review bodies, discussion bodies, usernames, profiles, avatars, SteamIDs, account IDs, or community HTML is rejected by the mandatory privacy contract.
+- Persisting usernames, profiles, avatars, SteamIDs, account IDs, authenticated community HTML, or account-linked community associations is rejected by the mandatory personal-data and credential contract. Public review/discussion text, routes, URLs, AppIDs, and content IDs may use bounded app-private persistence and diagnostics.
 - Copying Steam cookies, embedding authenticated WebViews, or silently performing authenticated posting/voting/moderation is rejected by the credential and source-authority boundaries. Unsupported authenticated actions remain explicit external Steam actions.
 - Treating unsigned GOG maps, indirect Epic→GOG→Steam joins, SteamGridDB, autocomplete order, or the first search result as automatic identity authority is rejected by the false-merge boundary. They may be separately validated candidate hints.
 - Automatic merging of fuzzy or edition-ambiguous candidates is rejected; those candidates remain user-reviewable.
@@ -97,7 +97,7 @@ A rewrite is not justified by style, test difficulty, age, file size alone, or a
 | Aggregate review-count provider | Reuse | Keep it separate from full review browsing. |
 | Review browsing | New boundary | No production implementation exists. |
 | Discussion browsing | New boundary | No production implementation exists. |
-| Community body persistence | Permanent boundary | Rejected by Section 3.3 privacy invariants; active-session memory and external fallback provide the supported behavior. |
+| Public community caching | Reuse or narrow optimization | Public review/discussion content may use bounded normal caches. Exclude credentials, cookies, SteamIDs, usernames, profiles, and account associations. |
 | External-storage mover | Named Stage 5 | Harden transactionality, recovery, and device behavior after visible-core completion. |
 
 ## 5. Shared invariants
@@ -119,23 +119,19 @@ A rewrite is not justified by style, test difficulty, age, file size alone, or a
 - Automatic resolution cannot overwrite any current user decision.
 - A stale UI decision fails closed if its canonical, copy-presence, candidate, or decision revision changed.
 
-### 5.3 Privacy contract
+### 5.3 Data-protection contract
 
 Do not persist or export:
 
-- tokens;
-- account IDs or SteamIDs;
-- usernames;
-- owned-library titles or match-candidate titles in diagnostics;
-- search text;
-- install paths;
-- full URLs;
-- review bodies;
-- discussion bodies.
+- passwords, API keys, signing secrets, authentication headers, cookies, or tokens;
+- SteamIDs, usernames, profiles, account IDs, or personal/account associations;
+- account-authority or entitlement evidence that reveals ownership;
+- install paths or other personal filesystem locations;
+- private user-entered search text.
 
-Owned-library search text and public community content may exist only in active process memory and network request/response buffers. They must not enter Room, DataStore, `SavedStateHandle`, `rememberSaveable`, WorkManager input/output, OkHttp disk cache, Coil disk cache, Timber context, crash messages, or diagnostic attributes. The sole title-persistence exception is the reproducible public Steam AppList catalog: positive AppID, sanitized public title, and `last_modified` may be stored in a bounded, versioned app-private cache with atomic replacement and seven-day freshness. It contains no ownership, account, search, candidate-selection, or credential data.
+Public game and project data is not private: titles, AppIDs, storefront product IDs, catalog metadata, public routes and URLs, review/discussion text, cursors, recommendation/post/content IDs, and PCGamingWiki facts may be captured, tested, cached, persisted, and included in bounded typed diagnostics. Storage remains app-private and bounded where appropriate, but no public field receives `no-store`, session-only, or redaction treatment merely because GameNative uses it.
 
-Typed diagnostics may contain fixed categories, counts, durations, source names, outcomes, fixed reason codes, HTTP status, exception class, and short hashed correlations only.
+Typed diagnostics use field-specific attributes. Public catalog/community fields are permitted; credential-bearing URLs, sensitive query parameters, local paths, tokens, account/profile identity, entitlement associations, and private search text remain excluded or redacted.
 
 ## 6. Deliverable 1 — automatic and correctable Steam resolution
 
@@ -149,7 +145,7 @@ Contract:
 
 - HTTPS only and exact allowlisted Steam Store hosts, ports, endpoint paths, and query keys for both Store search and `appdetails`;
 - every redirect and effective response URL revalidates the same endpoint-specific path/query contract;
-- redirects are followed manually, while cookies and disk HTTP caching remain disabled;
+- redirects are followed manually and cookies remain disabled; public responses use normal cache semantics under bounded provider/app caches;
 - bounded result count, redirect count, decompressed response size, and cancellation through body consumption and retry delays;
 - a complete/partial result type distinguishes authoritative empty search from interrupted or incomplete discovery;
 - public Store results retain enough title/AppID evidence for review while `appdetails` supplies type, developer/publisher, year, metadata, and identity verification;
@@ -230,7 +226,7 @@ Every transaction revalidates:
 11. Publish progress and continue to the next canonical after a per-game typed failure; exhausted rate limiting aborts that game's remaining candidate traversal without returning partial resolution data.
 12. Stop promptly when the owning scope is cancelled. Accepted decisions already committed remain valid; a later run naturally resumes unresolved games.
 
-The 80/20 first release uses no new Room table. Automatic scanning runs once per process session and may use only a fixed global last-success timestamp/resolver version in DataStore to avoid immediate repeat scans. Candidate lists and search strings remain memory-only. The optional reproducible public AppList cache follows its bounded contract above. Stage 4 decides schema-28 durable attempt/rejection history and WorkManager resume from measured completion evidence, then applies the 80% coverage trigger only to fuzzy/indirect candidate expansion.
+The 80/20 first release uses no new Room table. Automatic scanning runs once per process session and may use only a fixed global last-success timestamp/resolver version in DataStore to avoid immediate repeat scans. Private user-edited search text remains memory-only. Public candidate lists, titles, AppIDs, storefront IDs, URLs, and reproducible catalog evidence may use bounded app-private persistence and normal caches. Stage 4 decides schema-28 durable attempt/rejection history and WorkManager resume from measured completion evidence, then applies the 80% coverage trigger only to fuzzy/indirect candidate expansion.
 
 ### 6.3 Automatic acceptance policy
 
@@ -262,7 +258,7 @@ A visible **Steam match** provenance block appears in canonical Details and the 
 
 **Fix Steam match** opens a native picker:
 
-- the source title is prefilled in composition memory only;
+- the public source title may prefill the picker; only private user edits remain composition-memory-only;
 - the user can edit the title or enter a positive Steam AppID;
 - search always reruns against Steam and is not limited by automatic cooldown;
 - candidate cards show Steam artwork, title, developer, release year, and app type;
@@ -335,10 +331,10 @@ Core models are non-serializable:
 
 A dedicated community transport is built from the shared client with:
 
-- disk cache disabled explicitly;
+- normal HTTP caching available for bounded public responses;
 - `CookieJar.NO_COOKIES`;
 - automatic redirects disabled;
-- `Cache-Control: no-store` requests;
+- no explicit `Cache-Control: no-store` override;
 - strict `store.steampowered.com/appreviews/{trustedAppId}` path binding;
 - approved query keys only;
 - final effective URL and every redirect revalidated;
@@ -360,13 +356,13 @@ SteamID/account ID is discarded during parsing. The UI uses a fixed **Steam user
 
 ### 7.3 Repository and state
 
-Community content is bounded to the active detail session:
+Public community content is bounded independently of its storage lifecycle:
 
 - at most five pages or 100 reviews per query;
-- independent cache keys for filter/cursor state in process memory only;
-- failed refresh keeps current session content visible;
-- changing canonical game or closing detail cancels calls and clears all review/discussion content;
-- after process death the user returns to the library; reopening starts at Overview with no community body cache.
+- independent cache keys for filter/cursor state; bounded app-private memory or disk caches are permitted;
+- failed refresh keeps current content visible;
+- changing canonical game or closing detail cancels calls and clears the visible review/discussion state without imposing cache eviction;
+- after process death the user may return to the library; reopening may reuse valid bounded public content while defaulting to Overview.
 
 ### 7.4 Native Reviews UI
 
@@ -389,7 +385,7 @@ A Reviews failure cannot blank Overview, Discussions, Details, Copies, or source
 
 ### 8.1 Boundary
 
-Discussions extend the same no-store community transport with a separate Steam Community URL policy:
+Discussions extend the same public unauthenticated community transport with a separate Steam Community URL policy:
 
 - HTTPS and exact `steamcommunity.com:443`;
 - listing paths bound to `/app/{trustedAppId}/discussions/`;
@@ -459,7 +455,7 @@ Before Reviews ships:
 - Deliverables 1–3 remain on schema 27; Stage 4 migrates to schema 28 for durable attempt and multi-candidate rejection history with immutable schema export and upgrade tests.
 - Accepted/rejected/reset match decisions use existing canonical/store-match storage.
 - Sanitized Steam detail snapshots and facet cross-references remain the only persisted catalog content.
-- Review/discussion content receives no Room entity, DataStore key, serialization annotation, WorkManager payload, or disk cache.
+- Public review/discussion text, routes, URLs, AppIDs, recommendation/post IDs, and bounded response caches may use app-private persistence. Credentials, cookies, SteamIDs, usernames, profiles, account associations, entitlement evidence, local paths, and private search text may not.
 
 ## 11. Diagnostics
 
@@ -467,7 +463,7 @@ Each feature gets a typed diagnostic sink. Allowed resolver outcomes include fix
 
 Allowed community outcomes include fixed provider/section/filter/cache/outcome/reason values, page/result counts, HTTP status, duration, and exception class.
 
-Forbidden values are seeded into tests to prove rejection/redaction at the export boundary. Provider exceptions exposed above the transport contain fixed messages only. Raw server errors, HTML, JSON, titles, AppIDs, queries, cursors, usernames, SteamIDs, URLs, review text, and discussion text never enter diagnostics or Timber.
+Public titles, AppIDs, storefront product IDs, routes, validated URLs, cursors, recommendation/post/content IDs, review/discussion text, and PCGamingWiki facts may enter bounded typed diagnostics where useful. Redaction tests seed passwords, API keys, signing secrets, authentication headers/cookies/tokens, credential-bearing URLs, sensitive query parameters, SteamIDs, usernames/profiles, account or entitlement associations, install paths, private search text, and arbitrary untyped exception payloads. Provider exceptions exposed above the transport contain fixed messages only.
 
 Diagnostics remain bounded, app-private, manual-export only, and never upload automatically.
 
@@ -521,7 +517,7 @@ The first three RCs establish the highest-value paths; they do not close the pro
 
 ### Stage 4 — resolver and detail completion
 
-- Run the aggregate resolver coverage fixture and record only counts.
+- Run the aggregate resolver coverage fixture and record bounded public catalog evidence plus counts while excluding account/ownership associations and private search text.
 - If keyless Store search plus strict validation resolves or surfaces credible candidates for less than 80% of eligible non-Steam canonicals, add the next bounded candidate source: optional AppList indexing, validated GOG hints, alternate normalization, or durable candidate history according to measured failure categories.
 - Decide WorkManager/process-death resume with evidence from the 900-game fixture and live scan completion. Implement it if foreground scanning cannot complete/resume acceptably; otherwise close it with recorded evidence rather than silence.
 - Finish Steam-first card title/artwork precedence for accepted matches.
@@ -592,7 +588,7 @@ This ledger is authoritative. Cross-checks may add rows but may not delete unres
 | D6 | Trailer autoplay is permanently silent because `SteamVideoHero` fixes ExoPlayer volume at zero and exposes no mute/unmute action | Implemented; consolidated QA pending | Final visible-core QA | Autoplay remains muted, an accessible touch/gamepad toggle changes only ExoPlayer volume, and the choice survives media changes for the detail session; focused policy/Compose coverage and audible signed-tablet acceptance remain in the consolidated QA pass |
 | V1 | Reviews tab lacks the validated POC's hardened multi-page transport and identity behavior | Native foundation integrated; POC hardening pending | Task 168 | Native review pagination preserves transient recommendation identity for deduplication, follows four-attempt 429 retry, validates content type, and passes the POC-equivalent multi-page regressions |
 | V2 | Public review comments and broader identity presentation are absent | Named evaluation/work | Stage 5 | Safe native path ships or user approves explicit external boundary |
-| V3 | Persistent review/discussion body cache | Permanent privacy boundary | Section 3.3 | No body persistence; active-session cache tests |
+| V3 | Bounded public review/discussion cache | No broad cache is required for the visible core; normal bounded caching and persistence are permitted and are not a privacy boundary | Closed by Task 169 | Public community transport/media no longer force `no-store` or session-only caching; sensitive account/auth fields remain excluded |
 | C1 | Discussions tab lacks the validated POC's live multi-page route, representation, parser-state, and post-identity contracts | Native foundation integrated; POC hardening pending | Task 168 | Listing pagination uses `fp`, thread pagination uses `ctp`, parser failures never become false empty results, stable post identity deduplicates pages, and the 3-title/10-title POC-equivalent regressions pass |
 | C2 | Discussion search/categories/layout coverage is incomplete | Named work | Stage 5 | Fixture-backed supported matrix and explicit fallback for remainder |
 | C3 | Authenticated posting/voting/moderation is absent | Permanent credential boundary | Section 3.3 | Explicit external actions; no copied credentials/cookies |
@@ -624,7 +620,7 @@ This ledger is authoritative. Cross-checks may add rows but may not delete unres
 ### Reviews
 
 14. Reviews are native, paginated, independently refreshable, and support the fixed 80/20 filters.
-15. Review content is bounded, sanitized, process-memory-only, and absent from diagnostics/disk caches.
+15. Review content is bounded and sanitized; public text, AppIDs, URLs, and content IDs may use normal app-private caches and typed diagnostics, while credentials and account/profile identity remain excluded.
 16. Offline/error/empty states are honest and do not blank other detail sections.
 17. Unsupported authenticated actions open Steam explicitly.
 
@@ -633,7 +629,7 @@ This ledger is authoritative. Cross-checks may add rows but may not delete unres
 18. Public discussion listings and fixture-supported threads render natively as plain text.
 19. URL policy binds every request/redirect/thread to the trusted AppID and Steam Community host.
 20. Parser failure retains a visible external fallback.
-21. Discussion content/user identity is bounded, process-memory-only, and absent from persistence/diagnostics.
+21. Public discussion text, routes, URLs, AppIDs, and content IDs are bounded and cacheable; credentials, cookies, SteamIDs, usernames/profiles, and account associations remain excluded.
 
 ### Delivery discipline
 

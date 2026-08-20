@@ -98,7 +98,6 @@ internal class PcGamingWikiCurrentAvailabilityProvider internal constructor(
     @Inject
     constructor() : this(
         client = Net.http.newBuilder()
-            .cache(null)
             .followRedirects(false)
             .followSslRedirects(false)
             .cookieJar(CookieJar.NO_COOKIES)
@@ -358,7 +357,6 @@ internal class PcGamingWikiCurrentAvailabilityProvider internal constructor(
 
     private fun Request.Builder.safeHeaders(): Request.Builder = this
         .header("User-Agent", USER_AGENT)
-        .header("Cache-Control", "no-store")
         .header("Accept", "application/json")
         .removeHeader("Authorization")
         .removeHeader("Cookie")

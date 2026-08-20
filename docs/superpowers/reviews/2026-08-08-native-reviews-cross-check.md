@@ -5,13 +5,13 @@
 
 ## Verified requirements
 
-- [x] AppReviews transport is bounded to 1 MiB, 20 cards per page, fixed errors, no cookies, no HTTP cache, and `Cache-Control: no-store`.
-- [x] SteamIDs, recommendation IDs, usernames, and profile data are discarded. Review and developer-response bodies exist only in process memory.
+- [x] AppReviews transport is bounded to 1 MiB and 20 cards per page, uses fixed errors and no cookies, and permits normal caching of public responses without forcing `no-store`.
+- [x] SteamIDs, usernames, profile data, cookies, and authenticated material are discarded. Public recommendation IDs, review/developer-response text, AppIDs, routes, and URLs may use bounded app-private caching and typed diagnostics.
 - [x] Helpful/Recent, polarity, language, and purchase filters are native controls.
 - [x] Loading, content, loading-more, empty, offline, unavailable, and retained-content refresh-failure states are visible.
 - [x] Native plain-text cards expose recommendation, playtime, date, public vote/comment counts, disclosure flags, and developer response.
 - [x] Cursor pagination is loop-guarded and bounded to five pages/100 cards. Approaching the bottom loads the next page automatically; an explicit Load more control remains available.
-- [x] Changing/closing canonical detail cancels requests and clears in-memory bodies.
+- [x] Changing/closing canonical detail cancels requests and clears visible UI state; this lifecycle behavior does not require eviction of bounded public caches.
 - [x] Open Steam Reviews remains available as the external boundary for authenticated or unsupported actions.
 
 ## Focused correction
@@ -22,7 +22,7 @@ A structural-error fixture then proved that a valid JSON document with the wrong
 
 ## Named carryovers
 
-- **C1 — typed community diagnostics:** Stage 5 community completion. Add only fixed outcome/reason/count fields and prove body, identity, query, cursor, AppID, and URL rejection at export. No current body or identity reaches Timber/Room/DataStore.
+- **C1 — typed community diagnostics:** Stage 5 community completion. Add bounded typed public AppID/title/route/URL/cursor/content-ID fields where useful. Prove passwords, API keys, auth headers/cookies/tokens, SteamIDs, usernames/profiles, account associations, install paths, private search text, and credential-bearing URLs are rejected or redacted at export.
 - **C2 — translations and full focus/accessibility sweep:** Stage 5 community completion. Closure requires translated community resources and physical controller/screen-reader evidence; English fallback and natural Compose focus order remain usable now.
 - **C3 — public review comments and broader identity presentation:** Stage 5 community completion. Implement only fixture-backed unauthenticated paths; otherwise retain the explicit Steam fallback and obtain user approval before permanent closure.
 - **C4 — complete Steam-language mapping:** Stage 5 community completion. Closure requires mapping supported app locales to Steam language parameters with fallback coverage; the visible core uses English for App language and `all` for All languages.

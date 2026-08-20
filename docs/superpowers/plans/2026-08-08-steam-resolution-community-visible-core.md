@@ -364,7 +364,7 @@ Tests must prove:
 - exception messages contain fixed strings only;
 - at most ten candidates survive parsing.
 
-Use `MockWebServer` and assert request path/query directly. Do not assert full URLs in diagnostic output.
+Use `MockWebServer` and assert request path/query directly. Diagnostic tests may assert bounded typed public URLs while proving credential-bearing URLs and sensitive query parameters are redacted.
 
 - [ ] **Step 2: Verify RED**
 
@@ -398,7 +398,7 @@ data class SteamStoreSearchHit(
 )
 ```
 
-Reject blank queries, trim only in memory, cap query length at 256 Unicode code points, encode only `term`, `cc`, and `l`, parse at most ten results, and use a dedicated no-cookie/no-cache client with automatic redirects disabled. Implement one shared injectable retry executor for keyless Store search and `appdetails`: four total attempts, numeric/HTTP-date `Retry-After`, 30-second cap, 1/2/4 fallback, cancellable delay, and typed exhaustion with no partial return. `complete=true` is valid only after a fully parsed successful response; malformed/failed/exhausted requests never synthesize a complete empty list.
+Reject blank queries, trim only in memory, cap query length at 256 Unicode code points, encode only `term`, `cc`, and `l`, parse at most ten results, and use a dedicated no-cookie client with automatic redirects disabled and normal cache semantics for public responses. Implement one shared injectable retry executor for keyless Store search and `appdetails`: four total attempts, numeric/HTTP-date `Retry-After`, 30-second cap, 1/2/4 fallback, cancellable delay, and typed exhaustion with no partial return. `complete=true` is valid only after a fully parsed successful response; malformed/failed/exhausted requests never synthesize a complete empty list.
 
 - [ ] **Step 4: Extend appdetails with candidate evidence without breaking metadata callers**
 
@@ -557,7 +557,7 @@ sealed interface SteamResolutionItemResult {
 }
 ```
 
-The repository receives canonical IDs, loads current match evidence from `StoreMatchDao`, performs keyless Store search and `appdetails` outside Room, applies `SteamCatalogCandidatePolicy` only to verified evidence with explicit completeness, then performs one guarded mutation. The AppList cache is optional candidate assistance and missing key state is not a scan gate. Catch generic per-candidate detail failures only to construct explicit partial state; rethrow cancellation, and handle typed rate-limit exhaustion before any later-candidate traversal. Persist `UNMATCHED` only for a complete empty result. Keep process-session candidate lists in memory. Persist only the accepted/rejected/store-match decision and fixed global scan timestamp/version.
+The repository receives canonical IDs, loads current match evidence from `StoreMatchDao`, performs keyless Store search and `appdetails` outside Room, applies `SteamCatalogCandidatePolicy` only to verified evidence with explicit completeness, then performs one guarded mutation. The AppList cache is optional candidate assistance and missing key state is not a scan gate. Catch generic per-candidate detail failures only to construct explicit partial state; rethrow cancellation, and handle typed rate-limit exhaustion before any later-candidate traversal. Persist `UNMATCHED` only for a complete empty result. Private user-edited search text remains memory-only; public candidate titles, AppIDs, storefront IDs, URLs, and evidence may use bounded app-private caches or persistence. Persist accepted/rejected/store-match decisions and the fixed global scan timestamp/version.
 
 - [ ] **Step 6: Verify, commit, and push**
 
@@ -649,8 +649,8 @@ Cover:
 - positive numeric query performs direct AppID validation;
 - confirm/reject/reset use the exact `ExpectedMatchState` captured for the chosen copy;
 - stale mutation closes with a fixed refresh message;
-- close clears query/candidates and cancels work;
-- no query/candidate title enters saved state or diagnostics.
+- close clears the private user-edited query, visible candidate state, and active work;
+- no private user-edited query, account identity, entitlement association, or install path enters saved state or diagnostics; bounded public candidate titles and IDs are permitted.
 
 - [ ] **Step 2: Define picker state**
 
@@ -763,7 +763,7 @@ Verify four APKs plus `SHA256SUMS`, exact package/channel mapping, expected vers
 
 ---
 
-### Task 8: Add no-store community transport and native review provider
+### Task 8: Add cache-eligible public community transport and native review provider
 
 **Files:**
 - Create: `app/src/main/java/app/gamenative/library/community/SteamCommunityModels.kt`
@@ -772,13 +772,13 @@ Verify four APKs plus `SHA256SUMS`, exact package/channel mapping, expected vers
 - Create: `app/src/main/java/app/gamenative/library/community/SteamReviewPageProvider.kt`
 - Create: `app/src/main/java/app/gamenative/library/community/SteamCommunityDiagnostics.kt`
 - Create tests and `app/src/test/resources/steam/reviews-page.json`.
-- Modify: `SteamReviewSummaryProvider.kt` to enforce no-store/no-cache.
+- Modify: `SteamReviewSummaryProvider.kt` to retain no-cookie/auth protections while allowing normal public-response caching.
 
-- [ ] **Step 1: Write failing model/provider/privacy tests**
+- [ ] **Step 1: Write failing model/provider/data-protection tests**
 
-Prove Helpful/Recent, All/Positive/Negative, App language/All, All purchases/Steam purchases, opaque cursor encoding, pagination, malformed/oversized JSON, redirect rejection, cancellation, text/page bounds, fixed error messages, SteamID discard, and zero disk cache/cookies.
+Prove Helpful/Recent, All/Positive/Negative, App language/All, All purchases/Steam purchases, opaque cursor encoding, pagination, malformed/oversized JSON, redirect rejection, cancellation, text/page bounds, fixed error messages, SteamID discard, no cookies/authentication, and no explicit `Cache-Control: no-store` override.
 
-Seed synthetic forbidden title/query/URL/SteamID/username/review text into diagnostic tests and assert none survives export.
+Seed passwords, API keys, auth headers/cookies/tokens, credential-bearing URLs, sensitive query parameters, SteamID/username/profile values, account associations, install paths, and private user-entered search text into diagnostic tests and assert none survives export. Add positive cases proving bounded typed public titles, AppIDs, routes, URLs, cursors, review text, and content IDs may survive.
 
 - [ ] **Step 2: Add exact review models**
 
@@ -817,16 +817,16 @@ data class SteamReviewPage(
 
 Do not add serialization annotations to domain models.
 
-- [ ] **Step 3: Implement endpoint-bound no-store transport**
+- [ ] **Step 3: Implement endpoint-bound public transport**
 
-Build the client with `cache(null)`, `CookieJar.NO_COOKIES`, disabled redirects, provider timeouts, and `Cache-Control: no-store`. Bind AppReviews requests to the trusted AppID path. Cap each page at 20 reviews, one MiB response, 16 KiB review text, 8 KiB developer response, and a 512-byte opaque cursor.
+Build the client with normal cache semantics, `CookieJar.NO_COOKIES`, disabled redirects, provider timeouts, and no explicit `Cache-Control: no-store`. Bind AppReviews requests to the trusted AppID path. Cap each page at 20 reviews, one MiB response, 16 KiB review text, 8 KiB developer response, and a 512-byte opaque cursor.
 
 - [ ] **Step 4: Verify providers and commit**
 
 ```bash
 ./gradlew --no-daemon --no-parallel :app:testLegacyDebugUnitTest --tests "app.gamenative.library.community.*" --tests "app.gamenative.library.discovery.SteamReviewSummaryProviderTest" --tests "app.gamenative.diagnostics.*"
 git add app/src/main/java/app/gamenative/library/community app/src/main/java/app/gamenative/library/discovery/SteamReviewSummaryProvider.kt app/src/test/java/app/gamenative/library/community app/src/test/resources/steam/reviews-page.json
-git commit -m "feat: add private native Steam review transport" -m "Co-Authored-By: Claude <noreply@anthropic.com>"
+git commit -m "feat: add native Steam review transport" -m "Co-Authored-By: Claude <noreply@anthropic.com>"
 git push fork HEAD:codex/steam-normalized-game-details-spec
 ```
 
@@ -844,7 +844,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 
 - [ ] **Step 1: Write failing repository/ViewModel tests**
 
-Cover independent Loading/Content/LoadingMore/Empty/Offline/Unavailable states, filter-change cancellation, cursor deduplication, five-page/100-card bound, failed-refresh content retention, canonical-change clearing, detail-close clearing, and no process recreation.
+Cover independent Loading/Content/LoadingMore/Empty/Offline/Unavailable states, filter-change cancellation, cursor deduplication, five-page/100-card bound, failed-refresh content retention, canonical-change UI clearing, detail-close UI clearing, and valid behavior after process recreation. Public cache reuse is permitted but not required by this visible-core step.
 
 - [ ] **Step 2: Add section state**
 
@@ -863,7 +863,7 @@ sealed interface ReviewSectionState {
 }
 ```
 
-`GameDetailViewModel` owns review query/state and active calls. Add `clearDetail()` that cancels community work and clears body content; call it whenever canonical detail closes or changes.
+`GameDetailViewModel` owns review query/state and active calls. Add `clearDetail()` that cancels community work and clears visible UI state; call it whenever canonical detail closes or changes. This lifecycle clearing does not prohibit bounded app-private caching of public content.
 
 - [ ] **Step 3: Build Reviews UI**
 
@@ -898,7 +898,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 
 - [ ] **Step 2: Cross-check design Sections 5, 7, 9–13 and criteria 14–17**
 
-Apply the one-pass classification/correction rule. Review-body/identity persistence, unsafe endpoint/query mapping, unbounded content, cursor loop, or a Reviews failure blanking another section is a release blocker.
+Apply the one-pass classification/correction rule. Credential/account/profile persistence, unsafe endpoint/query mapping, unbounded content, cursor loop, or a Reviews failure blanking another section is a release blocker. Bounded public review text, AppIDs, URLs, and content IDs are not private.
 
 - [ ] **Step 3: Set the next unused release version and publish**
 
@@ -990,7 +990,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 
 - [ ] **Step 1: Write failing state/navigation tests**
 
-Cover listing load, supported category selection, thread open, Back-to-list, detail Back, page append/deduplication, independent listing/thread failures, current-content retention, clear-on-close, parser-unavailable external fallback, and no persistence.
+Cover listing load, supported category selection, thread open, Back-to-list, detail Back, page append/deduplication, independent listing/thread failures, current-content retention, clear-on-close UI behavior, parser-unavailable external fallback, and bounded public-cache eligibility.
 
 - [ ] **Step 2: Add discussion section state**
 
@@ -1045,7 +1045,7 @@ git push fork HEAD:codex/steam-normalized-game-details-spec
 
 - [ ] **Step 2: Cross-check design Sections 5, 8–13 and criteria 18–21**
 
-Apply the one-pass classification/correction rule. Authenticated scraping/cookies, unsafe redirects, cross-AppID threads, raw HTML execution, body/identity persistence, missing external fallback, or Discussions breaking Reviews/other sections is a blocker.
+Apply the one-pass classification/correction rule. Authenticated scraping/cookies, unsafe redirects, cross-AppID threads, raw HTML execution, credential/account/profile persistence, missing external fallback, or Discussions breaking Reviews/other sections is a blocker. Public discussion text, routes, URLs, AppIDs, and content IDs may use bounded caches and typed diagnostics.
 
 - [ ] **Step 3: Set the next unused release version and publish**
 
@@ -1065,7 +1065,7 @@ git commit -m "chore: prepare native Discussions RC" -m "Co-Authored-By: Claude 
 
 - [ ] **Step 1: Collect complaint-driven evidence**
 
-Record visible symptoms and fixed outcome/count categories only. Never commit titles, AppIDs, queries, usernames, SteamIDs, paths, full URLs, screenshots of private libraries, review bodies, discussion bodies, or raw exported reports.
+Record visible symptoms, fixed outcome/count categories, and bounded public titles, AppIDs, storefront IDs, routes, URLs, review/discussion text, or content IDs when useful. Never commit passwords, API keys, signing secrets, authentication headers/cookies/tokens, SteamIDs, usernames/profiles, personal/account or entitlement associations, install paths, private user-entered search text, screenshots exposing personal libraries/accounts, or unredacted credential-bearing reports.
 
 - [ ] **Step 2: Run one aggregate focused matrix**
 
@@ -1089,7 +1089,7 @@ Fix current Critical/High defects involving:
 - false identity merges or stale mutation;
 - source-action retargeting;
 - unsafe URL/content behavior;
-- privacy/persistence leakage;
+- credential, authentication, account/profile, entitlement-association, private-search, or install-path leakage;
 - unbounded memory/network behavior;
 - Reviews/Discussions failure coupling.
 
@@ -1135,7 +1135,7 @@ Prepare an additional signed RC when this gate changes production code, then con
 
 - [ ] **Step 1: Measure aggregate resolver coverage**
 
-Add a 900-canonical fixture with representative exact, edition, duplicate-name, missing-developer, missing-year, and no-result cases. Record only aggregate categories. The completion threshold is:
+Add a 900-canonical fixture with representative exact, edition, duplicate-name, missing-developer, missing-year, and no-result cases. Record aggregate categories and bounded public catalog values where they improve reproducibility, without account/ownership associations or private user-entered search text. The completion threshold is:
 
 ```kotlin
 data class ResolverCoverage(
@@ -1154,7 +1154,7 @@ data class ResolverCoverage(
 
 - [ ] **Step 2: Add durable attempt and rejection history**
 
-Migrate schema 27→28 with immutable exports and upgrade tests. Store only canonical/candidate IDs, evidence hash, fixed status, resolver version, and timestamps—never titles or queries:
+Migrate schema 27→28 with immutable exports and upgrade tests. Public titles and AppIDs may be persisted when useful. Keep account scope, ownership/entitlement associations, private user-entered queries, credentials, and personal paths out of this catalog-history table:
 
 ```kotlin
 enum class SteamCatalogResolutionStatus {
@@ -1209,7 +1209,7 @@ Run resolver scale, schema migration, card repository, detail ViewModel/Compose,
 
 ### Task 16: Complete public community browsing
 
-**Ledger:** V2, C2, A1; permanent-boundary verification for V3 and C3
+**Ledger:** V2, C2, A1; Task 169 closes V3 as a false public-data privacy boundary; permanent credential-boundary verification remains for C3
 
 **Files:**
 - Modify: `app/src/main/java/app/gamenative/library/community/SteamCommunityModels.kt`
@@ -1232,11 +1232,11 @@ Run resolver scale, schema migration, card repository, detail ViewModel/Compose,
 
 - [ ] **Step 1: Capture safe public fixtures and write failing parsers**
 
-Use synthetic or publicly reproducible sanitized fixtures for review-comment pages, additional review filters, discussion search, categories, and pagination. Remove usernames, SteamIDs, titles, URLs, and bodies that are not necessary to prove selectors. Tests must fail closed when a layout cannot bind every route to the trusted AppID.
+Use synthetic or publicly reproducible fixtures for review-comment pages, additional review filters, discussion search, categories, and pagination. Public titles, AppIDs, routes, URLs, and bodies may be retained where necessary to prove selectors. Remove usernames, SteamIDs, profile/account associations, cookies, tokens, and authenticated material. Tests must fail closed when a layout cannot bind every route to the trusted AppID.
 
 - [ ] **Step 2: Implement safe public review-comment reading where available**
 
-Add native read-only comments only when an unauthenticated, no-cookie, endpoint-bound route is fixture-proven. Comment bodies follow the same active-session-only limits as reviews. Posting/replying remains an explicit external action. If no safe public route exists, present the evidence and obtain user approval before closing V2 as an external permanent boundary.
+Add native read-only comments only when an unauthenticated, no-cookie, endpoint-bound route is fixture-proven. Comment bodies follow the same bounded public-content limits as reviews and may use normal app-private caches. Posting/replying remains an explicit external action. If no safe public route exists, present the evidence and obtain user approval before closing V2 as an external permanent boundary.
 
 - [ ] **Step 3: Expand discussion coverage**
 
@@ -1392,7 +1392,7 @@ Rebase or merge from then-current official master, retain upstream-compatible fe
 | Visible progress and manual correction | 6 |
 | Exactly four detail tabs | 6 |
 | Resolver cross-check/release | 7 |
-| No-store native Reviews | 8–9 |
+| Cache-eligible native Reviews with field-sensitive data protection | 8–9 |
 | Reviews cross-check/release | 10 |
 | Safe native Discussions | 11–12 |
 | Discussions cross-check/release | 13 |

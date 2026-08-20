@@ -18,7 +18,7 @@ This is the one focused Deliverable 1 cross-check required by Task 7. It covers 
 - [x] **Manual correction is explicit and reversible.** The picker supports editable search, direct positive AppID lookup, candidate comparison, explicit selection and confirmation, Keep separate, Reset to automatic with immediate retry, retry after unavailable/empty results, and Cancel/Back without mutation. Several mutable non-Steam copies route through copy selection. Direct Steam copies are visibly immutable.
 - [x] **Automatic and manual mutations are stale-guarded.** Expected copy/canonical state is checked transactionally. Stale confirmation, rejection, or reset writes nothing and returns fixed refresh feedback. Replacing an existing Steam identity invalidates the previous identity's presentation, review count, facets, and detail snapshots before assigning the replacement.
 - [x] **Accepted enrichment reuses validated evidence without refetch.** Sanitized `appdetails` presentation, genres, features, and snapshot are written under the expected AppID in one guarded Room transaction. Optional PICS genres/categories/tags and one-target review-count enrichment use the trusted AppID without creating entitlement.
-- [x] **Resolver-owned state and credentials have explicit persistence boundaries.** User search text, candidate lists, selected evidence, validated candidate records, and progress remain process-memory only and absent from diagnostics. The reproducible public Steam AppList title/AppID catalog alone is cached under app-private files for seven days. The runtime Web API credential is encrypted with a dedicated randomized Android Keystore AES-GCM key whose provider generates each encryption IV, and exposed to UI only as configured/not configured; it is never compiled from `.env`, sent in a URL, logged, or exported. Save is gated by a bounded provider Test for the exact entered key, while the ViewModel retains only its SHA-256 fingerprint.
+- [x] **Resolver-owned state and credentials have field-sensitive persistence boundaries.** Private user-edited search text remains process-memory-only and absent from diagnostics. Public candidate lists, titles, AppIDs, storefront IDs, validated records, media URLs, and progress evidence may use bounded app-private caching, persistence, and typed diagnostics. The reproducible public Steam AppList title/AppID catalog is cached under app-private files for seven days. The runtime Web API credential is encrypted with a dedicated randomized Android Keystore AES-GCM key whose provider generates each encryption IV, and exposed to UI only as configured/not configured; it is never compiled from `.env`, sent in a URL, logged, or exported. Save is gated by a bounded provider Test for the exact entered key, while the ViewModel retains only its SHA-256 fingerprint.
 - [x] **Coverage and popularity are source-agnostic.** Coverage observes the complete present canonical library rather than the active tab or page. A GOG-only card with a trusted Steam AppID and review count participates in popularity filtering under All and GOG while remaining excluded from the Steam ownership tab.
 - [x] **Visible detail structure matches the approved shell.** Canonical detail exposes exactly Overview, Reviews, Discussions, and Details. Resources are rendered under Details. Match provenance and Fix Steam match are visible at top level and per copy.
 - [x] **Official upstream was integrated before release preparation.** The resolver UI and upstream modern custom-game import coexist after merge `b784679d`; neither side's user path was discarded.
@@ -29,7 +29,7 @@ No Critical finding was confirmed. Three High findings were confirmed and repair
 
 1. **Replacing Steam identity retained data derived from the previous AppID.** `CanonicalMutationRepository.assignSteamIdentity` now clears prior genres, tags, features, detail snapshots, and review count, restores source-evidence presentation/classification, and assigns the replacement identity in the same transaction. A focused Room regression test covers A→B correction.
 2. **Validated Steam presentation was not identity-atomic.** Presentation previously changed before a separately guarded facet/snapshot transaction. `GameFacetRepository.upsertValidatedSteamPresentation` now guards the expected AppID and writes presentation, facets, snapshot, and classification in one Room transaction. Stale B metadata cannot overwrite a canonical already corrected to C.
-3. **Search and unaccepted candidate media could enter persistent HTTP/image caches.** Store search now sends `Cache-Control: no-store` on the initial request and every validated redirect. Session-only picker media disables the inherited OkHttp cache, sends `no-store` across redirects, and disables Coil disk caching.
+3. **The original correction incorrectly treated public search evidence and candidate media as private.** That checkpoint forced `no-store`, disabled inherited OkHttp/Coil disk caches, and made public media session-only. Task 169 supersedes this classification: public titles, AppIDs, candidate metadata, URLs, and media use normal bounded caches; private user-edited search text and credentials/account data remain protected.
 
 No second design-review pass will be launched. Subsequent work is limited to deterministic test/build/release failures discovered while closing this gate.
 
@@ -73,7 +73,7 @@ JAVA_TOOL_OPTIONS=-Xshare:off ./gradlew :app:testLegacyDebugUnitTest \
   --tests '*GameFacetRepositoryTest.staleSteamPresentationIsRejectedWithoutPartialWrites' \
   --tests '*SteamCatalogSearchProviderTest.encodesOnlyTrimmedTermCountryAndLanguage' \
   --tests '*SteamCatalogSearchProviderTest.followsOnlyRevalidatedSameHostRedirects' \
-  --tests '*SteamMediaDataSourceTest.sessionOnlyMediaRequestsAreNoStoreAcrossRedirects'
+  --tests '*SteamMediaDataSourceTest.publicMediaRequestsRemainCacheEligibleAcrossRedirects'
 
 JAVA_TOOL_OPTIONS=-Xshare:off ./gradlew :app:testModernDebugUnitTest \
   --tests '*CanonicalMutationRepositoryTest.guarded manual correction invalidates prior Steam presentation and facets' \
@@ -81,7 +81,7 @@ JAVA_TOOL_OPTIONS=-Xshare:off ./gradlew :app:testModernDebugUnitTest \
   --tests '*GameFacetRepositoryTest.staleSteamPresentationIsRejectedWithoutPartialWrites' \
   --tests '*SteamCatalogSearchProviderTest.encodesOnlyTrimmedTermCountryAndLanguage' \
   --tests '*SteamCatalogSearchProviderTest.followsOnlyRevalidatedSameHostRedirects' \
-  --tests '*SteamMediaDataSourceTest.sessionOnlyMediaRequestsAreNoStoreAcrossRedirects'
+  --tests '*SteamMediaDataSourceTest.publicMediaRequestsRemainCacheEligibleAcrossRedirects'
 ```
 
 - **Legacy:** passed in 4m 29s.

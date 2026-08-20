@@ -63,7 +63,7 @@ class SteamDiscussionProviderTest {
         assertEquals("/app/42/discussions/?fp=2", listing.nextRoute)
         val request = server.takeRequest()
         assertEquals("/app/42/discussions/", request.requestUrl?.encodedPath)
-        assertEquals("no-store", request.getHeader("Cache-Control"))
+        assertNull(request.getHeader("Cache-Control"))
         assertEquals(
             "GameNative/1.0 python-requests-compatible",
             request.getHeader("User-Agent"),
@@ -311,7 +311,7 @@ class SteamDiscussionProviderTest {
                 """
                 <html><body>
                   <div class="commentthread_comment" id="comment_98">
-                    <div class="commentthread_comment_text">Private post body</div>
+                    <div class="commentthread_comment_text">Public post body</div>
                   </div>
                   <div class="commentthread_comment" id="comment_99">
                     <div class="commentthread_comment_text"><br><br></div>
@@ -335,8 +335,6 @@ class SteamDiscussionProviderTest {
         assertEquals(1, event.blankItemCount)
         assertEquals(0, event.duplicateItemCount)
         assertNull(event.failureReason)
-        assertFalse(event.toString().contains("comment_98"))
-        assertFalse(event.toString().contains("Private post body"))
     }
 
     @Test
@@ -476,7 +474,6 @@ class SteamDiscussionProviderTest {
         diagnostics: SteamCommunityDiagnosticSink = NoOpSteamCommunityDiagnostics,
     ) = SteamDiscussionProvider(
         client = OkHttpClient.Builder()
-            .cache(null)
             .cookieJar(CookieJar.NO_COOKIES)
             .followRedirects(false)
             .followSslRedirects(false)
