@@ -408,7 +408,10 @@ internal fun LibraryCarouselPane(
                     ) {
                         items(
                             count = state.cards.size,
-                            key = { listIndex -> state.cards[listIndex].composeKey },
+                            key = { listIndex ->
+                                val card = state.cards[listIndex]
+                                if (card.recSource == "hero") "HERO_SLOT" else card.composeKey
+                            },
                         ) { listIndex ->
                             val item = state.cards[listIndex]
 

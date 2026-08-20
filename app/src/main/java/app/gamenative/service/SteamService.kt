@@ -60,6 +60,8 @@ import app.gamenative.utils.CaseInsensitiveFileSystem
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.FileUtils
 import app.gamenative.utils.LicenseSerializer
+import app.gamenative.utils.LocaleHelper
+import app.gamenative.utils.LsfgVkManager
 import app.gamenative.utils.MarkerUtils
 import app.gamenative.utils.Net
 import app.gamenative.utils.SteamUtils
@@ -210,6 +212,13 @@ internal class SteamNoComparableDepotsException : Exception()
 @AndroidEntryPoint
 class SteamService : Service(), IChallengeUrlChanged {
 
+    override fun attachBaseContext(newBase: Context) {
+        PrefManager.init(newBase)
+        val languageCode = PrefManager.appLanguage
+        val context = LocaleHelper.applyLanguage(newBase, languageCode)
+        super.attachBaseContext(context)
+    }
+
     // To view log messages in android logcat properly
     private val logger = object : LogListener {
         override fun onLog(clazz: Class<*>, message: String?, throwable: Throwable?) {
@@ -322,7 +331,6 @@ class SteamService : Service(), IChallengeUrlChanged {
 
     private lateinit var connectivityManager: ConnectivityManager
     private lateinit var networkCallback: ConnectivityManager.NetworkCallback
-
 
     // Add these as class properties
     private var picsGetProductInfoJob: Job? = null
@@ -995,7 +1003,6 @@ class SteamService : Service(), IChallengeUrlChanged {
 
             return true
         }
-
 
         /**
          * Returns all DLC App IDs that have exactly one depot.
@@ -1994,6 +2001,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                             maxDecompress = maxDecompress,
                             parentJob = coroutineContext[Job],
                             autoStartDownload = false,
+                            skipLargeFileAllocation = chunkStagingRedirectDir != null,
                             filesystem = CaseInsensitiveFileSystem(
                                 showDebugLog = false,
                                 chunkStagingRedirect = chunkStagingRedirectDir?.absolutePath?.toPath(),
@@ -2318,33 +2326,40 @@ class SteamService : Service(), IChallengeUrlChanged {
                     val appId = downloadInfo.gameId
                     val steamId = userSteamId
                     val containerId = "${GameSource.STEAM.name}_$appId"
-                    if (steamId != null && !ContainerUtils.isLocalSavesOnly(svc.applicationContext, containerId)) {
-                        downloadInfo.setPostInstallSyncing(true)
-                        downloadInfo.updateStatusMessage("Syncing saves...")
-                        PluviaApp.events.emit(AndroidEvent.PostInstallSyncStatusChanged(appId, true))
-                        try {
-                            val container = ContainerUtils.getOrCreateContainer(svc.applicationContext, containerId)
-                            val prefixToPath: (String) -> String = { prefix ->
-                                PathType.from(prefix).toAbsPath(container, appId, steamId.accountID)
+                    // Skip post-install sync for utility apps (e.g., Lossless Scaling)
+                    val isUtilityApp = appId == LsfgVkManager.LOSSLESS_SCALING_APP_ID
+                    if (!isUtilityApp) {
+                        if (steamId != null && !ContainerUtils.isLocalSavesOnly(svc.applicationContext, containerId)) {
+                            downloadInfo.setPostInstallSyncing(true)
+                            downloadInfo.updateStatusMessage("Syncing saves...")
+                            PluviaApp.events.emit(AndroidEvent.PostInstallSyncStatusChanged(appId, true))
+                            try {
+                                val container = ContainerUtils.getOrCreateContainer(svc.applicationContext, containerId)
+                                val prefixToPath: (String) -> String = { prefix ->
+                                    PathType.from(prefix).toAbsPath(container, appId, steamId.accountID)
+                                }
+                                val postSyncInfo = forceSyncUserFiles(
+                                    appId = appId,
+                                    prefixToPath = prefixToPath,
+                                    preferredSave = SaveLocation.Remote,
+                                    parentScope = parentScope,
+                                ).await()
+                                if (postSyncInfo.syncResult !in setOf(SyncResult.Success, SyncResult.UpToDate)) {
+                                    Timber.w("[PostInstallSync] Cloud save sync finished with ${postSyncInfo.syncResult} for app $appId")
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Timber.e(e, "[PostInstallSync] Cloud save sync failed for app $appId")
+                            } finally {
+                                downloadInfo.setPostInstallSyncing(false)
+                                downloadInfo.updateStatusMessage(null)
+                                PluviaApp.events.emit(AndroidEvent.PostInstallSyncStatusChanged(appId, false))
                             }
-                            val postSyncInfo = forceSyncUserFiles(
-                                appId = appId,
-                                prefixToPath = prefixToPath,
-                                preferredSave = SaveLocation.Remote,
-                                parentScope = parentScope,
-                            ).await()
-                            if (postSyncInfo.syncResult !in setOf(SyncResult.Success, SyncResult.UpToDate)) {
-                                Timber.w("[PostInstallSync] Cloud save sync finished with ${postSyncInfo.syncResult} for app $appId")
-                            }
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            Timber.e(e, "[PostInstallSync] Cloud save sync failed for app $appId")
-                        } finally {
-                            downloadInfo.setPostInstallSyncing(false)
-                            downloadInfo.updateStatusMessage(null)
-                            PluviaApp.events.emit(AndroidEvent.PostInstallSyncStatusChanged(appId, false))
                         }
+                    } else {
+                        Timber.d("Skipped container creation Lossless Scaling")
+                        PluviaApp.events.emit(AndroidEvent.PostInstallSyncStatusChanged(appId, false))
                     }
                 }
             }
@@ -3964,11 +3979,11 @@ class SteamService : Service(), IChallengeUrlChanged {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        if (!hasActiveOperations()) {
+        if (!hasActiveOperations() && !(BuildConfig.XR_BUILD && keepAlive)) {
             Timber.i("Task removed and no active work — stopping service")
             stopSelf()
         } else {
-            Timber.i("Task removed but active work exists — keeping service alive")
+            Timber.i("Task removed but active work or keepAlive exists — keeping service alive")
         }
     }
 

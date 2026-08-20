@@ -81,6 +81,7 @@ import app.gamenative.PrefManager
 import app.gamenative.PluviaApp
 import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
+import app.gamenative.data.FavoritesManager
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.CanonicalGameId
@@ -127,12 +128,14 @@ import app.gamenative.ui.screen.library.components.CanonicalCopiesSheet
 import app.gamenative.ui.screen.library.components.LibraryCarouselPane
 import app.gamenative.ui.screen.library.components.LibraryDetailPane
 import app.gamenative.ui.screen.library.components.LibraryListPane
+import app.gamenative.ui.screen.library.components.LibraryFavoritesEmptyState
 import app.gamenative.ui.screen.library.components.RecommendationDisclosureDialog
 import app.gamenative.ui.screen.library.components.LibraryOptionsPanel
 import app.gamenative.ui.screen.library.components.LibrarySearchBar
 import app.gamenative.ui.screen.library.components.SteamMatchPicker
 import app.gamenative.ui.screen.library.components.LibrarySourceNotLoggedInSplash
 import app.gamenative.ui.screen.library.components.LibraryTabBar
+import app.gamenative.ui.screen.library.components.toggleFavorite
 import app.gamenative.ui.screen.auth.AmazonOAuthActivity
 import app.gamenative.ui.screen.auth.EpicOAuthActivity
 import app.gamenative.ui.screen.auth.GOGOAuthActivity
@@ -147,6 +150,7 @@ import app.gamenative.utils.CustomGameScanner
 import app.gamenative.utils.HltbCache
 import app.gamenative.utils.PlatformOAuthHandlers
 import app.gamenative.utils.SteamUtils
+import com.posthog.PostHog
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import android.os.SystemClock
@@ -495,6 +499,17 @@ internal fun LibraryScreenContent(
     val isViewWide = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var currentPaneType by remember { mutableStateOf(PrefManager.libraryLayout) }
     var recDisclosureShown by remember { mutableStateOf(PrefManager.recDisclosureShown) }
+    var showRecTeaserDialog by remember { mutableStateOf(false) }
+    val onRecTeaserTapped = {
+        if (PrefManager.usageAnalyticsEnabled) PostHog.capture(event = "rec_teaser_tapped")
+        showRecTeaserDialog = true
+    }
+    val recTeaserVisible = state.cards.firstOrNull()?.isRecTeaser == true
+    LaunchedEffect(recTeaserVisible) {
+        if (recTeaserVisible && PrefManager.usageAnalyticsEnabled) {
+            PostHog.capture(event = "rec_teaser_shown")
+        }
+    }
 
     // Initialize layout if undecided
     LaunchedEffect(Unit) {
@@ -518,6 +533,8 @@ internal fun LibraryScreenContent(
     // Track previous overlay states to detect when they close
     var wasSystemMenuOpen by remember { mutableStateOf(false) }
     var wasOptionsPanelOpen by remember { mutableStateOf(false) }
+    val favorites by FavoritesManager.favorites.collectAsStateWithLifecycle()
+    val favoritesLoaded by FavoritesManager.loaded.collectAsStateWithLifecycle()
     val filterFabExpanded by remember(currentPaneType, listState, carouselListState) {
         derivedStateOf {
             if (currentPaneType == PaneType.CAROUSEL) {
@@ -824,6 +841,22 @@ internal fun LibraryScreenContent(
                 }
             }
         }
+    }
+
+    fun focusedLibraryCard(): LibraryCard? {
+        if (state.currentTab == LibraryTab.RECOMMENDED) return null
+        val focusedIndex = if (currentPaneType == PaneType.CAROUSEL) {
+            currentCarouselFocusTargetIndex()
+        } else {
+            gridFocusTargetListIndex
+        }
+        return state.cards.getOrNull(focusedIndex)?.takeUnless { it.isRecommended }
+    }
+
+    fun toggleFocusedFavorite(): Boolean {
+        val card = focusedLibraryCard() ?: return false
+        toggleFavorite(context, card.favoriteAppIds, card.name)
+        return true
     }
 
     val storagePermissionLauncher = rememberLauncherForActivityResult(
@@ -1325,11 +1358,22 @@ internal fun LibraryScreenContent(
                             }
                         }
 
-                        // X button - add custom game
+                        // X button - toggle favorite for the focused game
                         KeyEvent.KEYCODE_BUTTON_X -> {
-                            if (copiesSheetCardKey == null && selectedCardIdentity == null && !state.isSearching && !state.isOptionsPanelOpen && !isSystemMenuOpen) {
-                                onAddCustomGameClick()
-                                true
+                            if (
+                                copiesSheetCardKey == null &&
+                                selectedCardIdentity == null &&
+                                !state.isSearching &&
+                                !state.isOptionsPanelOpen &&
+                                !isSystemMenuOpen &&
+                                !tabBarHasFocus
+                            ) {
+                                if (focusedLibraryCard() != null) {
+                                    toggleFocusedFavorite()
+                                } else {
+                                    onAddCustomGameClick()
+                                    true
+                                }
                             } else {
                                 false
                             }
@@ -1376,6 +1420,21 @@ internal fun LibraryScreenContent(
         if (selectedCardIdentity == null) {
             // Use Box to allow content to scroll behind the tab bar
             Box(modifier = Modifier.fillMaxSize()) {
+                if (showRecTeaserDialog) {
+                    RecommendationDisclosureDialog(
+                        onContinue = {
+                            PrefManager.recDisclosureShown = true
+                            recDisclosureShown = true
+                            showRecTeaserDialog = false
+                            PluviaApp.events.emit(AndroidEvent.RecommendationToggleChanged)
+                        },
+                        onDismiss = {
+                            PrefManager.recTeaserDismissedDay = System.currentTimeMillis() / (24L * 60 * 60 * 1000)
+                            showRecTeaserDialog = false
+                        },
+                        source = "hero",
+                    )
+                }
                 // When on Steam/GOG/Epic/Amazon tab and not logged in, or LOCAL tab with no custom games, show splash
                 if (state.currentTab == LibraryTab.RECOMMENDED) {
                     if (recDisclosureShown) {
@@ -1411,6 +1470,11 @@ internal fun LibraryScreenContent(
                     LibraryTab.LOCAL -> PrefManager.customGamesCount == 0
                     else -> false
                 }
+                // Favorites tab has its own empty state. Only show it once favorites have loaded and
+                // the list has settled, so a genuinely empty tab is explained instead of flashing a
+                // blank screen (or the empty message before stored favorites arrive).
+                val showFavoritesEmptyState = state.currentTab == LibraryTab.FAVORITES &&
+                    favoritesLoaded && !state.isLoading && state.cards.isEmpty()
                 if (showEmptyStateSplash) {
                     val (messageResId, buttonResId, onAction) = when (state.currentTab) {
                         LibraryTab.STEAM -> Triple(
@@ -1446,6 +1510,24 @@ internal fun LibraryScreenContent(
                         onSignInClick = onAction,
                         modifier = Modifier.fillMaxSize(),
                     )
+                } else if (showFavoritesEmptyState) {
+                    if (favorites.isEmpty()) {
+                        LibraryFavoritesEmptyState(
+                            titleResId = R.string.favorites_empty_title,
+                            messageResId = R.string.favorites_empty_message,
+                            actionLabelResId = R.string.favorites_empty_action,
+                            onAction = { onTabChanged(LibraryTab.ALL) },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        // Favorites exist but none are visible — filtered out by the current search
+                        // or unavailable (source logged out / game removed).
+                        LibraryFavoritesEmptyState(
+                            titleResId = R.string.favorites_empty_filtered_title,
+                            messageResId = R.string.favorites_empty_filtered_message,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 } else {
                     // Library list (content scrolls behind tab bar)
                     if (currentPaneType == PaneType.CAROUSEL) {
@@ -1454,7 +1536,13 @@ internal fun LibraryScreenContent(
                             listState = carouselListState,
                             onPageChange = onPageChange,
                             onNavigate = { card ->
-                                openCard(card)
+                                if (card.isRecTeaser) {
+                                    if (!card.isRecLoading && !recDisclosureShown) {
+                                        onRecTeaserTapped()
+                                    }
+                                } else {
+                                    openCard(card)
+                                }
                             },
                             onCopies = { card, _ ->
                                 val canonical = card.identity as? LibraryCardIdentity.Canonical
@@ -1477,7 +1565,13 @@ internal fun LibraryScreenContent(
                             focusTargetListIndex = gridFocusTargetListIndex,
                             onPageChange = onPageChange,
                             onNavigate = { card ->
-                                openCard(card)
+                                if (card.isRecTeaser) {
+                                    if (!card.isRecLoading && !recDisclosureShown) {
+                                        onRecTeaserTapped()
+                                    }
+                                } else {
+                                    openCard(card)
+                                }
                             },
                             onCopies = { card, _ ->
                                 val canonical = card.identity as? LibraryCardIdentity.Canonical
@@ -1487,6 +1581,7 @@ internal fun LibraryScreenContent(
                             },
                             onRefresh = onRefresh,
                             modifier = Modifier.fillMaxSize(),
+                            onFocusedIndexChanged = { gridFocusTargetListIndex = it },
                         )
                     }
                 }
@@ -1520,6 +1615,7 @@ internal fun LibraryScreenContent(
                         currentTab = state.currentTab,
                         tabCounts = mapOf(
                             LibraryTab.ALL to state.allCount,
+                            LibraryTab.FAVORITES to state.favoritesCount,
                             LibraryTab.STEAM to state.steamCount,
                             LibraryTab.GOG to state.gogCount,
                             LibraryTab.EPIC to state.epicCount,
@@ -1690,12 +1786,18 @@ internal fun LibraryScreenContent(
                         labelResId = R.string.search,
                         onClick = { onIsSearching(true) },
                     ),
-                ) + listOf(
-                    GamepadAction(
-                        button = GamepadButton.X,
-                        labelResId = R.string.action_add_game,
-                        onClick = onAddCustomGameClick,
-                    ),
+                ) + listOfNotNull(
+                    focusedLibraryCard()?.let { card ->
+                        GamepadAction(
+                            button = GamepadButton.X,
+                            labelResId = if (card.favoriteAppIds.any(favorites::contains)) {
+                                R.string.option_remove_from_favorites
+                            } else {
+                                R.string.option_add_to_favorites
+                            },
+                            onClick = { toggleFocusedFavorite() },
+                        )
+                    },
                 )
             }
 

@@ -38,6 +38,9 @@ data class LibraryCard(
     val recStoreCard: Boolean,
     val recSource: String,
     val isFeatured: Boolean,
+    val isRecTeaser: Boolean = false,
+    val isRecLoading: Boolean = false,
+    val favoriteAppIds: Set<String> = emptySet(),
 ) {
     val composeKey: String
         get() = when (val value = identity) {
@@ -117,6 +120,9 @@ data class LibraryCard(
             recStoreCard = item.recStoreCard,
             recSource = item.recSource,
             isFeatured = item.isFeatured,
+            isRecTeaser = item.isRecTeaser,
+            isRecLoading = item.isRecLoading,
+            favoriteAppIds = if (item.isRecommended) emptySet() else setOf(item.appId),
         )
 
         fun canonical(
@@ -134,6 +140,7 @@ data class LibraryCard(
             sizeBytes: Long = 0,
             isInstalled: Boolean = false,
             isShared: Boolean = false,
+            favoriteAppIds: Set<String> = emptySet(),
         ): LibraryCard = LibraryCard(
             identity = LibraryCardIdentity.Canonical(key),
             index = index,
@@ -160,6 +167,7 @@ data class LibraryCard(
             recStoreCard = false,
             recSource = "",
             isFeatured = false,
+            favoriteAppIds = favoriteAppIds,
         )
     }
 }

@@ -108,6 +108,8 @@ The full [Privacy Policy](PrivacyPolicy/README.md) has the details.
 
 The official project is supported by its [Ko-fi sponsors](https://ko-fi.com/gamenative) and [GitHub sponsors](https://github.com/sponsors/utkarshdalal?preview=true), including [CodeRabbit](https://coderabbit.link/gnative).
 
+[![Official GameNative Star History Chart](https://star-history.dera.page/svg?repos=utkarshdalal/GameNative&type=Date&theme=dark)](https://star-history.dera.page/#utkarshdalal/GameNative&Date)
+
 ## License
 
 [GPL 3.0](LICENSE).

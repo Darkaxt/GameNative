@@ -23,10 +23,10 @@ class TaggedReleaseWorkflowContractTest {
             "universal-compat.apk universal-compat-legacy-xr.apk" +
                 " universal-side-by-side.apk universal-side-by-side-legacy-xr.apk"
 
-        assertTrue(appGradle.contains("versionCode = 38"))
-        assertTrue(appGradle.contains("versionName = \"1.1.3-rc12\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"38\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.1.3-rc12\""))
+        assertTrue(appGradle.contains("versionCode = 40"))
+        assertTrue(appGradle.contains("versionName = \"1.2.0-rc14\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"40\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.2.0-rc14\""))
         assertEquals(1, workflow.lines().count { it.trimStart().startsWith("EXPECTED_VERSION_CODE:") })
         assertEquals(1, workflow.lines().count { it.trimStart().startsWith("EXPECTED_VERSION_NAME:") })
         assertTrue(workflow.contains("[[ \"\$RELEASE_TAG\" != \"v\$EXPECTED_VERSION_NAME\" ]]"))

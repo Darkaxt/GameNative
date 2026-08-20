@@ -52,6 +52,8 @@ object PrefManager {
     )
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val favoritePersistenceLock = Any()
+    private var favoritePersistenceVersion = 0L
 
     private lateinit var appContext: Context
     private lateinit var dataStore: DataStore<Preferences>
@@ -203,7 +205,7 @@ object PrefManager {
     /* Container Default Settings */
     private val SCREEN_SIZE = stringPreferencesKey("screen_size")
     var screenSize: String
-        get() = getPref(SCREEN_SIZE, Container.DEFAULT_SCREEN_SIZE)
+        get() = getPref(SCREEN_SIZE, PluviaApp.getDefaultScreenSize())
         set(value) {
             setPref(SCREEN_SIZE, value)
         }
@@ -1109,6 +1111,27 @@ object PrefManager {
         dataStore.edit { pref -> pref[SUPPORT_PROMPT_LAST_SHOWN_AT] = value }
     }
 
+    private val HAS_ATTEMPTED_GAME_LAUNCH = booleanPreferencesKey("has_attempted_game_launch")
+    var hasAttemptedGameLaunch: Boolean
+        get() = getPref(HAS_ATTEMPTED_GAME_LAUNCH, false)
+        set(value) {
+            setPref(HAS_ATTEMPTED_GAME_LAUNCH, value)
+        }
+
+    private val LAST_LAUNCH_PITCH_TIME = longPreferencesKey("last_launch_pitch_time")
+    var lastLaunchPitchTime: Long
+        get() = getPref(LAST_LAUNCH_PITCH_TIME, 0L)
+        set(value) {
+            setPref(LAST_LAUNCH_PITCH_TIME, value)
+        }
+
+    private val LAST_WARM_PITCH_TIME = longPreferencesKey("last_warm_pitch_time")
+    var lastWarmPitchTime: Long
+        get() = getPref(LAST_WARM_PITCH_TIME, 0L)
+        set(value) {
+            setPref(LAST_WARM_PITCH_TIME, value)
+        }
+
     private val APP_THEME = intPreferencesKey("app_theme")
     var appTheme: AppTheme
         get() {
@@ -1306,10 +1329,24 @@ object PrefManager {
         }
 
     private val REC_DISCLOSURE_SHOWN = booleanPreferencesKey("rec_disclosure_shown")
+
+    // Cached in memory because the DataStore write is async: consumers read this back
+    // immediately after granting consent, before the write lands on disk.
+    @Volatile private var recDisclosureShownCache: Boolean? = null
     var recDisclosureShown: Boolean
-        get() = getPref(REC_DISCLOSURE_SHOWN, false)
+        get() = recDisclosureShownCache
+            ?: getPref(REC_DISCLOSURE_SHOWN, false).also { recDisclosureShownCache = it }
         set(value) {
+            recDisclosureShownCache = value
             setPref(REC_DISCLOSURE_SHOWN, value)
+        }
+
+    // Day seed when the user last dismissed the frosted rec teaser ("Not now")
+    private val REC_TEASER_DISMISSED_DAY = longPreferencesKey("rec_teaser_dismissed_day")
+    var recTeaserDismissedDay: Long
+        get() = getPref(REC_TEASER_DISMISSED_DAY, 0L)
+        set(value) {
+            setPref(REC_TEASER_DISMISSED_DAY, value)
         }
 
     // Show dialog when adding custom game folder
@@ -1440,6 +1477,37 @@ object PrefManager {
         }
         set(value) {
             setPref(CUSTOM_GAME_MANUAL_FOLDERS, Json.encodeToString(value))
+        }
+
+    private val FAVORITE_APP_IDS = stringPreferencesKey("favorite_app_ids")
+    var favoriteAppIds: Set<String>
+        get() {
+            val value = getPref(FAVORITE_APP_IDS, "[]")
+            return try {
+                Json.decodeFromString<Set<String>>(value)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to decode favorite app ids; falling back to empty set")
+                emptySet()
+            }
+        }
+        set(value) {
+            // Keep JSON encoding off the caller thread. The version check prevents an older
+            // serialization from overwriting a newer favorite set if several toggles are queued.
+            val version = synchronized(favoritePersistenceLock) {
+                favoritePersistenceVersion += 1
+                favoritePersistenceVersion
+            }
+            scope.launch {
+                val serialized = Json.encodeToString(value)
+                dataStore.edit { pref ->
+                    val isLatest = synchronized(favoritePersistenceLock) {
+                        version == favoritePersistenceVersion
+                    }
+                    if (isLatest) {
+                        pref[FAVORITE_APP_IDS] = serialized
+                    }
+                }
+            }
         }
 
     // Add new setting for Wine debug logging

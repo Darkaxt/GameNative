@@ -13,6 +13,8 @@ import app.gamenative.BuildConfig
 import app.gamenative.PluviaApp
 import app.gamenative.PrefManager
 import app.gamenative.R
+import app.gamenative.data.FavoritesManager
+import app.gamenative.data.FavoritesUtils
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
@@ -125,7 +127,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -160,6 +164,8 @@ internal data class CanonicalLibraryPage(
     val tagTotalCount: Int,
     val steamPopularityKnownCount: Int,
     val steamPopularityEligibleCount: Int,
+    val favoriteEligibleAppIdGroups: List<Set<String>>,
+    val favoritesCount: Int,
 )
 
 internal object CanonicalLibraryCardValidator {
@@ -197,6 +203,13 @@ internal object CanonicalLibraryCardValidator {
     }
 }
 
+private fun OwnedCopyKey.favoriteAppId(): String = "${source.name}_$stableSourceId"
+
+private fun CanonicalLibraryCard.favoriteAppIds(): Set<String> = buildSet {
+    preferredCopy?.let { add(it.favoriteAppId()) }
+    copies.forEach { copy -> add(copy.key.favoriteAppId()) }
+}
+
 internal fun canonicalUnsupportedFailure(state: LibraryState): CanonicalPublicFailure? =
     if (state.currentTab == LibraryTab.RECOMMENDED || state.appInfoSortType.contains(AppFilter.EXPIRED)) {
         CanonicalPublicFailure.UNSUPPORTED_LEGACY_CONTEXT
@@ -226,6 +239,7 @@ internal object CanonicalLibraryFilter {
         pageSize: Int,
         promotion: LibraryItem?,
         showRecommendations: Boolean,
+        favoriteAppIds: Set<String> = emptySet(),
         compatibility: (CanonicalLibraryCard) -> GameCompatibilityStatus?,
     ): CanonicalLibraryPage {
         require(pageSize > 0)
@@ -294,7 +308,9 @@ internal object CanonicalLibraryFilter {
                 entry.card.steamCollectionAppIds.any(allowedSteamAppIds::contains)
             }
         }
-        val coverageCards = afterCollectionsBeforeDiscovery.filter { entry -> admitted(entry.card, state) }
+        val coverageCards = afterCollectionsBeforeDiscovery.filter { entry ->
+            admitted(entry.card, state, favoriteAppIds)
+        }
         val afterCollections = afterCollectionsBeforeDiscovery.filter { entry ->
             matchesDiscovery(entry.card, selectedGenres, selectedTags, tagMode)
         }
@@ -308,7 +324,9 @@ internal object CanonicalLibraryFilter {
             afterPopularity.count { entry -> source in entry.card.ownedSources }
         }
         val allCount = afterPopularity.count { entry -> ownsEnabledSource(entry.card, state) }
-        val admitted = afterPopularity.filter { entry -> admitted(entry.card, state) }
+        val favoriteEligibleAppIdGroups = afterPopularity.map { entry -> entry.card.favoriteAppIds() }
+        val favoritesCount = favoriteEligibleAppIdGroups.count { ids -> ids.any(favoriteAppIds::contains) }
+        val admitted = afterPopularity.filter { entry -> admitted(entry.card, state, favoriteAppIds) }
         val sorted = admitted.sortedWith(comparator(state.currentSortOption))
         val totalCount = sorted.size
         val lastPage = if (totalCount == 0) 0 else (totalCount - 1) / pageSize
@@ -335,6 +353,7 @@ internal object CanonicalLibraryFilter {
                 sizeBytes = entry.sizeBytes ?: 0L,
                 isInstalled = card.copies.any(OwnedCopySummary::isInstalled),
                 isShared = card.copies.any(OwnedCopySummary::isShared),
+                favoriteAppIds = card.favoriteAppIds(),
             )
         }
         if (
@@ -377,6 +396,8 @@ internal object CanonicalLibraryFilter {
                 card.steamReviewCount?.let { it >= 0 } == true
             },
             steamPopularityEligibleCount = popularityEligible.size,
+            favoriteEligibleAppIdGroups = immutableList(favoriteEligibleAppIdGroups),
+            favoritesCount = favoritesCount,
         )
     }
 
@@ -416,8 +437,13 @@ internal object CanonicalLibraryFilter {
             (state.showAmazonInLibrary && GameSource.AMAZON in card.ownedSources) ||
             (state.showCustomGamesInLibrary && GameSource.CUSTOM_GAME in card.ownedSources)
 
-    private fun admitted(card: CanonicalLibraryCard, state: LibraryState): Boolean = when (state.currentTab) {
+    private fun admitted(
+        card: CanonicalLibraryCard,
+        state: LibraryState,
+        favoriteAppIds: Set<String>,
+    ): Boolean = when (state.currentTab) {
         LibraryTab.ALL -> ownsEnabledSource(card, state)
+        LibraryTab.FAVORITES -> card.favoriteAppIds().any(favoriteAppIds::contains)
         LibraryTab.STEAM -> GameSource.STEAM in card.ownedSources
         LibraryTab.GOG -> GameSource.GOG in card.ownedSources
         LibraryTab.EPIC -> GameSource.EPIC in card.ownedSources
@@ -602,6 +628,12 @@ class LibraryViewModel @Inject constructor(
     }
 
     private val onRecommendationToggleChanged: (AndroidEvent.RecommendationToggleChanged) -> Unit = {
+        // Consent granted from the frosted teaser: show a loading spinner on the card
+        // until the refresh below swaps in the personalized pick.
+        if (cachedRecTeaser && PrefManager.recDisclosureShown) {
+            cachedRecLoading = true
+            onFilterApps(paginationCurrentPage)
+        }
         refreshRecommendationHero()
     }
 
@@ -639,6 +671,10 @@ class LibraryViewModel @Inject constructor(
     private var canonicalRetryDeadlineElapsedMs: Long = 0L
     private var canonicalRetryDelayMs: Long = MIN_CANONICAL_RETRY_DELAY_MS
 
+    // App ids grouped by the cards the Favorites tab can show. Canonical cards may represent
+    // several source app ids, but each group contributes at most one badge count.
+    @Volatile private var favoriteEligibleAppIdGroups: List<Set<String>> = emptyList()
+
     // Complete and unfiltered app list
     private var appList: List<SteamApp> = emptyList()
     private var gogGameList: List<GOGGame> = emptyList()
@@ -654,6 +690,8 @@ class LibraryViewModel @Inject constructor(
     // Cached recommendation (fetched once at startup)
     @Volatile private var cachedRecommendation: RecommendedGame? = null
     @Volatile private var cachedFeatured: app.gamenative.data.FeaturedItem? = null
+    @Volatile private var cachedRecTeaser: Boolean = false
+    @Volatile private var cachedRecLoading: Boolean = false
 
     // Track debounce job for search
     private var searchDebounceJob: Job? = null
@@ -744,6 +782,25 @@ class LibraryViewModel @Inject constructor(
             )
             // Rebuild typed cards now that their display stats are available.
             onFilterApps(request)
+        }
+
+        // Keep the Favorites tab and its badge in sync as the user stars or unstars games. When the
+        // user is actually viewing the Favorites tab we rebuild the list so its contents change;
+        // otherwise only the badge count can change, so we update that cheaply instead of running a
+        // full (and visibly loading) re-filter of the entire library.
+        viewModelScope.launch(Dispatchers.IO) {
+            FavoritesManager.favorites
+                .drop(1)
+                .collectLatest { favorites ->
+                    if (_state.value.currentTab == LibraryTab.FAVORITES) {
+                        onFilterApps(paginationCurrentPage).join()
+                    } else {
+                        val count = favoriteEligibleAppIdGroups.count { ids ->
+                            ids.any(favorites::contains)
+                        }
+                        _state.update { it.copy(favoritesCount = count) }
+                    }
+                }
         }
 
         @OptIn(ExperimentalCoroutinesApi::class)
@@ -866,6 +923,7 @@ class LibraryViewModel @Inject constructor(
         supersedeRenderForPendingInput()
         viewModelScope.launch(canonicalDispatcher) {
             val hero = RecommendationRepository.getHero(context)
+            val daySeed = System.currentTimeMillis() / (24L * 60 * 60 * 1000)
             cachedFeatured = hero.featured
             cachedRecommendation = when {
                 // A live featured takes the slot (still gated by the showRecommendations
@@ -880,11 +938,19 @@ class LibraryViewModel @Inject constructor(
                         amazonGameDao,
                     )
                     val userId = GOGAuthManager.getStoredCredentials(context).getOrNull()?.userId
-                    val daySeed = System.currentTimeMillis() / (24L * 60 * 60 * 1000)
                     GogRecommendationsRepository.getDailyHero(context, owned, userId, daySeed)
                 }.getOrNull() ?: hero.recommendation
                 else -> hero.recommendation
             }
+            // Frosted teaser: pre-consent only, never over a featured slot. Shows every day
+            // until the first "Not now", then one day in three. A frosted day stays frosted
+            // all day, dismissed or not.
+            val dismissedDay = PrefManager.recTeaserDismissedDay
+            cachedRecTeaser = hero.featured == null &&
+                PrefManager.showRecommendations &&
+                !PrefManager.recDisclosureShown &&
+                (dismissedDay == 0L || dismissedDay == daySeed || daySeed % 3 == 0L)
+            cachedRecLoading = false
             onFilterApps(paginationCurrentPage)
         }
     }
@@ -2606,6 +2672,7 @@ class LibraryViewModel @Inject constructor(
             pageSize = PrefManager.itemsPerPage,
             promotion = canonicalPromotionItem(),
             showRecommendations = PrefManager.showRecommendations,
+            favoriteAppIds = FavoritesManager.favorites.value,
             compatibility = { card ->
                 CanonicalCompatibilityLookup.resolve(
                     card = card,
@@ -2629,6 +2696,7 @@ class LibraryViewModel @Inject constructor(
                 canonicalCollectionFailure = null
                 diagnosedFallbackReason = null
                 latestCanonicalCards = snapshot
+                favoriteEligibleAppIdGroups = page.favoriteEligibleAppIdGroups
                 canonicalRetryDelayMs = MIN_CANONICAL_RETRY_DELAY_MS
                 canonicalRetryDeadlineElapsedMs = 0L
                 retryToCancel = canonicalRetryJob
@@ -2667,6 +2735,7 @@ class LibraryViewModel @Inject constructor(
                         } else {
                             0
                         },
+                        favoritesCount = page.favoritesCount,
                         steamCollectionCounts = page.steamCollectionCounts,
                         genreFacets = page.genreFacets,
                         genreClassifiedCount = page.genreClassifiedCount,
@@ -2733,6 +2802,8 @@ class LibraryViewModel @Inject constructor(
             recommendedGameId = rec.id,
             recSource = "hero",
             gameSource = GameSource.STEAM,
+            isRecTeaser = cachedRecTeaser || cachedRecLoading,
+            isRecLoading = cachedRecLoading,
         )
     }
 
@@ -2759,516 +2830,538 @@ class LibraryViewModel @Inject constructor(
         )
         if (!isTokenActive(token)) return RenderPublicationOutcome.Superseded(token)
 
-            val currentFilter = AppFilter.getAppType(currentState.appInfoSortType)
+        val currentFilter = AppFilter.getAppType(currentState.appInfoSortType)
 
-            // Fetch download directory apps once on IO thread and cache as a HashSet for O(1) lookups
-            val downloadDirectoryApps = DownloadService.getDownloadDirectoryApps() + SteamService.getImportedAppDirs()
-            val downloadDirectorySet = downloadDirectoryApps.toHashSet()
+        // Fetch download directory apps once on IO thread and cache as a HashSet for O(1) lookups
+        val downloadDirectoryApps = DownloadService.getDownloadDirectoryApps() + SteamService.getImportedAppDirs()
+        val downloadDirectorySet = downloadDirectoryApps.toHashSet()
 
-            fun passesCompatibleFilter(gameName: String): Boolean {
-                if (!currentState.appInfoSortType.contains(AppFilter.COMPATIBLE)) {
-                    return true
+        fun passesCompatibleFilter(gameName: String): Boolean {
+            if (!currentState.appInfoSortType.contains(AppFilter.COMPATIBLE)) {
+                return true
+            }
+            val cached = GameCompatibilityCache.getCached(gameName) ?: return true
+            val status = compatibilityStatusFor(cached)
+            return status == GameCompatibilityStatus.COMPATIBLE || status == GameCompatibilityStatus.GPU_COMPATIBLE
+        }
+
+        val steamOwnerTypeFiltered: List<SteamApp> = appList
+            .asSequence()
+            .filter { item ->
+                SteamService.familyMembers.ifEmpty {
+                    // Handle the case where userSteamId might be null
+                    SteamService.userSteamId?.let { steamId ->
+                        listOf(steamId.accountID.toInt())
+                    } ?: emptyList()
+                }.let { owners ->
+                    if (owners.isEmpty()) {
+                        true // no owner info ⇒ don’t filter the item out
+                    } else {
+                        owners.any { item.ownerAccountId.contains(it) }
+                    }
                 }
-                val cached = GameCompatibilityCache.getCached(gameName) ?: return true
-                val status = compatibilityStatusFor(cached)
-                return status == GameCompatibilityStatus.COMPATIBLE || status == GameCompatibilityStatus.GPU_COMPATIBLE
+            }
+            .filter { item ->
+                currentFilter.any { item.type == it }
+            }
+            .filter { item ->
+                if (currentState.appInfoSortType.contains(AppFilter.SHARED)) {
+                    true
+                } else {
+                    item.ownerAccountId.contains(PrefManager.steamUserAccountId) || PrefManager.steamUserAccountId == 0
+                }
+            }
+            .filter { item ->
+                if (currentState.searchQuery.isNotEmpty()) {
+                    matches(item.name, currentState.searchQuery)
+                } else {
+                    true
+                }
+            }
+            .filter { item ->
+                val installedOnly = currentState.currentTab.installedOnly ||
+                    currentState.appInfoSortType.contains(AppFilter.INSTALLED)
+                if (installedOnly) {
+                    downloadDirectorySet.contains(SteamService.getAppDirName(item))
+                } else {
+                    true
+                }
+            }
+            .toList()
+
+        // Per-collection counts: computed from the owner/type/search-filtered set (independent of the
+        // current collection selection) so each collection shows how many games it would contribute.
+        val steamCollectionCounts: Map<String, Int> = steamCollections?.associate { collection ->
+            collection.id to steamOwnerTypeFiltered.count { it.id in collection.appIds }
+        } ?: emptyMap()
+
+        // Apply the Steam collection filter — union/OR, fail-open (see SteamCollectionFilter).
+        // Resolve the allowed app-id set once for the whole pass instead of per app.
+        val allowedSteamAppIds = SteamCollectionFilter.allowedAppIds(
+            selectedIds = currentState.selectedSteamCollectionIds,
+            collections = steamCollections,
+        )
+        val steamFilteredBeforeCompatibility: List<SteamApp> =
+            (
+                if (allowedSteamAppIds == null) {
+                    steamOwnerTypeFiltered
+                } else {
+                    steamOwnerTypeFiltered.filter { it.id in allowedSteamAppIds }
+                }
+            )
+
+        // Filter Steam apps first (no pagination yet)
+        // Note: Don't sort individual lists - we'll sort the combined list for consistent ordering
+        val filteredSteamApps: List<SteamApp> = steamFilteredBeforeCompatibility
+            .asSequence()
+            .filter { item -> passesCompatibleFilter(item.name) }
+            .filter { item -> passesStatsFilters(currentState, GameSource.STEAM, item.name) }
+            .sortedWith(
+                compareByDescending<SteamApp> {
+                    downloadDirectorySet.contains(SteamService.getAppDirName(it))
+                }.thenBy { it.name.lowercase() },
+            )
+            .toList()
+
+        // Map Steam apps to UI items
+        data class LibraryEntry(val item: LibraryItem, val isInstalled: Boolean, val lastPlayed: Long = 0L)
+
+        fun lastPlayedFor(appId: String): Long = playHistoryByAppId[appId] ?: 0L
+
+        val licensedDepotMap = SteamService.buildLicensedDepotMap(filteredSteamApps)
+
+        // Added this to avoid duplicate from custom imported steam game
+        val steamEntriesAppIds = mutableSetOf<String>()
+
+        val steamEntries: List<LibraryEntry> = filteredSteamApps.map { item ->
+            val isInstalled = downloadDirectorySet.contains(SteamService.getAppDirName(item))
+            val installedBranch = if (isInstalled) {
+                SteamService.getInstalledApp(item.id)?.branch ?: "public"
+            } else {
+                "public"
+            }
+            // base-game size: ownedDlc=emptyMap excludes DLC depots
+            val licensedDepots = licensedDepotMap[item.id]
+            val resolved = SteamService.resolveDownloadableDepots(item.depots, "", emptyMap(), licensedDepots)
+            val totalSizeBytes = resolved.values.sumOf { depot ->
+                depot.manifests[installedBranch]?.size ?: depot.manifests.values.firstOrNull()?.size ?: 0L
             }
 
-            val steamOwnerTypeFiltered: List<SteamApp> = appList
-                .asSequence()
-                .filter { item ->
-                    SteamService.familyMembers.ifEmpty {
-                        // Handle the case where userSteamId might be null
-                        SteamService.userSteamId?.let { steamId ->
-                            listOf(steamId.accountID.toInt())
-                        } ?: emptyList()
-                    }.let { owners ->
-                        if (owners.isEmpty()) {
-                            true // no owner info ⇒ don’t filter the item out
-                        } else {
-                            owners.any { item.ownerAccountId.contains(it) }
-                        }
-                    }
-                }
-                .filter { item ->
-                    currentFilter.any { item.type == it }
-                }
-                .filter { item ->
-                    if (currentState.appInfoSortType.contains(AppFilter.SHARED)) {
-                        true
-                    } else {
-                        item.ownerAccountId.contains(PrefManager.steamUserAccountId) || PrefManager.steamUserAccountId == 0
-                    }
-                }
-                .filter { item ->
-                    if (currentState.searchQuery.isNotEmpty()) {
-                        matches(item.name, currentState.searchQuery)
-                    } else {
-                        true
-                    }
-                }
-                .filter { item ->
-                    val installedOnly = currentState.currentTab.installedOnly ||
-                        currentState.appInfoSortType.contains(AppFilter.INSTALLED)
-                    if (installedOnly) {
-                        downloadDirectorySet.contains(SteamService.getAppDirName(item))
-                    } else {
-                        true
-                    }
-                }
-                .toList()
+            // Move appId here
+            val appId = "${GameSource.STEAM.name}_${item.id}"
+            steamEntriesAppIds.add(appId)
 
-            // Per-collection counts: computed from the owner/type/search-filtered set (independent of the
-            // current collection selection) so each collection shows how many games it would contribute.
-            val steamCollectionCounts: Map<String, Int> = steamCollections?.associate { collection ->
-                collection.id to steamOwnerTypeFiltered.count { it.id in collection.appIds }
-            } ?: emptyMap()
-
-            // Apply the Steam collection filter — union/OR, fail-open (see SteamCollectionFilter).
-            // Resolve the allowed app-id set once for the whole pass instead of per app.
-            val allowedSteamAppIds = SteamCollectionFilter.allowedAppIds(
-                selectedIds = currentState.selectedSteamCollectionIds,
-                collections = steamCollections,
+            LibraryEntry(
+                item = LibraryItem(
+                    index = 0, // temporary, will be re-indexed after combining and paginating
+                    appId = appId,
+                    name = item.name,
+                    iconHash = item.clientIconHash,
+                    capsuleImageUrl = item.getCapsuleUrl(),
+                    headerImageUrl = item.headerUrl,
+                    heroImageUrl = item.getHeroUrl(),
+                    isShared = (PrefManager.steamUserAccountId != 0 && !item.ownerAccountId.contains(PrefManager.steamUserAccountId)),
+                    sizeBytes = totalSizeBytes,
+                ),
+                isInstalled = isInstalled,
+                lastPlayed = lastPlayedFor(appId),
             )
-            val steamFilteredBeforeCompatibility: List<SteamApp> =
-                (
-                    if (allowedSteamAppIds == null) {
-                        steamOwnerTypeFiltered
-                    } else {
-                        steamOwnerTypeFiltered.filter { it.id in allowedSteamAppIds }
-                    }
-                )
+        }
 
-            // Filter Steam apps first (no pagination yet)
-            // Note: Don't sort individual lists - we'll sort the combined list for consistent ordering
-            val filteredSteamApps: List<SteamApp> = steamFilteredBeforeCompatibility
-                .asSequence()
-                .filter { item -> passesCompatibleFilter(item.name) }
-                .filter { item -> passesStatsFilters(currentState, GameSource.STEAM, item.name) }
-                .sortedWith(
-                    compareByDescending<SteamApp> {
-                        downloadDirectorySet.contains(SteamService.getAppDirName(it))
-                    }.thenBy { it.name.lowercase() },
-                )
-                .toList()
+        // Scan Custom Games roots and create UI items (filtered by search query inside scanner)
+        // Only include custom games if GAME filter is selected
+        val customGameItems = if (currentState.appInfoSortType.contains(AppFilter.GAME)) {
+            CustomGameScanner.scanAsLibraryItems(
+                query = currentState.searchQuery,
+            )
+        } else {
+            emptyList()
+        }
+        val customEntries = customGameItems
+            .filter { !steamEntriesAppIds.contains(it.appId) } // Filter out imported steam appId
+            .filter { passesStatsFilters(currentState, it.gameSource, it.name) }
+            .map { LibraryEntry(it, true, lastPlayed = lastPlayedFor(it.appId)) }
 
-            // Map Steam apps to UI items
-            data class LibraryEntry(val item: LibraryItem, val isInstalled: Boolean, val lastPlayed: Long = 0L)
-
-            fun lastPlayedFor(appId: String): Long = playHistoryByAppId[appId] ?: 0L
-
-            val licensedDepotMap = SteamService.buildLicensedDepotMap(filteredSteamApps)
-
-            // Added this to avoid duplicate from custom imported steam game
-            val steamEntriesAppIds = mutableSetOf<String>()
-
-            val steamEntries: List<LibraryEntry> = filteredSteamApps.map { item ->
-                val isInstalled = downloadDirectorySet.contains(SteamService.getAppDirName(item))
-                val installedBranch = if (isInstalled) {
-                    SteamService.getInstalledApp(item.id)?.branch ?: "public"
+        // Filter GOG games
+        val filteredGOGGames = gogGameList
+            .asSequence()
+            .filter { game ->
+                if (currentState.searchQuery.isNotEmpty()) {
+                    matches(game.title, currentState.searchQuery)
                 } else {
-                    "public"
+                    true
                 }
-                // base-game size: ownedDlc=emptyMap excludes DLC depots
-                val licensedDepots = licensedDepotMap[item.id]
-                val resolved = SteamService.resolveDownloadableDepots(item.depots, "", emptyMap(), licensedDepots)
-                val totalSizeBytes = resolved.values.sumOf { depot ->
-                    depot.manifests[installedBranch]?.size ?: depot.manifests.values.firstOrNull()?.size ?: 0L
+            }
+            .filter { game ->
+                val installedOnly = currentState.currentTab.installedOnly ||
+                    currentState.appInfoSortType.contains(AppFilter.INSTALLED)
+                if (installedOnly) {
+                    game.isInstalled
+                } else {
+                    true
                 }
+            }
+            .toList()
 
-                // Move appId here
-                val appId = "${GameSource.STEAM.name}_${item.id}"
-                steamEntriesAppIds.add(appId)
-
+        val gogEntries = filteredGOGGames
+            .filter { passesCompatibleFilter(it.title) }
+            .filter { passesStatsFilters(currentState, GameSource.GOG, it.title) }
+            .map { game ->
+                val appId = "${GameSource.GOG.name}_${game.id}"
                 LibraryEntry(
                     item = LibraryItem(
-                        index = 0, // temporary, will be re-indexed after combining and paginating
+                        index = 0,
                         appId = appId,
-                        name = item.name,
-                        iconHash = item.clientIconHash,
-                        capsuleImageUrl = item.getCapsuleUrl(),
-                        headerImageUrl = item.headerUrl,
-                        heroImageUrl = item.getHeroUrl(),
-                        isShared = (PrefManager.steamUserAccountId != 0 && !item.ownerAccountId.contains(PrefManager.steamUserAccountId)),
-                        sizeBytes = totalSizeBytes,
+                        name = game.title,
+                        iconHash = game.iconUrl.ifEmpty { game.imageUrl },
+                        capsuleImageUrl = game.verticalCoverUrl.ifEmpty { game.iconUrl.ifEmpty { game.imageUrl } },
+                        headerImageUrl = game.imageUrl.ifEmpty { game.iconUrl },
+                        heroImageUrl = game.imageUrl.ifEmpty { game.iconUrl },
+                        isShared = false,
+                        gameSource = GameSource.GOG,
                     ),
-                    isInstalled = isInstalled,
+                    isInstalled = game.isInstalled,
                     lastPlayed = lastPlayedFor(appId),
                 )
             }
 
-            // Scan Custom Games roots and create UI items (filtered by search query inside scanner)
-            // Only include custom games if GAME filter is selected
-            val customGameItems = if (currentState.appInfoSortType.contains(AppFilter.GAME)) {
-                CustomGameScanner.scanAsLibraryItems(
-                    query = currentState.searchQuery,
-                )
-            } else {
-                emptyList()
-            }
-            val customEntries = customGameItems
-                .filter { !steamEntriesAppIds.contains(it.appId) } // Filter out imported steam appId
-                .filter { passesStatsFilters(currentState, it.gameSource, it.name) }
-                .map { LibraryEntry(it, true, lastPlayed = lastPlayedFor(it.appId)) }
-
-            // Filter GOG games
-            val filteredGOGGames = gogGameList
-                .asSequence()
-                .filter { game ->
-                    if (currentState.searchQuery.isNotEmpty()) {
-                        matches(game.title, currentState.searchQuery)
-                    } else {
-                        true
-                    }
-                }
-                .filter { game ->
-                    val installedOnly = currentState.currentTab.installedOnly ||
-                        currentState.appInfoSortType.contains(AppFilter.INSTALLED)
-                    if (installedOnly) {
-                        game.isInstalled
-                    } else {
-                        true
-                    }
-                }
-                .toList()
-
-            val gogEntries = filteredGOGGames
-                .filter { passesCompatibleFilter(it.title) }
-                .filter { passesStatsFilters(currentState, GameSource.GOG, it.title) }
-                .map { game ->
-                    val appId = "${GameSource.GOG.name}_${game.id}"
-                    LibraryEntry(
-                        item = LibraryItem(
-                            index = 0,
-                            appId = appId,
-                            name = game.title,
-                            iconHash = game.iconUrl.ifEmpty { game.imageUrl },
-                            capsuleImageUrl = game.verticalCoverUrl.ifEmpty { game.iconUrl.ifEmpty { game.imageUrl } },
-                            headerImageUrl = game.imageUrl.ifEmpty { game.iconUrl },
-                            heroImageUrl = game.imageUrl.ifEmpty { game.iconUrl },
-                            isShared = false,
-                            gameSource = GameSource.GOG,
-                        ),
-                        isInstalled = game.isInstalled,
-                        lastPlayed = lastPlayedFor(appId),
-                    )
-                }
-
-            // Filter Epic games
-            val filteredEpicGames = epicGameList
-                .asSequence()
-                .filter { game ->
-                    if (currentState.searchQuery.isNotEmpty()) {
-                        matches(game.title, currentState.searchQuery)
-                    } else {
-                        true
-                    }
-                }
-                .filter { game ->
-                    val installedOnly = currentState.currentTab.installedOnly ||
-                        currentState.appInfoSortType.contains(AppFilter.INSTALLED)
-                    if (installedOnly) {
-                        game.isInstalled
-                    } else {
-                        true
-                    }
-                }
-                .toList()
-
-            val epicEntries = filteredEpicGames
-                .filter { passesCompatibleFilter(it.title) }
-                .filter { passesStatsFilters(currentState, GameSource.EPIC, it.title) }
-                .map { game ->
-                    val appId = "${GameSource.EPIC.name}_${game.id}"
-                    LibraryEntry(
-                        item = LibraryItem(
-                            index = 0,
-                            appId = appId,
-                            name = game.title,
-                            iconHash = game.artSquare.ifEmpty { game.artCover },
-                            capsuleImageUrl = game.artCover.ifEmpty { game.artSquare },
-                            headerImageUrl = game.artPortrait.ifEmpty { game.artSquare.ifEmpty { game.artCover } },
-                            heroImageUrl = game.artPortrait.ifEmpty { game.artSquare.ifEmpty { game.artCover } },
-                            isShared = false,
-                            gameSource = GameSource.EPIC,
-                        ),
-                        isInstalled = game.isInstalled,
-                        lastPlayed = lastPlayedFor(appId),
-                    )
-                }
-
-            // Amazon games
-            val filteredAmazonGames = amazonGameList
-                .asSequence()
-                .filter { game ->
-                    if (currentState.searchQuery.isNotEmpty()) {
-                        matches(game.title, currentState.searchQuery)
-                    } else {
-                        true
-                    }
-                }
-                .filter { game ->
-                    val installedOnly = currentState.currentTab.installedOnly ||
-                        currentState.appInfoSortType.contains(AppFilter.INSTALLED)
-                    if (installedOnly) {
-                        game.isInstalled
-                    } else {
-                        true
-                    }
-                }
-                .toList()
-
-            val amazonEntries = filteredAmazonGames
-                .filter { passesCompatibleFilter(it.title) }
-                .filter { passesStatsFilters(currentState, GameSource.AMAZON, it.title) }
-                .map { game ->
-                    val layoutHero = AmazonArtwork.layoutHeroFromProductJson(game.productJson)
-                        .ifEmpty { game.heroUrl.ifEmpty { game.artUrl } }
-                    val appId = "${GameSource.AMAZON.name}_${game.appId}"
-                    LibraryEntry(
-                        item = LibraryItem(
-                            index = 0,
-                            appId = appId,
-                            name = game.title,
-                            iconHash = game.artUrl,
-                            capsuleImageUrl = game.artUrl,
-                            headerImageUrl = layoutHero,
-                            heroImageUrl = layoutHero.ifEmpty { game.artUrl },
-                            gridHeroImageScale = AmazonArtwork.GRID_HERO_ZOOM_SCALE,
-                            isShared = false,
-                            gameSource = GameSource.AMAZON,
-                        ),
-                        isInstalled = game.isInstalled,
-                        lastPlayed = lastPlayedFor(appId),
-                    )
-                }
-
-            // Calculate installed counts
-            val gogInstalledCount = filteredGOGGames.count { it.isInstalled }
-            val epicInstalledCount = filteredEpicGames.count { it.isInstalled }
-            val amazonInstalledCount = filteredAmazonGames.count { it.isInstalled }
-            // Save game counts for skeleton loaders (only when not searching, to get accurate counts)
-            // This needs to happen before filtering by source, so we save the total counts
-            if (currentState.searchQuery.isEmpty() && isTokenActive(token)) {
-                guardedSideEffect(token) { PrefManager.customGamesCount = customGameItems.size }
-                guardedSideEffect(token) { PrefManager.steamGamesCount = steamFilteredBeforeCompatibility.size }
-                guardedSideEffect(token) { PrefManager.gogGamesCount = filteredGOGGames.size }
-                guardedSideEffect(token) { PrefManager.gogInstalledGamesCount = gogInstalledCount }
-                guardedSideEffect(token) { PrefManager.epicGamesCount = filteredEpicGames.size }
-                guardedSideEffect(token) { PrefManager.epicInstalledGamesCount = epicInstalledCount }
-                guardedSideEffect(token) { PrefManager.amazonInstalledGamesCount = amazonInstalledCount }
-                Timber.tag("LibraryViewModel").d("Saved counts - Custom: ${customGameItems.size}, Steam: ${steamFilteredBeforeCompatibility.size}, GOG: ${filteredGOGGames.size}, GOG installed: $gogInstalledCount, Epic: ${filteredEpicGames.size}, Epic installed: $epicInstalledCount, Amazon installed: $amazonInstalledCount")
-            }
-
-            // Compute effective source filters based on current tab
-            // ALL tab uses user preferences, other tabs override with their presets
-            // Use captured currentState (not _state.value) to avoid TOCTOU race
-            val currentTab = currentState.currentTab
-            val includeSteam = if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
-                currentState.showSteamInLibrary
-            } else {
-                currentTab.showSteam
-            }
-            val includeOpen = if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
-                currentState.showCustomGamesInLibrary
-            } else {
-                currentTab.showCustom
-            }
-
-            val includeGOG = (if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
-                currentState.showGOGInLibrary
-            } else {
-                currentTab.showGoG
-            }) && GOGService.hasStoredCredentials(context)
-
-            val includeEpic = (if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
-                currentState.showEpicInLibrary
-            } else {
-                currentTab.showEpic
-            }) && EpicService.hasStoredCredentials(context)
-
-            val includeAmazon = (if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
-                currentState.showAmazonInLibrary
-            } else {
-                currentTab.showAmazon
-            }) && AmazonService.hasStoredCredentials(context)
-
-            // Combine both lists and apply sort option
-            val sortComparator: Comparator<LibraryEntry> = when (currentState.currentSortOption) {
-                SortOption.INSTALLED_FIRST -> compareBy<LibraryEntry> { entry ->
-                    if (entry.isInstalled) 0 else 1
-                }.thenBy { it.item.name.lowercase() }
-
-                SortOption.NAME_ASC -> compareBy { it.item.name.lowercase() }
-
-                SortOption.NAME_DESC -> compareByDescending { it.item.name.lowercase() }
-
-                SortOption.RECENTLY_PLAYED -> LibrarySortUtils.recentlyPlayedComparator(
-                    name = { it.item.name },
-                    isInstalled = { it.isInstalled },
-                    lastPlayed = { it.lastPlayed },
-                )
-
-                SortOption.SIZE_SMALLEST -> compareBy<LibraryEntry> { it.item.sizeBytes }
-                    .thenBy { it.item.name.lowercase() }
-
-                SortOption.SIZE_LARGEST -> compareByDescending<LibraryEntry> { it.item.sizeBytes }
-                    .thenBy { it.item.name.lowercase() }
-
-                SortOption.FPS_HIGH -> compareByDescending<LibraryEntry> {
-                    currentState.statsFor(it.item)?.fps ?: -1
-                }.thenBy { it.item.name.lowercase() }
-
-                SortOption.RUNS_HIGH -> compareByDescending<LibraryEntry> {
-                    currentState.statsFor(it.item)?.runsGpu ?: -1
-                }.thenBy { it.item.name.lowercase() }
-
-                SortOption.REVIEWS_HIGH -> compareByDescending<LibraryEntry> {
-                    currentState.statsFor(it.item)?.reviewsDevice ?: -1
-                }.thenBy { it.item.name.lowercase() }
-
-                SortOption.REVIEWS_GPU_HIGH -> compareByDescending<LibraryEntry> {
-                    currentState.statsFor(it.item)?.reviewsGpu ?: -1
-                }.thenBy { it.item.name.lowercase() }
-
-                SortOption.STEAM_REVIEW_COUNT -> compareBy { it.item.name.lowercase() }
-            }
-
-            // A Steam collection can only contain Steam apps, so when one is selected the non-Steam
-            // sources can't match it — keep them out of the combined list (and their tab counts).
-            val steamCollectionSelected = allowedSteamAppIds != null
-
-            val combined = buildList {
-                if (includeSteam) addAll(steamEntries)
-                if (includeOpen && !steamCollectionSelected) addAll(customEntries)
-                if (includeGOG && !steamCollectionSelected) addAll(gogEntries)
-                if (includeEpic && !steamCollectionSelected) addAll(epicEntries)
-                if (includeAmazon && !steamCollectionSelected) addAll(amazonEntries)
-            }.sortedWith(sortComparator).mapIndexed { idx, entry ->
-                entry.item.copy(index = idx, isInstalled = entry.isInstalled)
-            }
-
-            // Total count for the current filter
-            val totalFound = combined.size
-
-            // Determine how many pages and slice the list for incremental loading
-            val pageSize = PrefManager.itemsPerPage
-            val lastPage = if (totalFound == 0) 0 else (totalFound - 1) / pageSize
-            val safePage = paginationPage
-            // Calculate how many items to show: (pagesLoaded * pageSize)
-            val endIndex = min((safePage + 1) * pageSize, totalFound)
-            var pagedList = combined.take(endIndex)
-
-            // Prepend the hero (featured > recommendation) as first item on ALL tab when
-            // enabled and not searching.
-            val featured = cachedFeatured
-            val rec = cachedRecommendation
-            if (PrefManager.showRecommendations
-                && currentTab == LibraryTab.ALL
-                && currentState.searchQuery.isEmpty()
-            ) {
-                val heroItem = when {
-                    featured != null -> LibraryItem(
-                        index = -1,
-                        appId = "FEATURED_${featured.campaignId}",
-                        name = featured.title,
-                        heroImageUrl = featured.heroImageUrl,
-                        headerImageUrl = featured.heroImageUrl,
-                        capsuleImageUrl = featured.capsuleImageUrl ?: featured.heroImageUrl,
-                        iconHash = featured.iconUrl ?: featured.capsuleImageUrl ?: featured.heroImageUrl,
-                        isRecommended = true,
-                        isFeatured = true,
-                        recommendedGameId = featured.campaignId,
-                        recSource = "hero",
-                        gameSource = GameSource.STEAM,
-                    )
-                    rec != null -> LibraryItem(
-                        index = -1,
-                        appId = "RECOMMENDED_${rec.id}",
-                        name = rec.name,
-                        heroImageUrl = rec.heroImageUrl,
-                        capsuleImageUrl = rec.capsuleImageUrl,
-                        iconHash = rec.iconUrl ?: rec.capsuleImageUrl,
-                        isRecommended = true,
-                        recommendedGameId = rec.id,
-                        recSource = "hero",
-                        gameSource = GameSource.STEAM,
-                    )
-                    else -> null
-                }
-                if (heroItem != null) {
-                    pagedList = listOf(heroItem) + pagedList.map { it.copy(index = it.index + 1) }
-                }
-            }
-
-            Timber.tag("LibraryViewModel").d("Filtered list size (with Custom Games): $totalFound")
-
-            val cards = pagedList.map { item ->
-                val compatibility = currentState.compatibilityMap[item.name]
-                val stats = currentState.statsFor(item)
-                if (item.isRecommended || item.isFeatured) {
-                    LibraryCard.fromPromotion(item, compatibility, stats)
+        // Filter Epic games
+        val filteredEpicGames = epicGameList
+            .asSequence()
+            .filter { game ->
+                if (currentState.searchQuery.isNotEmpty()) {
+                    matches(game.title, currentState.searchQuery)
                 } else {
-                    LibraryCard.fromSource(item, compatibility, stats)
-                }
-            }
-            val hasGog = GOGService.hasStoredCredentials(context)
-            val hasEpic = EpicService.hasStoredCredentials(context)
-            val hasAmazon = AmazonService.hasStoredCredentials(context)
-            var retryToCancel: Job? = null
-            val published = synchronized(renderLock) {
-                if (!claimActiveTokenLocked(token)) {
-                    false
-                } else {
-                    paginationCurrentPage = safePage
-                    lastPageInCurrentFilter = lastPage
-                    if (isFirstLoad) isFirstLoad = false
-                    legacyRetryDelayMs = MIN_LEGACY_RETRY_DELAY_MS
-                    legacyRetryDeadlineElapsedMs = 0L
-                    retryToCancel = legacyRetryJob
-                    legacyRetryJob = null
-                    _state.update {
-                        it.copy(
-                            cards = cards,
-                            currentPaginationPage = safePage + 1,
-                            lastPaginationPage = lastPage + 1,
-                            totalAppsInFilter = totalFound,
-                            isLoading = false,
-                            allCount = (if (currentState.showSteamInLibrary) steamEntries.size else 0) +
-                                (if (currentState.showCustomGamesInLibrary) customEntries.size else 0) +
-                                (if (currentState.showGOGInLibrary && hasGog) gogEntries.size else 0) +
-                                (if (currentState.showEpicInLibrary && hasEpic) epicEntries.size else 0) +
-                                (if (currentState.showAmazonInLibrary && hasAmazon) amazonEntries.size else 0),
-                            steamCount = if (currentState.showSteamInLibrary) steamEntries.size else 0,
-                            gogCount = if (currentState.showGOGInLibrary && hasGog) gogEntries.size else 0,
-                            epicCount = if (currentState.showEpicInLibrary && hasEpic) epicEntries.size else 0,
-                            amazonCount = if (currentState.showAmazonInLibrary && hasAmazon) amazonEntries.size else 0,
-                            localCount = if (currentState.showCustomGamesInLibrary) customEntries.size else 0,
-                            steamCollectionCounts = steamCollectionCounts,
-                        )
-                    }
                     true
                 }
             }
-            retryToCancel?.cancel()
-            if (!published) return RenderPublicationOutcome.Superseded(token)
+            .filter { game ->
+                val installedOnly = currentState.currentTab.installedOnly ||
+                    currentState.appInfoSortType.contains(AppFilter.INSTALLED)
+                if (installedOnly) {
+                    game.isInstalled
+                } else {
+                    true
+                }
+            }
+            .toList()
 
-            fetchCompatibilityForPage(cards.map { it.name }, token)
-            FeatureDiagnostics.record(
-                area = DiagnosticArea.LIBRARY_FILTER,
-                name = DiagnosticEventName.LIBRARY_FILTER,
-                outcome = DiagnosticOutcome.SUCCEEDED,
-                durationMs = SystemClock.elapsedRealtime() - diagnosticStartedAt,
-                attributes = mapOf(
-                    DiagnosticAttribute.RESULT_COUNT to totalFound.toString(),
-                    DiagnosticAttribute.STEAM_COUNT to steamEntries.size.toString(),
-                    DiagnosticAttribute.GOG_COUNT to gogEntries.size.toString(),
-                    DiagnosticAttribute.EPIC_COUNT to epicEntries.size.toString(),
-                    DiagnosticAttribute.AMAZON_COUNT to amazonEntries.size.toString(),
-                    DiagnosticAttribute.CUSTOM_COUNT to customEntries.size.toString(),
-                ),
+        val epicEntries = filteredEpicGames
+            .filter { passesCompatibleFilter(it.title) }
+            .filter { passesStatsFilters(currentState, GameSource.EPIC, it.title) }
+            .map { game ->
+                val appId = "${GameSource.EPIC.name}_${game.id}"
+                LibraryEntry(
+                    item = LibraryItem(
+                        index = 0,
+                        appId = appId,
+                        name = game.title,
+                        iconHash = game.artSquare.ifEmpty { game.artCover },
+                        capsuleImageUrl = game.artCover.ifEmpty { game.artSquare },
+                        headerImageUrl = game.artPortrait.ifEmpty { game.artSquare.ifEmpty { game.artCover } },
+                        heroImageUrl = game.artPortrait.ifEmpty { game.artSquare.ifEmpty { game.artCover } },
+                        isShared = false,
+                        gameSource = GameSource.EPIC,
+                    ),
+                    isInstalled = game.isInstalled,
+                    lastPlayed = lastPlayedFor(appId),
+                )
+            }
+
+        // Amazon games
+        val filteredAmazonGames = amazonGameList
+            .asSequence()
+            .filter { game ->
+                if (currentState.searchQuery.isNotEmpty()) {
+                    matches(game.title, currentState.searchQuery)
+                } else {
+                    true
+                }
+            }
+            .filter { game ->
+                val installedOnly = currentState.currentTab.installedOnly ||
+                    currentState.appInfoSortType.contains(AppFilter.INSTALLED)
+                if (installedOnly) {
+                    game.isInstalled
+                } else {
+                    true
+                }
+            }
+            .toList()
+
+        val amazonEntries = filteredAmazonGames
+            .filter { passesCompatibleFilter(it.title) }
+            .filter { passesStatsFilters(currentState, GameSource.AMAZON, it.title) }
+            .map { game ->
+                val layoutHero = AmazonArtwork.layoutHeroFromProductJson(game.productJson)
+                    .ifEmpty { game.heroUrl.ifEmpty { game.artUrl } }
+                val appId = "${GameSource.AMAZON.name}_${game.appId}"
+                LibraryEntry(
+                    item = LibraryItem(
+                        index = 0,
+                        appId = appId,
+                        name = game.title,
+                        iconHash = game.artUrl,
+                        capsuleImageUrl = game.artUrl,
+                        headerImageUrl = layoutHero,
+                        heroImageUrl = layoutHero.ifEmpty { game.artUrl },
+                        gridHeroImageScale = AmazonArtwork.GRID_HERO_ZOOM_SCALE,
+                        isShared = false,
+                        gameSource = GameSource.AMAZON,
+                    ),
+                    isInstalled = game.isInstalled,
+                    lastPlayed = lastPlayedFor(appId),
+                )
+            }
+
+        // Calculate installed counts
+        val gogInstalledCount = filteredGOGGames.count { it.isInstalled }
+        val epicInstalledCount = filteredEpicGames.count { it.isInstalled }
+        val amazonInstalledCount = filteredAmazonGames.count { it.isInstalled }
+        // Save game counts for skeleton loaders (only when not searching, to get accurate counts)
+        // This needs to happen before filtering by source, so we save the total counts
+        if (currentState.searchQuery.isEmpty() && isTokenActive(token)) {
+            guardedSideEffect(token) { PrefManager.customGamesCount = customGameItems.size }
+            guardedSideEffect(token) { PrefManager.steamGamesCount = steamFilteredBeforeCompatibility.size }
+            guardedSideEffect(token) { PrefManager.gogGamesCount = filteredGOGGames.size }
+            guardedSideEffect(token) { PrefManager.gogInstalledGamesCount = gogInstalledCount }
+            guardedSideEffect(token) { PrefManager.epicGamesCount = filteredEpicGames.size }
+            guardedSideEffect(token) { PrefManager.epicInstalledGamesCount = epicInstalledCount }
+            guardedSideEffect(token) { PrefManager.amazonInstalledGamesCount = amazonInstalledCount }
+            Timber.tag("LibraryViewModel").d("Saved counts - Custom: ${customGameItems.size}, Steam: ${steamFilteredBeforeCompatibility.size}, GOG: ${filteredGOGGames.size}, GOG installed: $gogInstalledCount, Epic: ${filteredEpicGames.size}, Epic installed: $epicInstalledCount, Amazon installed: $amazonInstalledCount")
+        }
+
+        // Compute effective source filters based on current tab
+        // ALL tab uses user preferences, other tabs override with their presets
+        // Use captured currentState (not _state.value) to avoid TOCTOU race
+        val currentTab = currentState.currentTab
+        val includeSteam = if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
+            currentState.showSteamInLibrary
+        } else {
+            currentTab.showSteam
+        }
+        val includeOpen = if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
+            currentState.showCustomGamesInLibrary
+        } else {
+            currentTab.showCustom
+        }
+
+        val includeGOG = (if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
+            currentState.showGOGInLibrary
+        } else {
+            currentTab.showGoG
+        }) && GOGService.hasStoredCredentials(context)
+
+        val includeEpic = (if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
+            currentState.showEpicInLibrary
+        } else {
+            currentTab.showEpic
+        }) && EpicService.hasStoredCredentials(context)
+
+        val includeAmazon = (if (currentTab == app.gamenative.ui.enums.LibraryTab.ALL) {
+            currentState.showAmazonInLibrary
+        } else {
+            currentTab.showAmazon
+        }) && AmazonService.hasStoredCredentials(context)
+
+        // Combine both lists and apply sort option
+        val sortComparator: Comparator<LibraryEntry> = when (currentState.currentSortOption) {
+            SortOption.INSTALLED_FIRST -> compareBy<LibraryEntry> { entry ->
+                if (entry.isInstalled) 0 else 1
+            }.thenBy { it.item.name.lowercase() }
+
+            SortOption.NAME_ASC -> compareBy { it.item.name.lowercase() }
+
+            SortOption.NAME_DESC -> compareByDescending { it.item.name.lowercase() }
+
+            SortOption.RECENTLY_PLAYED -> LibrarySortUtils.recentlyPlayedComparator(
+                name = { it.item.name },
+                isInstalled = { it.isInstalled },
+                lastPlayed = { it.lastPlayed },
             )
-            return RenderPublicationOutcome.Published(token)
+
+            SortOption.SIZE_SMALLEST -> compareBy<LibraryEntry> { it.item.sizeBytes }
+                .thenBy { it.item.name.lowercase() }
+
+            SortOption.SIZE_LARGEST -> compareByDescending<LibraryEntry> { it.item.sizeBytes }
+                .thenBy { it.item.name.lowercase() }
+
+            SortOption.FPS_HIGH -> compareByDescending<LibraryEntry> {
+                currentState.statsFor(it.item)?.fps ?: -1
+            }.thenBy { it.item.name.lowercase() }
+
+            SortOption.RUNS_HIGH -> compareByDescending<LibraryEntry> {
+                currentState.statsFor(it.item)?.runsGpu ?: -1
+            }.thenBy { it.item.name.lowercase() }
+
+            SortOption.REVIEWS_HIGH -> compareByDescending<LibraryEntry> {
+                currentState.statsFor(it.item)?.reviewsDevice ?: -1
+            }.thenBy { it.item.name.lowercase() }
+
+            SortOption.REVIEWS_GPU_HIGH -> compareByDescending<LibraryEntry> {
+                currentState.statsFor(it.item)?.reviewsGpu ?: -1
+            }.thenBy { it.item.name.lowercase() }
+
+            SortOption.STEAM_REVIEW_COUNT -> compareBy { it.item.name.lowercase() }
+        }
+
+        // A Steam collection can only contain Steam apps, so when one is selected the non-Steam
+        // sources can't match it — keep them out of the combined list (and their tab counts).
+        val steamCollectionSelected = allowedSteamAppIds != null
+
+        val favoriteIds = FavoritesManager.favorites.value
+
+        val combined = buildList {
+            if (includeSteam) addAll(steamEntries)
+            if (includeOpen && !steamCollectionSelected) addAll(customEntries)
+            if (includeGOG && !steamCollectionSelected) addAll(gogEntries)
+            if (includeEpic && !steamCollectionSelected) addAll(epicEntries)
+            if (includeAmazon && !steamCollectionSelected) addAll(amazonEntries)
+        }.let { entries ->
+            if (currentTab == app.gamenative.ui.enums.LibraryTab.FAVORITES) {
+                FavoritesUtils.filter(entries, favoriteIds) { it.item.appId }
+            } else {
+                entries
+            }
+        }.sortedWith(sortComparator).mapIndexed { idx, entry ->
+            entry.item.copy(index = idx, isInstalled = entry.isInstalled)
+        }
+
+        // Total count for the current filter
+        val totalFound = combined.size
+
+        // Determine how many pages and slice the list for incremental loading
+        val pageSize = PrefManager.itemsPerPage
+        val lastPage = if (totalFound == 0) 0 else (totalFound - 1) / pageSize
+        // Favorites and other filters can shrink the result set below the requested page.
+        val safePage = paginationPage.coerceIn(0, lastPage)
+        // Calculate how many items to show: (pagesLoaded * pageSize)
+        val endIndex = min((safePage + 1) * pageSize, totalFound)
+        var pagedList = combined.take(endIndex)
+
+        // Prepend the hero (featured > recommendation) as first item on ALL tab when
+        // enabled and not searching.
+        val featured = cachedFeatured
+        val rec = cachedRecommendation
+        if (PrefManager.showRecommendations
+            && currentTab == LibraryTab.ALL
+            && currentState.searchQuery.isEmpty()
+        ) {
+            val heroItem = when {
+                featured != null -> LibraryItem(
+                    index = -1,
+                    appId = "FEATURED_${featured.campaignId}",
+                    name = featured.title,
+                    heroImageUrl = featured.heroImageUrl,
+                    headerImageUrl = featured.heroImageUrl,
+                    capsuleImageUrl = featured.capsuleImageUrl ?: featured.heroImageUrl,
+                    iconHash = featured.iconUrl ?: featured.capsuleImageUrl ?: featured.heroImageUrl,
+                    isRecommended = true,
+                    isFeatured = true,
+                    recommendedGameId = featured.campaignId,
+                    recSource = "hero",
+                    gameSource = GameSource.STEAM,
+                )
+                rec != null -> LibraryItem(
+                    index = -1,
+                    appId = "RECOMMENDED_${rec.id}",
+                    name = rec.name,
+                    heroImageUrl = rec.heroImageUrl,
+                    capsuleImageUrl = rec.capsuleImageUrl,
+                    iconHash = rec.iconUrl ?: rec.capsuleImageUrl,
+                    isRecommended = true,
+                    recommendedGameId = rec.id,
+                    recSource = "hero",
+                    gameSource = GameSource.STEAM,
+                    isRecTeaser = cachedRecTeaser || cachedRecLoading,
+                    isRecLoading = cachedRecLoading,
+                )
+                else -> null
+            }
+            if (heroItem != null) {
+                pagedList = listOf(heroItem) + pagedList.map { it.copy(index = it.index + 1) }
+            }
+        }
+
+        Timber.tag("LibraryViewModel").d("Filtered list size (with Custom Games): $totalFound")
+
+        val cards = pagedList.map { item ->
+            val compatibility = currentState.compatibilityMap[item.name]
+            val stats = currentState.statsFor(item)
+            if (item.isRecommended || item.isFeatured) {
+                LibraryCard.fromPromotion(item, compatibility, stats)
+            } else {
+                LibraryCard.fromSource(item, compatibility, stats)
+            }
+        }
+        val favoriteEligibleIds = buildList {
+            addAll(steamEntries)
+            addAll(customEntries)
+            if (GOGService.hasStoredCredentials(context)) addAll(gogEntries)
+            if (EpicService.hasStoredCredentials(context)) addAll(epicEntries)
+            if (AmazonService.hasStoredCredentials(context)) addAll(amazonEntries)
+        }.mapTo(linkedSetOf()) { it.item.appId }
+        val favoriteEligibleGroups = favoriteEligibleIds.map(::setOf)
+
+        val hasGog = GOGService.hasStoredCredentials(context)
+        val hasEpic = EpicService.hasStoredCredentials(context)
+        val hasAmazon = AmazonService.hasStoredCredentials(context)
+        var retryToCancel: Job? = null
+        val published = synchronized(renderLock) {
+            if (!claimActiveTokenLocked(token)) {
+                false
+            } else {
+                paginationCurrentPage = safePage
+                lastPageInCurrentFilter = lastPage
+                if (isFirstLoad) isFirstLoad = false
+                legacyRetryDelayMs = MIN_LEGACY_RETRY_DELAY_MS
+                legacyRetryDeadlineElapsedMs = 0L
+                retryToCancel = legacyRetryJob
+                legacyRetryJob = null
+                favoriteEligibleAppIdGroups = favoriteEligibleGroups
+                _state.update {
+                    it.copy(
+                        cards = cards,
+                        currentPaginationPage = safePage + 1,
+                        lastPaginationPage = lastPage + 1,
+                        totalAppsInFilter = totalFound,
+                        isLoading = false,
+                        allCount = (if (currentState.showSteamInLibrary) steamEntries.size else 0) +
+                            (if (currentState.showCustomGamesInLibrary) customEntries.size else 0) +
+                            (if (currentState.showGOGInLibrary && hasGog) gogEntries.size else 0) +
+                            (if (currentState.showEpicInLibrary && hasEpic) epicEntries.size else 0) +
+                            (if (currentState.showAmazonInLibrary && hasAmazon) amazonEntries.size else 0),
+                        steamCount = if (currentState.showSteamInLibrary) steamEntries.size else 0,
+                        gogCount = if (currentState.showGOGInLibrary && hasGog) gogEntries.size else 0,
+                        epicCount = if (currentState.showEpicInLibrary && hasEpic) epicEntries.size else 0,
+                        amazonCount = if (currentState.showAmazonInLibrary && hasAmazon) amazonEntries.size else 0,
+                        localCount = if (currentState.showCustomGamesInLibrary) customEntries.size else 0,
+                        favoritesCount = FavoritesUtils.countPresent(favoriteIds, favoriteEligibleIds),
+                        steamCollectionCounts = steamCollectionCounts,
+                    )
+                }
+                true
+            }
+        }
+        retryToCancel?.cancel()
+        if (!published) return RenderPublicationOutcome.Superseded(token)
+
+        fetchCompatibilityForPage(cards.map { it.name }, token)
+        FeatureDiagnostics.record(
+            area = DiagnosticArea.LIBRARY_FILTER,
+            name = DiagnosticEventName.LIBRARY_FILTER,
+            outcome = DiagnosticOutcome.SUCCEEDED,
+            durationMs = SystemClock.elapsedRealtime() - diagnosticStartedAt,
+            attributes = mapOf(
+                DiagnosticAttribute.RESULT_COUNT to totalFound.toString(),
+                DiagnosticAttribute.STEAM_COUNT to steamEntries.size.toString(),
+                DiagnosticAttribute.GOG_COUNT to gogEntries.size.toString(),
+                DiagnosticAttribute.EPIC_COUNT to epicEntries.size.toString(),
+                DiagnosticAttribute.AMAZON_COUNT to amazonEntries.size.toString(),
+                DiagnosticAttribute.CUSTOM_COUNT to customEntries.size.toString(),
+            ),
+        )
+        return RenderPublicationOutcome.Published(token)
     }
 
     /**

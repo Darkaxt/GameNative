@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Face4
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -36,6 +37,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,6 +83,39 @@ internal fun ListViewCard(
         if (isItemFocused) onFocus()
     }
 
+    val favoriteIndicator = rememberFavoriteCardIndicator(
+        appIds = card.favoriteAppIds,
+        isRecommended = card.isRecommended,
+    )
+    val favoriteActionLabel = if (!card.isRecommended) {
+        stringResource(
+            if (favoriteIndicator.isFavorite) {
+                R.string.favorite_remove_named
+            } else {
+                R.string.favorite_add_named
+            },
+            card.name,
+        )
+    } else {
+        null
+    }
+    val favoriteState = if (favoriteIndicator.isFavorite) stringResource(R.string.favorite_added) else null
+    val favoriteSemantics = if (favoriteActionLabel != null) {
+        Modifier.semantics(mergeDescendants = true) {
+            if (favoriteState != null) {
+                stateDescription = favoriteState
+            }
+            customActions = listOf(
+                CustomAccessibilityAction(favoriteActionLabel) {
+                    toggleFavorite(context, card.favoriteAppIds, card.name)
+                    true
+                },
+            )
+        }
+    } else {
+        Modifier
+    }
+
     val shape = RoundedCornerShape(14.dp)
     Box(
         modifier = modifier
@@ -89,128 +127,148 @@ internal fun ListViewCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(cardFocusModifier)
+                .favoriteInnerGlow(
+                    isFavorite = favoriteIndicator.isFavorite,
+                    glowAlpha = favoriteIndicator.glowAlpha,
+                    shape = shape,
+                )
+                .then(favoriteSemantics)
                 .clickable(
                     onClick = onClick,
                     interactionSource = interactionSource,
                     indication = null,
                 ),
             shape = shape,
-        colors = CardDefaults.cardColors(
-            containerColor = if (isFocused) {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+            colors = CardDefaults.cardColors(
+                containerColor = if (isFocused) {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+                },
+            ),
+            border = when {
+                card.isRecommended -> BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                )
+                else -> null
             },
-        ),
-        border = when {
-            card.isRecommended -> BorderStroke(
-                1.dp,
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
-            )
-            else -> null
-        },
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // Game icon
-            val iconUrl by produceState(
-                initialValue = card.iconUrl,
-                key1 = card.composeKey,
-                key2 = card.iconUrl,
-            ) {
-                value = withContext(Dispatchers.IO) {
-                    getListIconUrl(context, card)
-                }
-            }
-
-            Box(
+            Row(
                 modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                ListItemImage(
-                    modifier = Modifier.fillMaxSize(),
-                    imageModifier = Modifier.clip(RoundedCornerShape(10.dp)),
-                    image = { iconUrl },
-                )
-            }
-
-            // Game info
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = card.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-                // Status row with compact badges
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                // Game icon
+                val iconUrl by produceState(
+                    initialValue = card.iconUrl,
+                    key1 = card.composeKey,
+                    key2 = card.iconUrl,
                 ) {
-                    InstallStatusBadge(card = card, isRefreshing = isRefreshing)
+                    value = withContext(Dispatchers.IO) {
+                        getListIconUrl(context, card)
+                    }
+                }
 
-                    if (card.identity is LibraryCardIdentity.Canonical) {
-                        OwnedSourceCopiesAction(
-                            sources = card.orderedSources,
-                            onClick = onCopies,
-                            modifier = copiesActionModifier,
-                            iconSize = 12,
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (card.isRecTeaser) {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp),
+                        )
+                    } else {
+                        ListItemImage(
+                            modifier = Modifier.fillMaxSize(),
+                            imageModifier = Modifier.clip(RoundedCornerShape(10.dp)),
+                            image = { iconUrl },
                         )
                     }
-
-                    // Family share indicator
-                    if (card.isShared) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Icon(
-                                Icons.Filled.Face4,
-                                contentDescription = stringResource(R.string.library_family_shared),
-                                tint = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.size(14.dp),
-                            )
-                            Text(
-                                text = stringResource(R.string.library_shared_short),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.tertiary,
-                            )
-                        }
-                    }
                 }
 
-                GameStatsRow(
-                    stats = card.gameStats,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                )
-            }
+                // Game info
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = if (card.isRecTeaser) {
+                            stringResource(R.string.rec_teaser_title)
+                        } else {
+                            card.name
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
 
-            val badgeStatus = if (card.isRecommended) {
-                GameCompatibilityStatus.RECOMMENDED
-            } else {
-                card.compatibilityStatus
-            }
-            badgeStatus?.let { status ->
-                CompatibilityBadge(
-                    status = status,
-                    showLabel = true,
-                )
+                    // Status row with compact badges
+                    if (!card.isRecTeaser) Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        InstallStatusBadge(card = card, isRefreshing = isRefreshing)
+
+                        if (card.identity is LibraryCardIdentity.Canonical) {
+                            OwnedSourceCopiesAction(
+                                sources = card.orderedSources,
+                                onClick = onCopies,
+                                modifier = copiesActionModifier,
+                                iconSize = 12,
+                            )
+                        }
+
+                        // Family share indicator
+                        if (card.isShared) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Face4,
+                                    contentDescription = stringResource(R.string.library_family_shared),
+                                    tint = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = stringResource(R.string.library_shared_short),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                )
+                            }
+                        }
+                    }
+
+                    GameStatsRow(
+                        stats = card.gameStats,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                    )
+                }
+
+                val badgeStatus = if (card.isRecommended) {
+                    GameCompatibilityStatus.RECOMMENDED
+                } else {
+                    card.compatibilityStatus
+                }
+                badgeStatus?.let { status ->
+                    CompatibilityBadge(
+                        status = status,
+                        showLabel = true,
+                    )
+                }
             }
         }
-    }
     }
 }
 
