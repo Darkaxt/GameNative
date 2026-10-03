@@ -81,6 +81,9 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             .toSet()
         val developerExact = sourceDeveloperKey.isNotEmpty() &&
             sourceDeveloperKey in candidateDeveloperKeys
+        val developerConflict = sourceDeveloperKey.isNotEmpty() &&
+            candidateDeveloperKeys.isNotEmpty() &&
+            !developerExact
         val developerWeight = if (developerExact) 0.20 else 0.0
 
         val typeCompatible = source.appType == CanonicalAppType.GAME &&
@@ -117,6 +120,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             corroborated = developerWeight > 0.0 || yearWeight > 0.0,
             typeCompatible = typeCompatible,
             developerExact = developerExact,
+            developerConflict = developerConflict,
             editionConflict = editionConflict,
             editionBaseMatch = editionBaseMatch,
             yearWeight = yearWeight,
@@ -179,6 +183,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             top.score >= 0.80 &&
             top.strongTitle &&
             top.corroborated &&
+            !top.developerConflict &&
             margin >= 0.08 &&
             !top.editionConflict
         return when {
@@ -202,6 +207,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
         val corroborated: Boolean,
         val typeCompatible: Boolean,
         val developerExact: Boolean,
+        val developerConflict: Boolean,
         val editionConflict: Boolean,
         val editionBaseMatch: Boolean,
         val yearWeight: Double,

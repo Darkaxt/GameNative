@@ -255,6 +255,50 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
+    fun matchingYearDoesNotOverrideDeveloperConflict() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio A", year = 2020),
+            candidates = listOf(candidate(42, "Example", "Studio B", 2020)),
+        )
+
+        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+    }
+
+    @Test
+    fun matchingYearDoesNotOverridePublisherOnlyConflict() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio A", year = 2020),
+            candidates = listOf(
+                candidate(42, "Example", year = 2020, publisher = "Publisher B"),
+            ),
+        )
+
+        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+    }
+
+    @Test
+    fun missingCandidatePartyEvidenceDoesNotContradictMatchingYear() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Studio A", year = 2020),
+            candidates = listOf(candidate(42, "Example", year = 2020)),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(42), result)
+    }
+
+    @Test
+    fun matchingPublisherAndYearDoNotCreateDeveloperConflict() {
+        val result = policy.evaluate(
+            source = source(title = "Example", developer = "Publisher", year = 2020),
+            candidates = listOf(
+                candidate(42, "Example", "Actual Studio", 2020, publisher = "Publisher"),
+            ),
+        )
+
+        assertEquals(CatalogDecision.AutoAccept(42), result)
+    }
+
+    @Test
     fun releaseYearGapGreaterThanOnePreventsAutoAccept() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = 2020),
