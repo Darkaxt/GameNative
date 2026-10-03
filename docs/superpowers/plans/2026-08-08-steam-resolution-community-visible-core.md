@@ -6,7 +6,7 @@
 
 **Architecture:** Keep canonical projection and source execution unchanged. Use keyless bounded Steam Store search as the primary discovery path, optionally supplement exact candidates from the authenticated AppList cache, validate every candidate through Store `appdetails`, and feed complete typed evidence into guarded canonical mutations. Reuse accepted AppIDs for metadata/facets/popularity; only a complete nonpartial Steam `UNMATCHED` may hand off to source-native presentation such as Epic CMS. Add Reviews and Discussions through a separate community package and extend only the existing detail ViewModel and placeholder branches.
 
-**Tech Stack:** Kotlin 2.1.21, Jetpack Compose, Material 3, Room 2.8.4 schema 27, Hilt, DataStore Preferences, coroutines/Flow, kotlinx.serialization, OkHttp/MockWebServer, Jsoup 1.23.1, JUnit 4, Robolectric, Compose UI tests, GitHub Actions
+**Tech Stack:** Kotlin 2.1.21, Jetpack Compose, Material 3, Room 2.8.4 (current merged schema 29; Task 15 durable history advances to 30), Hilt, DataStore Preferences, coroutines/Flow, kotlinx.serialization, OkHttp/MockWebServer, Jsoup 1.23.1, JUnit 4, Robolectric, Compose UI tests, GitHub Actions
 
 **Design:** `docs/superpowers/specs/2026-08-08-steam-resolution-community-visible-core-design.md`
 
@@ -1133,7 +1133,9 @@ Prepare an additional signed RC when this gate changes production code, then con
 - Test: `app/src/androidTest/java/app/gamenative/ui/screen/library/CanonicalGameDetailScreenTest.kt`
 - Create: `docs/superpowers/reviews/2026-08-08-resolver-detail-completion-cross-check.md`
 
-- [ ] **Step 1: Measure aggregate resolver coverage**
+- [x] **Step 1: Measure aggregate resolver coverage (offline fixture)**
+
+**2026-10-03 checkpoint:** The 900-canonical fixture has two synthetic owned copies per canonical and six equal categories (exact, edition mismatch, duplicate-name tie, missing developer, missing year, no result). It runs the actual Room-backed repository and candidate policy: 450 auto-accepted, 300 review-required, 150 unmatched, zero failures, 900 completed, one active provider request, and at most three query variants per canonical. Both flavors pass all 32 repository tests. Its useful fixture coverage is 83%; this is accounting/scale evidence, not a claim that 83% of a real library resolves. R4 live candidate quality/coverage remains open. Evidence and next actions: `docs/superpowers/reviews/2026-10-03-resolver-detail-completion-progress.md`.
 
 Add a 900-canonical fixture with representative exact, edition, duplicate-name, missing-developer, missing-year, and no-result cases. Record aggregate categories and bounded public catalog values where they improve reproducibility, without account/ownership associations or private user-entered search text. The completion threshold is:
 
@@ -1154,7 +1156,7 @@ data class ResolverCoverage(
 
 - [ ] **Step 2: Add durable attempt and rejection history**
 
-Migrate schema 27→28 with immutable exports and upgrade tests. Public titles and AppIDs may be persisted when useful. Keep account scope, ownership/entitlement associations, private user-entered queries, credentials, and personal paths out of this catalog-history table:
+Migrate schema 29→30 with immutable exports and upgrade tests. The historical 27→28 reservation is superseded by the official/fork reconciliation published at merged schema 29; never overwrite exports 26–29. Keep the registered 17–29 preservation routes and legacy 7–16 recovery boundary, including acknowledgment of already-pending recovery markers for targets 27 and 29. Public titles and AppIDs may be persisted when useful. Keep account scope, ownership/entitlement associations, private user-entered queries, credentials, and personal paths out of this catalog-history table:
 
 ```kotlin
 enum class SteamCatalogResolutionStatus {

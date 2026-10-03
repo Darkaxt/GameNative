@@ -56,8 +56,10 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE, application = android.app.Application::class)
 class SteamCatalogResolutionRepositoryTest {
     private lateinit var db: PluviaDatabase
     private lateinit var writer: FakeDecisionWriter
@@ -81,6 +83,73 @@ class SteamCatalogResolutionRepositoryTest {
     @After
     fun tearDown() {
         db.close()
+    }
+
+    @Test
+    fun `900 canonical fixture accounts for outcomes without scanning duplicate owned copies`() = runTest {
+        val active = AtomicInteger(0)
+        val maximumActive = AtomicInteger(0)
+        val searches = AtomicInteger(0)
+        for (index in 1..900) {
+            val category = (index - 1) % 6
+            val canonical = canonical(index.toLong(), steamAppId = null)
+            val title = "Fixture Game $index" + if (category == 1) " Definitive Edition" else ""
+            db.canonicalGameDao().insert(canonical)
+            for (copy in 0..1) {
+                seedMatch(
+                    match(
+                        key(GameSource.GOG, (index + copy * 100_000).toString()),
+                        canonical.canonicalId,
+                        title,
+                        developer = if (category == 3) "" else "studio",
+                        year = if (category == 4) null else 2020,
+                    ),
+                )
+            }
+        }
+        val repository = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                val inFlight = active.incrementAndGet()
+                maximumActive.updateAndGet { maxOf(it, inFlight) }
+                searches.incrementAndGet()
+                try {
+                    delay(1)
+                    val index = requireNotNull(Regex("\\b(\\d+)\\b").find(query)).value.toInt()
+                    val category = (index - 1) % 6
+                    if (category == 5) {
+                        emptyList()
+                    } else {
+                        buildList {
+                            add(SteamStoreSearchHit(index * 2, "Fixture Game $index", null))
+                            if (category == 2) add(SteamStoreSearchHit(index * 2 + 1, "Fixture Game $index", null))
+                        }
+                    }
+                } finally {
+                    active.decrementAndGet()
+                }
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                val index = steamAppId / 2
+                record(steamAppId, "Fixture Game $index", "studio", 2020)
+            },
+        )
+
+        val progress = repository.scanAutomatically()
+
+        assertEquals(900, progress.total)
+        assertEquals(900, progress.completed)
+        assertEquals(0, progress.failed)
+        assertEquals(450, progress.autoAccepted)
+        assertEquals(300, progress.needsReview)
+        assertEquals(150, progress.unmatched)
+        assertEquals(progress.total, progress.autoAccepted + progress.needsReview + progress.unmatched)
+        assertEquals(83, (progress.autoAccepted + progress.needsReview) * 100 / progress.total)
+        assertEquals(1, maximumActive.get())
+        assertTrue(searches.get() in 900..2700)
+        assertEquals(900, writer.operations.size)
+        assertEquals(900, diagnostics.events.size)
+        assertFalse(repository.keyRequired.value)
+        assertFalse(repository.isScanning.value)
     }
 
     @Test
