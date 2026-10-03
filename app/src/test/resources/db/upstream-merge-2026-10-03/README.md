@@ -22,7 +22,10 @@ Exact schema blobs copied from Git, not generated from the merged entities.
 | official-26.json | `9a30c4a28e852e6043c719261d3a71c9794a5967128342a1e77b0d94da47bfae` |
 | official-27.json | `81d3459e3c829ac4edcee4c0a967ee4d6d1702a118706536a3ff0a4014116fad` |
 | official-28.json | `ed257e68c1b4d9b692817d3b9ccabb05ccd5ab121bfa69617f34ec28badf551f` |
+| fork-29.json | `d8e20ef0d845595aa39b66174fe01ef2bd069f436a48ee3540ea710d1c97bf20` |
 
-Versions 17–25 are byte-identical in both histories and exercise the registered auto/explicit migration chains through 29. Versions 26 and 27 collide between official and fork histories. Upgrade tests must cover both shapes rather than substitute one history's schema for the other. `MergedRoomMigrationTest` creates each exact historical schema, seeds every existing table, opens it through the application's registered Room builder, and checks row preservation plus Room's complete target-schema validation. It also checks foreign keys and deleted recipe/overwrite-manifest ID high-watermarks, including empty tables across 24→25 and the merged recipe-table rebuild. The unsupported 7–16 destructive-recovery boundary is unchanged.
+`fork-29.json` is the published merged schema from fork checkpoint `b22e53075d67210b34684ddca29935c368b13598`; it exercises the subsequent resolver-history 29→30 migration. It is not an official-history version-29 fixture.
+
+Versions 17–25 are byte-identical in both histories and exercise the registered auto/explicit migration chains through the current target 30 (including the published merged version 29). Versions 26 and 27 collide between official and fork histories. Upgrade tests must cover both shapes rather than substitute one history's schema for the other. `MergedRoomMigrationTest` creates each exact historical schema, seeds every existing table, opens it through the application's registered Room builder, and checks row preservation plus Room's complete target-schema validation. It also checks foreign keys and deleted recipe/overwrite-manifest ID high-watermarks, including empty tables across 24→25 and the merged recipe-table rebuild. The unsupported 7–16 destructive-recovery boundary is unchanged.
 
 Published repository schemas 26/27 remain the fork history; these fixtures separately retain the official history.

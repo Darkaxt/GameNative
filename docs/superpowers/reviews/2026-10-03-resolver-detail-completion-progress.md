@@ -28,17 +28,34 @@ All 32 resolver repository tests passed separately in both flavors:
 
 The test class now uses plain Android Application/Config.NONE to avoid production coordinator startup. It uses synthetic local Room rows and fake provider/writer boundaries, no live endpoints or account credentials.
 
-## Concrete next action — R5/R6 durable history
+## R5/R6 storage floor — schema 30
 
-Task 15 Step 2 is next, not a pause or completion signal:
+Owning behavioral RED: the published merged schema-29 fixture lacked a registered 29→30 path (`D:/Temp/gamenative-resolver-history-migration-red-0ffDcJ.log`). Added exactly the planned catalog-attempt and separately account-scoped rejection entities, target version 30, and explicit additive 29→30 migration. The registered builder validates the complete 31-entity target and exact history column sets (no account/ownership/private-query fields in catalog attempt history).
 
-1. Write owning tests for published schema 29→30 through the registered builder, row/FK/default/sequence preservation, new attempt/rejection table shapes, and current/legacy recovery acknowledgments. Reproduce absent durable storage/path before production changes.
-2. Add attempt history (canonical ID, public-evidence hash, resolver version, status, timestamp) and account-scoped rejection decisions in separate tables. Do not put ownership associations, account IDs, private user-entered queries, credentials or personal paths into catalog attempt history or WorkManager Data.
-3. Add the DAO, guarded persistence, and unique network-constrained WorkManager resume. Reconstruct current evidence from Room; revalidate presence/current user decision and reject stale publication. Rejections must survive process recreation; explicit reset behavior needs tests.
-4. Export schema 30 into the isolated scratch path first, preserve published 26–29 byte-for-byte, and rerun all registered 17–29 preservation routes plus recovery markers. A process-local session gate is not durable completion proof.
+All registered historical routes now exercise target 30. A second RED reproduced stale target-29 recovery diagnostics after the version bump (`D:/Temp/gamenative-target30-recovery-red-msWWWN.log`). Current recovery labels derive from target 30; already-pending target-27/29 markers retain their original identities. Mixed acknowledgments retain the unacknowledged current marker.
+
+Both flavors pass all 27 migration tests: 18 exact historical fixture cases, five recovery cases, two cleanup cases, two historical ledger migration cases. Logs:
+
+- Legacy: `D:/Temp/gamenative-target30-migrations-Legacy-ZLWL5S.log`, 4m24s.
+- Modern: `D:/Temp/gamenative-target30-migrations-Modern-RY41JQ.log`, 5m44s.
+
+Fresh pre-publication runs after the final import-order cleanup also pass all 27 tests per flavor with zero failures/errors/skips: `D:/Temp/gamenative-schema30-precommit-mOjphj.log` (Legacy, 1m01s) and `D:/Temp/gamenative-schema30-modern-precommit-eO8XeZ.log` (Modern, 1m). Diff check passes; original checkout remains at `8311ec59f47ac821ce3d31c036b4bc3b6d83961c` with its 12 tracked modifications retained. No current-schema APK or live acceptance is claimed.
+
+Export 30 has 31 entities and SHA-256 `e93fdc2ac95d4d78ca5f934a0d76df631fd3e126d30b683459b30fadc2c29d18`, copied exactly from the isolated generated schema. Published exports 26/27/29 remain byte-identical to HEAD. The exact published merged 29 fixture is sourced from `b22e53075d67210b34684ddca29935c368b13598`, not invented as an official version 29.
+
+This establishes storage/migration only. There is not yet a DAO, resolver persistence integration, durable rejection behavior, or WorkManager resume; R5/R6 are not closed.
+
+## Concrete next action — R5/R6 persistence and resume
+
+Task 15 Step 2 remains IN_PROGRESS, not a pause or completion signal:
+
+1. Write owning DAO round-trip/CAS tests, guarded resolver-history and rejection tests, and process-recreation/resume tests before their implementation. Migration/storage tests are already GREEN; do not repeat them as unimplemented work.
+2. Add the DAO and persist attempts from current public evidence; keep account-scoped rejection decisions in their separate table. Do not put ownership associations, account IDs, private user-entered queries, credentials or personal paths into catalog attempt history or WorkManager Data.
+3. Add unique network-constrained WorkManager resume. Reconstruct current evidence from Room; revalidate presence/current user decision and reject stale publication. Rejections must survive process recreation; explicit reset behavior needs tests.
+4. Preserve published 26–30 and keep all registered 17–29 preservation routes plus recovery markers covered. A process-local session gate is not durable completion proof.
 5. Verify separately on Legacy and Modern, update ledger evidence, commit and push the bounded checkpoint only to the fork. Continue remaining card/detail/UX work before actual live acceptance.
 
-The old plan's schema 27→28 reservation is obsolete after upstream collisions; the next schema is 30. This changes no historical export and does not widen the 7–16 destructive-recovery boundary. Existing pending target-27 and target-29 markers must retain their identities until acknowledged.
+The old plan's schema 27→28 reservation is obsolete after upstream collisions; durable history is now schema 30. This changes no historical export and does not widen the 7–16 destructive-recovery boundary. Existing pending target-27 and target-29 markers retain their identities until acknowledged.
 
 ## Open acceptance ledger
 

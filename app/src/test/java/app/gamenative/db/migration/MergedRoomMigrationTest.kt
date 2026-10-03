@@ -79,11 +79,17 @@ class MergedRoomMigrationTest {
     fun emptyV24ModTablesRetainDeletedIdHighWatermarks() =
         migrateFixture("common-24", emptyRecipeTable = true, emptyOverwriteManifest = true)
 
+    @Test
+    fun publishedFork29PreservesRowsAndAddsDurableResolverHistory() =
+        migrateFixture("fork-29", targetVersion = 30, assertResolverHistory = true)
+
     private fun migrateFixture(
         name: String,
         emptyRecipeTable: Boolean = false,
         laterV26Ledger: Boolean = false,
         emptyOverwriteManifest: Boolean = false,
+        targetVersion: Int = 30,
+        assertResolverHistory: Boolean = true,
     ) {
         val resource = "db/upstream-merge-2026-10-03/$name.json"
         val fixture = JSONObject(requireNotNull(javaClass.classLoader!!.getResourceAsStream(resource)) {
@@ -194,12 +200,31 @@ class MergedRoomMigrationTest {
                     addMigrations(*upgraded.createAutoMigrations(emptyMap()).toTypedArray())
                 }
                 assertNotNull(
-                    "A registered preservation path from $version to 29 is required",
-                    migrations.findMigrationPath(version, 29),
+                    "A registered preservation path from $version to $targetVersion is required",
+                    migrations.findMigrationPath(version, targetVersion),
                 )
                 // Opening invokes the registered migration path and Room's full target-schema validation.
                 val database = upgraded.openHelper.writableDatabase
-                assertEquals(29, database.version)
+                assertEquals(targetVersion, database.version)
+                if (assertResolverHistory) {
+                    database.query("PRAGMA table_info(steam_catalog_resolution_attempt)").use { cursor ->
+                        val columns = mutableSetOf<String>()
+                        while (cursor.moveToNext()) columns += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                        assertEquals(
+                            "Catalog history must not contain account/ownership/private-query fields",
+                            setOf("canonical_id", "evidence_hash", "resolver_version", "status", "attempted_at"),
+                            columns,
+                        )
+                    }
+                    database.query("PRAGMA table_info(rejected_steam_candidate)").use { cursor ->
+                        val columns = mutableSetOf<String>()
+                        while (cursor.moveToNext()) columns += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                        assertEquals(
+                            setOf("account_scope", "source", "stable_source_id", "steam_app_id", "rejected_at"),
+                            columns,
+                        )
+                    }
+                }
                 before.forEach { (table, expected) ->
                     val actual = database.singleRow(table)
                     expected.forEach { (column, value) ->

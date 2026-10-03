@@ -14,11 +14,11 @@ import app.gamenative.diagnostics.DiagnosticOutcome
 import app.gamenative.diagnostics.FeatureDiagnostics
 import timber.log.Timber
 
-private const val TARGET_DATABASE_VERSION = "29"
+private const val TARGET_DATABASE_VERSION = "30"
 private const val V25_TO_V26_MIGRATION = "25_to_26"
 private const val V26_TO_V27_MIGRATION = "26_to_27"
-private const val DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_29"
-private const val LEGACY_DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_27"
+private const val DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_$TARGET_DATABASE_VERSION"
+private val LEGACY_DESTRUCTIVE_RECOVERY_MIGRATIONS = listOf("7_to_16_to_27", "7_to_16_to_29")
 private const val DESTRUCTIVE_RECOVERY_REASON = "destructive_recovery"
 private const val V25_TO_V26_PENDING_SUCCESS_ID = -26
 private const val V25_TO_V26_PENDING_SUCCESS_HASH = "pluvia_pending_25_to_26"
@@ -26,13 +26,13 @@ private const val V26_TO_V27_PENDING_SUCCESS_ID = -27
 private const val V26_TO_V27_PENDING_SUCCESS_HASH = "pluvia_pending_26_to_27"
 private const val MIGRATION_DIAGNOSTICS_MARKER_TABLE = "pluvia_migration_diagnostics"
 private const val DESTRUCTIVE_RECOVERY_PENDING_SUCCESS = "destructive_recovery_$DESTRUCTIVE_RECOVERY_MIGRATION"
-private const val LEGACY_DESTRUCTIVE_RECOVERY_PENDING_SUCCESS = "destructive_recovery_$LEGACY_DESTRUCTIVE_RECOVERY_MIGRATION"
 
 internal val PLUVIA_EXPLICIT_MIGRATIONS: List<Migration> = listOf(
     ROOM_MIGRATION_V23_to_V24,
     ROOM_MIGRATION_V24_to_V25,
     ROOM_MIGRATION_V25_to_V26,
     ROOM_MIGRATION_V26_to_V27,
+    ROOM_MIGRATION_V29_to_V30,
 ) + MERGED_ROOM_MIGRATIONS
 
 internal val UNSUPPORTED_PRESERVATION_VERSIONS = intArrayOf(7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
@@ -123,10 +123,8 @@ private object DestructiveRecoveryMigrationDiagnostics {
         )
         if (!hasMarkerTable) return
 
-        val pendingRecoveries = listOf(
-            DESTRUCTIVE_RECOVERY_PENDING_SUCCESS to DESTRUCTIVE_RECOVERY_MIGRATION,
-            LEGACY_DESTRUCTIVE_RECOVERY_PENDING_SUCCESS to LEGACY_DESTRUCTIVE_RECOVERY_MIGRATION,
-        )
+        val pendingRecoveries = (listOf(DESTRUCTIVE_RECOVERY_MIGRATION) + LEGACY_DESTRUCTIVE_RECOVERY_MIGRATIONS)
+            .map { migration -> "destructive_recovery_$migration" to migration }
         for ((marker, migration) in pendingRecoveries) {
             val isPending = connection.hasResult(
                 """

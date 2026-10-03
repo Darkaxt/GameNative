@@ -31,6 +31,8 @@ import app.gamenative.data.canonical.CanonicalGameTagCrossRef
 import app.gamenative.data.canonical.GameDetailSnapshotEntity
 import app.gamenative.data.canonical.OwnedCopyPresenceEntity
 import app.gamenative.data.canonical.OwnedCopySyncEntity
+import app.gamenative.data.canonical.RejectedSteamCandidateEntity
+import app.gamenative.data.canonical.SteamCatalogResolutionAttemptEntity
 import app.gamenative.data.canonical.SteamTagDictionaryEntity
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.converters.AppConverter
@@ -96,8 +98,10 @@ const val DATABASE_NAME = "pluvia.db"
         GameDetailSnapshotEntity::class,
         OwnedCopySyncEntity::class,
         OwnedCopyPresenceEntity::class,
+        SteamCatalogResolutionAttemptEntity::class,
+        RejectedSteamCandidateEntity::class,
     ],
-    version = 29,
+    version = 30,
     // For db migration, visit https://developer.android.com/training/data-storage/room/migrating-db-versions for more information
     exportSchema = true, // It is better to handle db changes carefully, as GN is getting much more users.
     autoMigrations = [

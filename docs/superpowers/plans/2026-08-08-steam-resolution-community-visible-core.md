@@ -6,7 +6,7 @@
 
 **Architecture:** Keep canonical projection and source execution unchanged. Use keyless bounded Steam Store search as the primary discovery path, optionally supplement exact candidates from the authenticated AppList cache, validate every candidate through Store `appdetails`, and feed complete typed evidence into guarded canonical mutations. Reuse accepted AppIDs for metadata/facets/popularity; only a complete nonpartial Steam `UNMATCHED` may hand off to source-native presentation such as Epic CMS. Add Reviews and Discussions through a separate community package and extend only the existing detail ViewModel and placeholder branches.
 
-**Tech Stack:** Kotlin 2.1.21, Jetpack Compose, Material 3, Room 2.8.4 (current merged schema 29; Task 15 durable history advances to 30), Hilt, DataStore Preferences, coroutines/Flow, kotlinx.serialization, OkHttp/MockWebServer, Jsoup 1.23.1, JUnit 4, Robolectric, Compose UI tests, GitHub Actions
+**Tech Stack:** Kotlin 2.1.21, Jetpack Compose, Material 3, Room 2.8.4 (current durable-history schema 30; published merged schema 29 remains immutable), Hilt, DataStore Preferences, coroutines/Flow, kotlinx.serialization, OkHttp/MockWebServer, Jsoup 1.23.1, JUnit 4, Robolectric, Compose UI tests, GitHub Actions
 
 **Design:** `docs/superpowers/specs/2026-08-08-steam-resolution-community-visible-core-design.md`
 

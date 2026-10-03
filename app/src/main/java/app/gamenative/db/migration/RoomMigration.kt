@@ -60,6 +60,35 @@ internal val ROOM_MIGRATION_V26_to_V27 = object : Migration(26, 27) {
     }
 }
 
+internal val ROOM_MIGRATION_V29_to_V30 = object : Migration(29, 30) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `steam_catalog_resolution_attempt` (
+                `canonical_id` TEXT NOT NULL,
+                `evidence_hash` TEXT NOT NULL,
+                `resolver_version` INTEGER NOT NULL,
+                `status` TEXT NOT NULL,
+                `attempted_at` INTEGER NOT NULL,
+                PRIMARY KEY(`canonical_id`)
+            )
+            """.trimIndent(),
+        )
+        connection.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `rejected_steam_candidate` (
+                `account_scope` TEXT NOT NULL,
+                `source` TEXT NOT NULL,
+                `stable_source_id` TEXT NOT NULL,
+                `steam_app_id` INTEGER NOT NULL,
+                `rejected_at` INTEGER NOT NULL,
+                PRIMARY KEY(`account_scope`, `source`, `stable_source_id`, `steam_app_id`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
 private fun addSteamPicsRevisionColumnsV26(connection: SQLiteConnection) {
     connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `genre_ids` TEXT NOT NULL DEFAULT '[]'")
     connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `category_ids` TEXT NOT NULL DEFAULT '[]'")

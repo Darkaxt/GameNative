@@ -47,11 +47,11 @@ class DestructiveRecoveryMigrationTest {
     fun tearDown() = unmockkObject(FeatureDiagnostics)
 
     @Test
-    fun unsupportedRecoveryReportsActualTarget29AndCleansAcknowledgedMarker() {
+    fun unsupportedRecoveryReportsActualTarget30AndCleansAcknowledgedMarker() {
         openFixture(
             prepare = { it.version = 7 },
             check = { database ->
-                assertEquals(29, database.version)
+                assertEquals(30, database.version)
                 assertFalse(database.hasDiagnosticMarker())
                 verify(exactly = 1) {
                     FeatureDiagnostics.record(
@@ -59,10 +59,10 @@ class DestructiveRecoveryMigrationTest {
                         DiagnosticEventName.DATABASE_MIGRATION,
                         DiagnosticOutcome.STARTED,
                         any(),
-                        match { it[DiagnosticAttribute.MIGRATION] == "7_to_16_to_29" && it[DiagnosticAttribute.DB_VERSION] == "29" },
+                        match { it[DiagnosticAttribute.MIGRATION] == "7_to_16_to_30" && it[DiagnosticAttribute.DB_VERSION] == "30" },
                     )
                 }
-                verifyAcknowledged("7_to_16_to_29")
+                verifyAcknowledged("7_to_16_to_30")
             },
         )
     }
@@ -82,6 +82,20 @@ class DestructiveRecoveryMigrationTest {
     }
 
     @Test
+    fun previouslyPending29RecoveryIsAcknowledgedWithItsOriginalIdentity() {
+        openFixture(
+            prepare = { database ->
+                database.execSQL("CREATE TABLE pluvia_migration_diagnostics (marker TEXT NOT NULL PRIMARY KEY)")
+                database.execSQL("INSERT INTO pluvia_migration_diagnostics VALUES ('destructive_recovery_7_to_16_to_29')")
+            },
+            check = { database ->
+                assertFalse(database.hasDiagnosticMarker())
+                verifyAcknowledged("7_to_16_to_29")
+            },
+        )
+    }
+
+    @Test
     fun unacknowledgedCurrentRecoveryMarkerSurvivesUntilLaterOpen() {
         every { FeatureDiagnostics.recordAcknowledged(any(), any(), any(), any(), any()) } returns false
         openFixture(
@@ -90,7 +104,7 @@ class DestructiveRecoveryMigrationTest {
                 assertTrue(database.hasDiagnosticMarker())
                 database.query("SELECT marker FROM pluvia_migration_diagnostics").use { cursor ->
                     assertTrue(cursor.moveToFirst())
-                    assertEquals("destructive_recovery_7_to_16_to_29", cursor.getString(0))
+                    assertEquals("destructive_recovery_7_to_16_to_30", cursor.getString(0))
                 }
             },
         )
@@ -100,22 +114,24 @@ class DestructiveRecoveryMigrationTest {
     fun acknowledgingLegacyMarkerDoesNotDiscardUnacknowledgedCurrentMarker() {
         every { FeatureDiagnostics.recordAcknowledged(any(), any(), any(), any(), any()) } answers {
             val attributes = arg<Map<DiagnosticAttribute, String>>(4)
-            attributes[DiagnosticAttribute.MIGRATION] == "7_to_16_to_27"
+            attributes[DiagnosticAttribute.MIGRATION] in setOf("7_to_16_to_27", "7_to_16_to_29")
         }
         openFixture(
             prepare = { database ->
                 database.execSQL("CREATE TABLE pluvia_migration_diagnostics (marker TEXT NOT NULL PRIMARY KEY)")
                 database.execSQL("INSERT INTO pluvia_migration_diagnostics VALUES ('destructive_recovery_7_to_16_to_27')")
                 database.execSQL("INSERT INTO pluvia_migration_diagnostics VALUES ('destructive_recovery_7_to_16_to_29')")
+                database.execSQL("INSERT INTO pluvia_migration_diagnostics VALUES ('destructive_recovery_7_to_16_to_30')")
             },
             check = { database ->
                 assertTrue(database.hasDiagnosticMarker())
                 database.query("SELECT marker FROM pluvia_migration_diagnostics").use { cursor ->
                     assertTrue(cursor.moveToFirst())
-                    assertEquals("destructive_recovery_7_to_16_to_29", cursor.getString(0))
+                    assertEquals("destructive_recovery_7_to_16_to_30", cursor.getString(0))
                     assertFalse(cursor.moveToNext())
                 }
                 verifyAcknowledged("7_to_16_to_27")
+                verifyAcknowledged("7_to_16_to_29")
             },
         )
     }
