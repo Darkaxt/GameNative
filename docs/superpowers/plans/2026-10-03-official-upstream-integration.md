@@ -36,7 +36,7 @@
 - [x] Combine Steam identity/generation readiness and official exception isolation/family preference refresh.
 - [x] Retain canonical source/detail/community routes while wiring official curated controls and AI-run callbacks.
 - [x] Combine custom-artwork load-state recovery with canonical cards and retain both sets of storage tests.
-- [ ] Audit auto-merged changes as well as conflict blocks; source authority and channel neutrality can regress without a textual conflict.
+- [x] Audit auto-merged changes as well as conflict blocks; source authority and channel neutrality can regress without a textual conflict.
 
 ## Task 2 — Reconcile library filtering
 
@@ -61,9 +61,9 @@
 ## Task 4 — Verify and publish the host checkpoint
 
 - [x] Run owning Legacy/Modern unit tests, including policy/normalization, migrations, canonical filtering, source-action guards, channel launch and relevant storage tests. Keep opt-in live providers disabled.
-- [ ] Check merge markers, semantic diff, ancestry, schema immutability and main-checkout preservation.
-- [ ] Record exact passes/failures, equivalence decisions and remaining acceptance. Do not silently close visible-core ledger items.
-- [ ] Commit the merge and push only to the fork without force after host verification.
+- [x] Check merge markers, semantic diff, ancestry, schema immutability and main-checkout preservation.
+- [x] Record exact passes/failures, equivalence decisions and remaining acceptance. Do not silently close visible-core ledger items.
+- [x] Commit the merge and push only to the fork without force after host verification.
 - [ ] Resume the remaining host roadmap; pause before actual live endpoint/device acceptance.
 
 ## Evidence so far
@@ -148,5 +148,7 @@ The historical interruption/NTFS failure above is superseded by [the host checkp
 
 The cancellation fixture assertion was repaired without weakening propagation: type/message and original causal identity are required, not object identity across coroutine stack recovery. Provider and lifecycle/auth owners pass in both flavors. Versions 17–24 are now covered; their newly exposed deleted recipe/manifest ID loss across 24→25 was reproduced RED and fixed GREEN, including empty tables.
 
-Current parent status is IN_PROGRESS. A fresh fetch found newer official `8ea964fcfeddf37920305f14a49f98d1a0d45127` (AI support/account UI and main-window active-time reporting). Preserve the verified pinned merge checkpoint, then integrate and verify this newer delta before returning to the existing roadmap. U01/U03 are host-closed; U05 (native Rust suite/rebuild), U06 (new official delta), and LIVE01 (actual integrated live acceptance) have explicit targets/acceptance in the report. No background task/watchdog remains active.
+Current parent status is IN_PROGRESS. The first verified merge was committed and pushed only to the fork as `266ce078265d70ffc38cc2e1bcd8ee6c6794a313`. New official `8ea964fcfeddf37920305f14a49f98d1a0d45127` (AI support/account UI and main-window active-time reporting) has now been integrated, audited and host-verified: 555 owning tests per flavor (554 passed, one Windows platform skip), 38 matched classes, and both debug APK assemblies. New private-payload logging regressions were reproduced RED and fixed GREEN; bounded support suggestions/debug parameters and active-time attribution are covered. Exact evidence is in the report.
+
+Publish the newer verified merge next, then resume Task 15 resolver durability/detail parity. U01/U03/U06 are host-closed. U05 (native Rust suite/rebuild) and LIVE01 (actual integrated live acceptance) retain explicit targets/acceptance in the report. No background task/watchdog remains active; no live provider/device acceptance or production release is claimed.
 

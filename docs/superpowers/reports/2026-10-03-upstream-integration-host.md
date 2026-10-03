@@ -67,4 +67,29 @@ Original checkout audit: branch `codex/steam-normalized-game-details-spec`, HEAD
 - **U06 OPEN — newer official delta:** target commits `4535ba9ac` and `8ea964fcf`; acceptance requires design-completeness/channel/account/action audit, owning tests and host APK assembly before continuing fork roadmap work.
 - **LIVE01 OPEN — integrated live acceptance:** target signed upgrades, real provider snapshots/community/resolver/detail interactions, controller/UI and storage/native behavior; acceptance requires explicit coordinated live-testing authority at the actual gate.
 
-D3 field completeness, L1 safe manual LSFG import, S1–S3 journals/recovery and the existing visible-core ledger remain open. A merge checkpoint or upstream feature name does not close them. Parent task remains IN_PROGRESS; next action is the newer official delta, then the existing roadmap. Publish only to the fork, without force; do not push official origin or declare an unverified release.
+## Newer official delta — host verification
+
+The initial merge was committed and pushed to fork `sync/official-2026-10-03` as `266ce078265d70ffc38cc2e1bcd8ee6c6794a313`. The next merge integrates `8ea964fcfeddf37920305f14a49f98d1a0d45127` (official AI support/account UI plus main-window active-time reporting), without textual conflicts.
+
+Completeness decision: support chat/account/run suggestions complement, rather than replace, canonical Steam resolution or native Steam community. Support navigation and main-window telemetry do not retire source-copy authority, change Room version 29, replace shared deep links, or enable official analytics/updaters in the side-by-side channel. Support reply service remains non-exported. The shared support-notification action uses an explicit app-local Activity intent; game launch remains package-derived. No automatic sign-in, credentials, real endpoints, report upload, purchases, or live game execution were exercised.
+
+Four new behavioral RED cases exposed private account/support payload logging: device-start and device-poll response bodies, support server reason strings, and account exception messages. The fixes retain typed HTTP/error results and cancellation propagation but log only fixed operation/status or exception class. Tests use synthetic payloads and mocked HTTP/authorization boundaries.
+
+Added owners: AccountApiBoundaryTest (6), SupportApiBoundaryTest (4), SupportSuggestionTest (7), DebugRunParamsTest (6), WindowActivityTest (3). They cover cancellation, polling states, error privacy, signed-out support, bounded channels/environment/attachments/instructions, whole-suggestion rejection of invalid/duplicate/oversized changes, and active-time attribution without double-counting or attributing untracked intervals.
+
+All three owning groups were rerun separately in both flavors after these changes: **555 tests per flavor, 554 passed, one Windows hardlink skip, zero failures/errors; 38 distinct matched classes**. Integration groups have 196 tests each; render remains 113 and authority 246.
+
+Evidence:
+
+- Legacy integration: `D:/Temp/gamenative-final-Legacy-integration-yg2_2r_6.log`
+- Modern integration: `D:/Temp/gamenative-final-Modern-integration-ho4e_row.log` (10m05s; foreground timeout moved it to tracked background task `b1k147gah`, which completed exit 0; fallback watchdog was canceled on completion)
+- Legacy authority: `D:/Temp/gamenative-final-Legacy-authority-tw9upeqr.log`
+- Modern authority: `D:/Temp/gamenative-final-Modern-authority-h44x8vq3.log`
+- Legacy render: `D:/Temp/gamenative-final-Legacy-render-ikzsyi3g.log`
+- Modern render: `D:/Temp/gamenative-final-Modern-render-ae1mi3x7.log`
+- Both APK assemblies: `D:/Temp/gamenative-new-delta-apks-Y8JN1A.log`, successful in 4m48s.
+- New debug APK SHA-256: Legacy `2ce3ec9b2e7c8347b1451e79732fe71752ded9f16b7325088b3af9e838788d1e`; Modern `0684ee92a16cbc45da0fd6254231c11f42c1448218c0d994b783b2519fce557d`.
+
+**U06 CLOSED (host)** after the recorded audit, separate-flavor tests and APK assembly. Live support sign-in/report/suggestion/runtime acceptance remains part of LIVE01, not an inferred closure. U05 and the original visible-core ledger remain open. Resume Task 15 resolver durability/detail parity after publishing the newer verified merge; do not pause merely because a merge checkpoint is complete.
+
+D3 field completeness, L1 safe manual LSFG import, S1–S3 journals/recovery and the existing visible-core ledger remain open. A merge checkpoint or upstream feature name does not close them. Parent task remains IN_PROGRESS; next action is publication of the verified newer merge, then Task 15 resolver durability/detail parity in the existing roadmap. Publish only to the fork, without force; do not push official origin or declare an unverified release.
