@@ -14,24 +14,26 @@ import app.gamenative.diagnostics.DiagnosticOutcome
 import app.gamenative.diagnostics.FeatureDiagnostics
 import timber.log.Timber
 
-private const val TARGET_DATABASE_VERSION = "27"
+private const val TARGET_DATABASE_VERSION = "29"
 private const val V25_TO_V26_MIGRATION = "25_to_26"
 private const val V26_TO_V27_MIGRATION = "26_to_27"
-private const val DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_27"
+private const val DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_29"
+private const val LEGACY_DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_27"
 private const val DESTRUCTIVE_RECOVERY_REASON = "destructive_recovery"
 private const val V25_TO_V26_PENDING_SUCCESS_ID = -26
 private const val V25_TO_V26_PENDING_SUCCESS_HASH = "pluvia_pending_25_to_26"
 private const val V26_TO_V27_PENDING_SUCCESS_ID = -27
 private const val V26_TO_V27_PENDING_SUCCESS_HASH = "pluvia_pending_26_to_27"
 private const val MIGRATION_DIAGNOSTICS_MARKER_TABLE = "pluvia_migration_diagnostics"
-private const val DESTRUCTIVE_RECOVERY_PENDING_SUCCESS = "destructive_recovery_7_to_16_to_27"
+private const val DESTRUCTIVE_RECOVERY_PENDING_SUCCESS = "destructive_recovery_$DESTRUCTIVE_RECOVERY_MIGRATION"
+private const val LEGACY_DESTRUCTIVE_RECOVERY_PENDING_SUCCESS = "destructive_recovery_$LEGACY_DESTRUCTIVE_RECOVERY_MIGRATION"
 
 internal val PLUVIA_EXPLICIT_MIGRATIONS: List<Migration> = listOf(
     ROOM_MIGRATION_V23_to_V24,
     ROOM_MIGRATION_V24_to_V25,
     ROOM_MIGRATION_V25_to_V26,
     ROOM_MIGRATION_V26_to_V27,
-)
+) + MERGED_ROOM_MIGRATIONS
 
 internal val UNSUPPORTED_PRESERVATION_VERSIONS = intArrayOf(7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
 
@@ -66,6 +68,7 @@ private val PLUVIA_MIGRATION_DIAGNOSTICS_CALLBACK = object : RoomDatabase.Callba
 private fun completePendingMigrationSuccesses(connection: SQLiteConnection) {
     v25ToV26MigrationDiagnostics.completePendingSuccess(connection)
     v26ToV27MigrationDiagnostics.completePendingSuccess(connection)
+    MERGED_ROOM_MIGRATIONS.forEach { it.completePendingSuccess(connection) }
     DestructiveRecoveryMigrationDiagnostics.completePendingSuccess(connection)
 }
 
@@ -120,26 +123,38 @@ private object DestructiveRecoveryMigrationDiagnostics {
         )
         if (!hasMarkerTable) return
 
-        val isPending = connection.hasResult(
-            """
-            SELECT 1 FROM `$MIGRATION_DIAGNOSTICS_MARKER_TABLE`
-            WHERE `marker` = '$DESTRUCTIVE_RECOVERY_PENDING_SUCCESS'
-            LIMIT 1
-            """.trimIndent(),
+        val pendingRecoveries = listOf(
+            DESTRUCTIVE_RECOVERY_PENDING_SUCCESS to DESTRUCTIVE_RECOVERY_MIGRATION,
+            LEGACY_DESTRUCTIVE_RECOVERY_PENDING_SUCCESS to LEGACY_DESTRUCTIVE_RECOVERY_MIGRATION,
         )
-        if (!isPending) return
+        for ((marker, migration) in pendingRecoveries) {
+            val isPending = connection.hasResult(
+                """
+                SELECT 1 FROM `$MIGRATION_DIAGNOSTICS_MARKER_TABLE`
+                WHERE `marker` = '$marker'
+                LIMIT 1
+                """.trimIndent(),
+            )
+            if (!isPending) continue
 
-        acknowledgeAndCleanupPendingMigrationSuccess(
-            acknowledge = {
-                acknowledgeDatabaseMigrationSuccess(
-                    migration = DESTRUCTIVE_RECOVERY_MIGRATION,
-                    reason = DESTRUCTIVE_RECOVERY_REASON,
-                )
-            },
-            cleanup = {
-                connection.execSQL("DROP TABLE `$MIGRATION_DIAGNOSTICS_MARKER_TABLE`")
-            },
-        )
+            acknowledgeAndCleanupPendingMigrationSuccess(
+                acknowledge = {
+                    acknowledgeDatabaseMigrationSuccess(
+                        migration = migration,
+                        reason = DESTRUCTIVE_RECOVERY_REASON,
+                    )
+                },
+                cleanup = {
+                    connection.execSQL("DELETE FROM `$MIGRATION_DIAGNOSTICS_MARKER_TABLE` WHERE `marker` = '$marker'")
+                },
+            )
+        }
+        if (!connection.hasResult("SELECT 1 FROM `$MIGRATION_DIAGNOSTICS_MARKER_TABLE` LIMIT 1")) {
+            acknowledgeAndCleanupPendingMigrationSuccess(
+                acknowledge = { true },
+                cleanup = { connection.execSQL("DROP TABLE `$MIGRATION_DIAGNOSTICS_MARKER_TABLE`") },
+            )
+        }
     }
 }
 

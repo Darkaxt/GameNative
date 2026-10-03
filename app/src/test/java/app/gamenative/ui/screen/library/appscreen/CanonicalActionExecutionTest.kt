@@ -53,6 +53,8 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -72,6 +74,88 @@ class CanonicalActionExecutionTest {
         OwnedCopyOperation.EXPORT_SAVES,
         OwnedCopyOperation.IMPORT_SAVES,
     )
+
+    @Test
+    fun specialLaunchCallbackUsesRevalidatedPlayItemWithoutSiblingFallback() = runTest {
+        val fixture = fixture(setOf(OwnedCopyOperation.PLAY))
+        var received: LibraryItem? = null
+        val callback = guardedPlayCallback(
+            guardedAction = { operation, action ->
+                launch {
+                    executeGuardedAction(fixture.initial, fixture.guard, operation, { error("Current copy must be available") }) {
+                        action(it)
+                    }
+                }
+            },
+            action = { received = it },
+        )
+
+        callback()
+        runCurrent()
+
+        assertSame(fixture.current, received)
+        assertEquals(1, fixture.adapter.resolveCalls)
+        assertEquals(0, fixture.siblingCalls())
+    }
+
+    @Test
+    fun specialLaunchCallbackRejectsWithdrawnPlayCapability() = runTest {
+        val fixture = fixture(emptySet())
+        val failures = mutableListOf<ActionFailureReason>()
+        var calls = 0
+        val callback = guardedPlayCallback(
+            guardedAction = { operation, action ->
+                launch {
+                    executeGuardedAction(fixture.initial, fixture.guard, operation, failures::add) { action(it) }
+                }
+            },
+            action = { calls += 1 },
+        )
+
+        callback()
+        runCurrent()
+
+        assertEquals(0, calls)
+        assertEquals(listOf(ActionFailureReason.CAPABILITY_CHANGED), failures)
+        assertEquals(1, fixture.adapter.resolveCalls)
+        assertEquals(0, fixture.siblingCalls())
+    }
+
+    @Test
+    fun specialLaunchMenusBindEveryCallbackToPlayRevalidation() {
+        val baseSource = File(
+            repositoryRoot(),
+            "app/src/main/java/app/gamenative/ui/screen/library/appscreen/BaseAppScreen.kt",
+        ).readText()
+        val menuBinding = baseSource.substringAfter("val optionsMenu = optionsForActionGuard(")
+            .substringBefore("fun executeOwnedCopyOperation")
+
+        listOf("onTestGraphics", "onPlayWithDiagnostics", "onAiDebugRun").forEach { callback ->
+            assertTrue(callback, menuBinding.contains("guardedPlayCallback(::executeGuarded, $callback)"))
+        }
+    }
+
+    @Test
+    fun specialLaunchCallbackPreservesLegacyItemExactlyOnce() = runTest {
+        val original = libraryItem("Original")
+        val received = mutableListOf<LibraryItem>()
+        val callback = guardedPlayCallback(
+            guardedAction = { operation, action ->
+                launch {
+                    executeGuardedAction(original, null, operation, { error("Legacy must not revalidate") }) {
+                        action(it)
+                    }
+                }
+            },
+            action = received::add,
+        )
+
+        callback()
+        runCurrent()
+
+        assertEquals(1, received.size)
+        assertSame(original, received.single())
+    }
 
     @Test
     fun legacyBoundaryExecutesEveryExistingActionExactlyOnceWithTheOriginalItem() = runTest {

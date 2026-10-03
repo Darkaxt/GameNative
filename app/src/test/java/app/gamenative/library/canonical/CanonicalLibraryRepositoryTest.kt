@@ -54,6 +54,29 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class CanonicalLibraryRepositoryTest {
     @Test
+    fun nativeVisibilityMetadataReachesCopiesWithoutRetiringTheirOwnership() = runTest {
+        val game = game(ID_A)
+        val steam = match(game, GameSource.STEAM, "10", MatchConfidence.VERIFIED)
+        val gog = match(game, GameSource.GOG, "20", MatchConfidence.HIGH)
+        val steamRuntime = available(steam.key()).let {
+            it.copy(copy = it.copy.copy(isVrOnly = true, isVrSupported = true))
+        }
+        val gogRuntime = available(gog.key()).let { it.copy(copy = it.copy.copy(isHidden = true)) }
+        val harness = harness(
+            listOf(aggregate(game, listOf(steam, gog))),
+            mapOf(steam.key() to steamRuntime, gog.key() to gogRuntime),
+        )
+
+        val card = harness.repository.observeCards().first().single()
+
+        assertEquals(setOf(GameSource.STEAM, GameSource.GOG), card.ownedSources)
+        assertEquals(2, card.copies.size)
+        assertTrue(card.copies.single { it.source == GameSource.STEAM }.isVrOnly)
+        assertTrue(card.copies.single { it.source == GameSource.STEAM }.isVrSupported)
+        assertTrue(card.copies.single { it.source == GameSource.GOG }.isHidden)
+    }
+
+    @Test
     fun verifiedSteamAndHighGogShareOneGroupedCard() = runTest {
         val game = game(ID_A, displayName = "Canonical Hero")
         val steam = match(

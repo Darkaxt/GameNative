@@ -708,6 +708,8 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                 lastPlayedEpochMs = lastPlayed,
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, libraryItemPresent = true, sourceState),
+                isVrOnly = app.isVrOnly,
+                isVrSupported = app.isVrSupported,
             ),
         )
     }

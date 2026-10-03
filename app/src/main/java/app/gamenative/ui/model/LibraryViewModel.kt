@@ -17,6 +17,7 @@ import app.gamenative.data.FavoritesManager
 import app.gamenative.data.FavoritesUtils
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
+import app.gamenative.data.HiddenGameFilter
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.gog.GogRecommendationsRepository
 import app.gamenative.data.gog.GogSeedCollector
@@ -85,7 +86,10 @@ import app.gamenative.steam.SteamCollectionFilter
 import app.gamenative.ui.data.GameCardStats
 import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryCardIdentity
+import app.gamenative.steam.curated.CuratedListDescriptor
+import app.gamenative.steam.curated.CuratedListRepository
 import app.gamenative.ui.data.LibraryState
+import app.gamenative.ui.data.LibraryCounts
 import app.gamenative.ui.data.statsFor
 import app.gamenative.ui.enums.AppFilter
 import app.gamenative.ui.enums.LibraryTab
@@ -130,6 +134,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -155,6 +160,7 @@ internal data class CanonicalLibraryPage(
     val allCount: Int,
     val sourceCounts: Map<GameSource, Int>,
     val steamCollectionCounts: Map<String, Int>,
+    val curatedListCounts: Map<String, Int>,
     val compatibilityRequestNames: List<String>,
     val genreFacets: List<GameFacet>,
     val genreClassifiedCount: Int,
@@ -269,7 +275,12 @@ internal object CanonicalLibraryFilter {
         )
         val tagMode = state.discoveryFilters.tagMatchMode
         val beforeCollections = cards.asSequence()
-            .filter { card -> card.appType in appTypes }
+            .filter { card ->
+                val inTypeBucket = card.appType in appTypes && card.copies.any { !it.isVrOnly }
+                val inVrBucket = state.appInfoSortType.contains(AppFilter.VR) &&
+                    card.copies.any { it.isVrOnly || it.isVrSupported }
+                inTypeBucket || inVrBucket
+            }
             .filter { card ->
                 state.searchQuery.isEmpty() || sequenceOf(card.displayName)
                     .plus(card.aliases.asSequence().filter(String::isNotBlank))
@@ -289,29 +300,48 @@ internal object CanonicalLibraryFilter {
             .filter { entry -> passesStats(state, entry.stats) }
             .toList()
 
+        val allowedCuratedAppIds = SteamCollectionFilter.allowedAppIds(
+            selectedIds = state.selectedCuratedListIds,
+            collections = state.curatedLists,
+        )
         val beforeCollectionsAfterDiscovery = beforeCollections.filter { entry ->
             matchesDiscovery(entry.card, selectedGenres, selectedTags, tagMode)
         }
         val steamCollectionCounts = state.steamCollections?.associate { collection ->
             collection.id to beforeCollectionsAfterDiscovery.count { entry ->
-                entry.card.steamCollectionAppIds.any(collection.appIds::contains)
+                matchesCurated(entry.card, allowedCuratedAppIds) &&
+                    (collection.id == SteamCollection.ID_HIDDEN || GameSource.STEAM in visibleSources(entry.card, state)) &&
+                    entry.card.steamCollectionAppIds.any(collection.appIds::contains)
             }
         }.orEmpty()
         val allowedSteamAppIds = SteamCollectionFilter.allowedAppIds(
             selectedIds = state.selectedSteamCollectionIds,
             collections = state.steamCollections,
         )
+        val visibleBeforeCollections = beforeCollections.filter { entry ->
+            visibleSources(entry.card, state).isNotEmpty()
+        }
         val afterCollectionsBeforeDiscovery = if (allowedSteamAppIds == null) {
-            beforeCollections
+            visibleBeforeCollections
         } else {
-            beforeCollections.filter { entry ->
-                entry.card.steamCollectionAppIds.any(allowedSteamAppIds::contains)
+            visibleBeforeCollections.filter { entry ->
+                GameSource.STEAM in visibleSources(entry.card, state) &&
+                    entry.card.steamCollectionAppIds.any(allowedSteamAppIds::contains)
             }
         }
-        val coverageCards = afterCollectionsBeforeDiscovery.filter { entry ->
+        val curatedListCounts = state.curatedLists?.associate { collection ->
+            collection.id to afterCollectionsBeforeDiscovery.count { entry ->
+                matchesDiscovery(entry.card, selectedGenres, selectedTags, tagMode) &&
+                    matchesCurated(entry.card, collection.appIds)
+            }
+        }.orEmpty()
+        val afterCuratedBeforeDiscovery = afterCollectionsBeforeDiscovery.filter { entry ->
+            matchesCurated(entry.card, allowedCuratedAppIds)
+        }
+        val coverageCards = afterCuratedBeforeDiscovery.filter { entry ->
             admitted(entry.card, state, favoriteAppIds)
         }
-        val afterCollections = afterCollectionsBeforeDiscovery.filter { entry ->
+        val afterCollections = afterCuratedBeforeDiscovery.filter { entry ->
             matchesDiscovery(entry.card, selectedGenres, selectedTags, tagMode)
         }
         val afterPopularity = state.steamReviewMinimum?.let { minimum ->
@@ -321,7 +351,7 @@ internal object CanonicalLibraryFilter {
         } ?: afterCollections
 
         val sourceCounts = LibraryCard.OWNED_SOURCE_ORDER.associateWith { source ->
-            afterPopularity.count { entry -> source in entry.card.ownedSources }
+            afterPopularity.count { entry -> source in visibleSources(entry.card, state) }
         }
         val allCount = afterPopularity.count { entry -> ownsEnabledSource(entry.card, state) }
         val favoriteEligibleAppIdGroups = afterPopularity.map { entry -> entry.card.favoriteAppIds() }
@@ -383,6 +413,7 @@ internal object CanonicalLibraryFilter {
             allCount = allCount,
             sourceCounts = sourceCounts,
             steamCollectionCounts = steamCollectionCounts,
+            curatedListCounts = curatedListCounts,
             compatibilityRequestNames = immutableList(compatibilityRequestNames),
             genreFacets = immutableList(genreFacets),
             genreClassifiedCount = coverageCards.count { entry -> entry.card.genreKeys.isNotEmpty() },
@@ -400,6 +431,10 @@ internal object CanonicalLibraryFilter {
             favoritesCount = favoritesCount,
         )
     }
+
+    private fun matchesCurated(card: CanonicalLibraryCard, allowedAppIds: Set<Int>?): Boolean =
+        allowedAppIds == null || card.steamAppId?.let(allowedAppIds::contains) == true ||
+            card.steamCollectionAppIds.any(allowedAppIds::contains)
 
     private fun matchesDiscovery(
         card: CanonicalLibraryCard,
@@ -430,12 +465,29 @@ internal object CanonicalLibraryFilter {
         return true
     }
 
-    private fun ownsEnabledSource(card: CanonicalLibraryCard, state: LibraryState): Boolean =
-        (state.showSteamInLibrary && GameSource.STEAM in card.ownedSources) ||
-            (state.showGOGInLibrary && GameSource.GOG in card.ownedSources) ||
-            (state.showEpicInLibrary && GameSource.EPIC in card.ownedSources) ||
-            (state.showAmazonInLibrary && GameSource.AMAZON in card.ownedSources) ||
-            (state.showCustomGamesInLibrary && GameSource.CUSTOM_GAME in card.ownedSources)
+    private fun visibleSources(card: CanonicalLibraryCard, state: LibraryState): Set<GameSource> {
+        val hiddenSteamAppIds = state.steamCollections
+            ?.firstOrNull { it.id == SteamCollection.ID_HIDDEN }?.appIds.orEmpty()
+        val hiddenCollectionSelected = SteamCollection.ID_HIDDEN in state.selectedSteamCollectionIds
+        return card.copies.asSequence().filter { copy ->
+            when (copy.source) {
+                GameSource.STEAM -> copy.key.stableSourceId.toIntOrNull()?.let { appId ->
+                    HiddenGameFilter.passesSteam(appId, hiddenSteamAppIds, state.showHiddenGamesByDefault, hiddenCollectionSelected)
+                } ?: true
+                GameSource.GOG -> HiddenGameFilter.passesGog(copy.isHidden, state.showHiddenGamesByDefault)
+                else -> true
+            }
+        }.map(OwnedCopySummary::source).toSet()
+    }
+
+    private fun ownsEnabledSource(card: CanonicalLibraryCard, state: LibraryState): Boolean {
+        val sources = visibleSources(card, state)
+        return (state.showSteamInLibrary && GameSource.STEAM in sources) ||
+            (state.showGOGInLibrary && GameSource.GOG in sources) ||
+            (state.showEpicInLibrary && GameSource.EPIC in sources) ||
+            (state.showAmazonInLibrary && GameSource.AMAZON in sources) ||
+            (state.showCustomGamesInLibrary && GameSource.CUSTOM_GAME in sources)
+    }
 
     private fun admitted(
         card: CanonicalLibraryCard,
@@ -444,11 +496,11 @@ internal object CanonicalLibraryFilter {
     ): Boolean = when (state.currentTab) {
         LibraryTab.ALL -> ownsEnabledSource(card, state)
         LibraryTab.FAVORITES -> card.favoriteAppIds().any(favoriteAppIds::contains)
-        LibraryTab.STEAM -> GameSource.STEAM in card.ownedSources
-        LibraryTab.GOG -> GameSource.GOG in card.ownedSources
-        LibraryTab.EPIC -> GameSource.EPIC in card.ownedSources
-        LibraryTab.AMAZON -> GameSource.AMAZON in card.ownedSources
-        LibraryTab.LOCAL -> GameSource.CUSTOM_GAME in card.ownedSources
+        LibraryTab.STEAM -> GameSource.STEAM in visibleSources(card, state)
+        LibraryTab.GOG -> GameSource.GOG in visibleSources(card, state)
+        LibraryTab.EPIC -> GameSource.EPIC in visibleSources(card, state)
+        LibraryTab.AMAZON -> GameSource.AMAZON in visibleSources(card, state)
+        LibraryTab.LOCAL -> GameSource.CUSTOM_GAME in visibleSources(card, state)
         LibraryTab.RECOMMENDED -> false
     }
 
@@ -617,6 +669,16 @@ class LibraryViewModel @Inject constructor(
         onFilterApps(request)
     }
 
+    private val onPreferredCopyChanged: (AndroidEvent.PreferredCopyChanged) -> Unit = { event ->
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = steamAppDao.findApp(event.appId) ?: return@launch
+            if (appList.any { it.id == updated.id }) {
+                appList = appList.map { if (it.id == updated.id) updated else it }
+                onFilterApps(paginationCurrentPage)
+            }
+        }
+    }
+
     private val onCustomGameImagesFetched: (AndroidEvent.CustomGameImagesFetched) -> Unit = {
         runtimeRegistry.notifyVolatileStateChanged(GameSource.CUSTOM_GAME)
         val request = supersedeRenderForPendingInput(
@@ -635,6 +697,20 @@ class LibraryViewModel @Inject constructor(
             onFilterApps(paginationCurrentPage)
         }
         refreshRecommendationHero()
+    }
+
+    private val onHiddenGamesSettingChanged: (AndroidEvent.HiddenGamesSettingChanged) -> Unit = { event ->
+        // Use the value from the event rather than re-reading PrefManager: its DataStore write is
+        // asynchronous, so reading it here can race and re-filter with the old value.
+        val request = supersedeRenderForPendingInput(
+            updateInputLocked = { showHiddenGamesByDefault = event.showHiddenGamesByDefault },
+            transformState = { it.copy(showHiddenGamesByDefault = event.showHiddenGamesByDefault) },
+        )
+        onFilterApps(request)
+    }
+
+    private val onLibraryTabsChanged: (AndroidEvent.LibraryTabsChanged) -> Unit = { event ->
+        updateVisibleLibraryTabs(event.visibleTabs)
     }
 
     // How many items loaded on one page of results
@@ -683,6 +759,11 @@ class LibraryViewModel @Inject constructor(
     private var playHistoryByAppId: Map<String, Long> = emptyMap()
 
     @Volatile private var steamCollections: List<SteamCollection>? = null
+
+    // Mirrors PrefManager.showHiddenGamesByDefault without the async DataStore write race.
+    @Volatile private var showHiddenGamesByDefault: Boolean = PrefManager.showHiddenGamesByDefault
+
+    @Volatile private var curatedLists: List<SteamCollection>? = null
 
     // Track if this is the first load to apply minimum load time
     private var isFirstLoad = true
@@ -912,11 +993,44 @@ class LibraryViewModel @Inject constructor(
             }
         }
 
+        viewModelScope.launch(Dispatchers.IO) {
+            CuratedListRepository.curatedLists.filterNotNull().collect { raw ->
+                val resolved = buildCuratedCollections(raw)
+                val request = supersedeRenderForPendingInput(
+                    updateInputLocked = { curatedLists = resolved },
+                    transformState = { current ->
+                        val recon = SteamCollectionFilter.reconcile(current.selectedCuratedListIds, resolved)
+                        if (recon.removedAny) PrefManager.libraryCuratedLists = recon.cleaned
+                        current.copy(curatedLists = resolved, selectedCuratedListIds = recon.cleaned)
+                    },
+                )
+                onFilterApps(request)
+            }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            CuratedListRepository.loadFromCache()
+            CuratedListRepository.refreshFourThreeIfNeeded()
+        }
+
         PluviaApp.events.on<AndroidEvent.LibraryInstallStatusChanged, Unit>(onInstallStatusChanged)
+        PluviaApp.events.on<AndroidEvent.PreferredCopyChanged, Unit>(onPreferredCopyChanged)
         PluviaApp.events.on<AndroidEvent.CustomGameImagesFetched, Unit>(onCustomGameImagesFetched)
         PluviaApp.events.on<AndroidEvent.RecommendationToggleChanged, Unit>(onRecommendationToggleChanged)
+        PluviaApp.events.on<AndroidEvent.HiddenGamesSettingChanged, Unit>(onHiddenGamesSettingChanged)
+        PluviaApp.events.on<AndroidEvent.LibraryTabsChanged, Unit>(onLibraryTabsChanged)
 
         refreshRecommendationHero()
+    }
+
+    private fun buildCuratedCollections(raw: Map<String, Set<Int>>): List<SteamCollection> {
+        return CuratedListDescriptor.entries.mapNotNull { descriptor ->
+            val appIds = raw[descriptor.id] ?: return@mapNotNull null
+            SteamCollection(
+                id = descriptor.id,
+                name = context.getString(descriptor.nameRes),
+                appIds = appIds,
+            )
+        }
     }
 
     private fun refreshRecommendationHero() {
@@ -925,11 +1039,9 @@ class LibraryViewModel @Inject constructor(
             val hero = RecommendationRepository.getHero(context)
             val daySeed = System.currentTimeMillis() / (24L * 60 * 60 * 1000)
             cachedFeatured = hero.featured
-            cachedRecommendation = when {
-                // A live featured takes the slot (still gated by the showRecommendations
-                // toggle at display time), regardless of GOG consent.
-                hero.featured != null -> null
-                PrefManager.showRecommendations && PrefManager.recDisclosureShown -> runCatching {
+            val personalized = PrefManager.showRecommendations && PrefManager.recDisclosureShown
+            val recommendation = when {
+                personalized -> runCatching {
                     val owned = GogSeedCollector.collect(
                         context,
                         libraryPlayHistoryDao,
@@ -938,10 +1050,18 @@ class LibraryViewModel @Inject constructor(
                         amazonGameDao,
                     )
                     val userId = GOGAuthManager.getStoredCredentials(context).getOrNull()?.userId
+                    RecommendationRepository.setRecommendationPool(
+                        GogRecommendationsRepository.getRecommendations(context, owned, userId, daySeed),
+                    )
                     GogRecommendationsRepository.getDailyHero(context, owned, userId, daySeed)
                 }.getOrNull() ?: hero.recommendation
                 else -> hero.recommendation
             }
+            if (!personalized) RecommendationRepository.setRecommendationPool(emptyList())
+            RecommendationRepository.setCurrentHeroRecommendation(recommendation)
+            // A live featured takes the slot (still gated by the showRecommendations
+            // toggle at display time), regardless of GOG consent.
+            cachedRecommendation = if (hero.featured != null) null else recommendation
             // Frosted teaser: pre-consent only, never over a featured slot. Shows every day
             // until the first "Not now", then one day in three. A frosted day stays frosted
             // all day, dismissed or not.
@@ -983,8 +1103,11 @@ class LibraryViewModel @Inject constructor(
         }
         jobsToCancel.forEach(Job::cancel)
         PluviaApp.events.off<AndroidEvent.LibraryInstallStatusChanged, Unit>(onInstallStatusChanged)
+        PluviaApp.events.off<AndroidEvent.PreferredCopyChanged, Unit>(onPreferredCopyChanged)
         PluviaApp.events.off<AndroidEvent.CustomGameImagesFetched, Unit>(onCustomGameImagesFetched)
         PluviaApp.events.off<AndroidEvent.RecommendationToggleChanged, Unit>(onRecommendationToggleChanged)
+        PluviaApp.events.off<AndroidEvent.HiddenGamesSettingChanged, Unit>(onHiddenGamesSettingChanged)
+        PluviaApp.events.off<AndroidEvent.LibraryTabsChanged, Unit>(onLibraryTabsChanged)
         super.onCleared()
     }
 
@@ -1309,6 +1432,7 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun onTabChanged(tab: LibraryTab) {
+        if (tab !in _state.value.visibleLibraryTabs) return
         val request = supersedeRenderForPendingInput(
             paginationPageLocked = { 0 },
             transformState = { current -> current.copy(currentTab = tab) },
@@ -1320,7 +1444,7 @@ class LibraryViewModel @Inject constructor(
         val request = supersedeRenderForPendingInput(
             paginationPageLocked = { 0 },
             transformState = { current ->
-                val nextTab = current.currentTab.next()
+                val nextTab = current.currentTab.next(current.visibleLibraryTabs)
                 Timber.tag("LibraryViewModel").d("Tab next via bumper: ${current.currentTab} -> $nextTab")
                 current.copy(currentTab = nextTab)
             },
@@ -1332,9 +1456,23 @@ class LibraryViewModel @Inject constructor(
         val request = supersedeRenderForPendingInput(
             paginationPageLocked = { 0 },
             transformState = { current ->
-                val previousTab = current.currentTab.previous()
+                val previousTab = current.currentTab.previous(current.visibleLibraryTabs)
                 Timber.tag("LibraryViewModel").d("Tab previous via bumper: ${current.currentTab} -> $previousTab")
                 current.copy(currentTab = previousTab)
+            },
+        )
+        onFilterApps(request)
+    }
+
+    private fun updateVisibleLibraryTabs(visibleTabs: List<LibraryTab>) {
+        val supportedTabs = LibraryTab.normalizeVisibleTabs(LibraryTab.serializeVisibleTabs(visibleTabs))
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                current.copy(
+                    currentTab = current.currentTab.takeIf(supportedTabs::contains) ?: LibraryTab.ALL,
+                    visibleLibraryTabs = supportedTabs,
+                )
             },
         )
         onFilterApps(request)
@@ -1470,6 +1608,30 @@ class LibraryViewModel @Inject constructor(
                 current.copy(
                     discoveryFilters = current.discoveryFilters.copy(selectedTagIds = emptySet()),
                 )
+            },
+        )
+        onFilterApps(request)
+    }
+
+    fun onCuratedListToggle(id: String) {
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                val updated = current.selectedCuratedListIds.toMutableSet()
+                if (!updated.add(id)) updated.remove(id)
+                PrefManager.libraryCuratedLists = updated
+                current.copy(selectedCuratedListIds = updated.toSet())
+            },
+        )
+        onFilterApps(request)
+    }
+
+    fun onClearCuratedLists() {
+        val request = supersedeRenderForPendingInput(
+            paginationPageLocked = { 0 },
+            transformState = { current ->
+                PrefManager.libraryCuratedLists = emptySet()
+                current.copy(selectedCuratedListIds = emptySet())
             },
         )
         onFilterApps(request)
@@ -2737,6 +2899,7 @@ class LibraryViewModel @Inject constructor(
                         },
                         favoritesCount = page.favoritesCount,
                         steamCollectionCounts = page.steamCollectionCounts,
+                        curatedListCounts = page.curatedListCounts,
                         genreFacets = page.genreFacets,
                         genreClassifiedCount = page.genreClassifiedCount,
                         genreTotalCount = page.genreTotalCount,
@@ -2862,7 +3025,9 @@ class LibraryViewModel @Inject constructor(
                 }
             }
             .filter { item ->
-                currentFilter.any { item.type == it }
+                val inTypeBucket = !item.isVrOnly && currentFilter.any { item.type == it }
+                val inVrBucket = item.isVrGame && currentState.appInfoSortType.contains(AppFilter.VR)
+                inTypeBucket || inVrBucket
             }
             .filter { item ->
                 if (currentState.appInfoSortType.contains(AppFilter.SHARED)) {
@@ -2889,26 +3054,33 @@ class LibraryViewModel @Inject constructor(
             }
             .toList()
 
-        // Per-collection counts: computed from the owner/type/search-filtered set (independent of the
-        // current collection selection) so each collection shows how many games it would contribute.
-        val steamCollectionCounts: Map<String, Int> = steamCollections?.associate { collection ->
-            collection.id to steamOwnerTypeFiltered.count { it.id in collection.appIds }
-        } ?: emptyMap()
-
-        // Apply the Steam collection filter — union/OR, fail-open (see SteamCollectionFilter).
-        // Resolve the allowed app-id set once for the whole pass instead of per app.
         val allowedSteamAppIds = SteamCollectionFilter.allowedAppIds(
             selectedIds = currentState.selectedSteamCollectionIds,
-            collections = steamCollections,
+            collections = currentState.steamCollections,
         )
-        val steamFilteredBeforeCompatibility: List<SteamApp> =
-            (
-                if (allowedSteamAppIds == null) {
-                    steamOwnerTypeFiltered
-                } else {
-                    steamOwnerTypeFiltered.filter { it.id in allowedSteamAppIds }
-                }
-            )
+        val allowedCuratedAppIds = SteamCollectionFilter.allowedAppIds(
+            selectedIds = currentState.selectedCuratedListIds,
+            collections = currentState.curatedLists,
+        )
+        val hiddenSteamAppIds = currentState.steamCollections
+            ?.firstOrNull { it.id == SteamCollection.ID_HIDDEN }?.appIds.orEmpty()
+        val hiddenCollectionSelected = SteamCollection.ID_HIDDEN in currentState.selectedSteamCollectionIds
+        val visibleSteamApps = steamOwnerTypeFiltered.filter { item ->
+            HiddenGameFilter.passesSteam(item.id, hiddenSteamAppIds, currentState.showHiddenGamesByDefault, hiddenCollectionSelected)
+        }
+        val steamCollectionCounts = SteamCollectionFilter.visibleCollectionCounts(
+            collections = currentState.steamCollections,
+            visibleAppIds = visibleSteamApps.filter { allowedCuratedAppIds == null || it.id in allowedCuratedAppIds }.map(SteamApp::id),
+            preHiddenAppIds = steamOwnerTypeFiltered.filter { allowedCuratedAppIds == null || it.id in allowedCuratedAppIds }.map(SteamApp::id),
+        )
+        val curatedListCounts = currentState.curatedLists?.associate { collection ->
+            collection.id to visibleSteamApps.count { item ->
+                (allowedSteamAppIds == null || item.id in allowedSteamAppIds) && item.id in collection.appIds
+            }
+        }.orEmpty()
+        val steamFilteredBeforeCompatibility = visibleSteamApps.filter { item ->
+            SteamCollectionFilter.passesAll(item.id, allowedSteamAppIds, allowedCuratedAppIds)
+        }
 
         // Filter Steam apps first (no pagination yet)
         // Note: Don't sort individual lists - we'll sort the combined list for consistent ordering
@@ -3001,6 +3173,7 @@ class LibraryViewModel @Inject constructor(
                     true
                 }
             }
+            .filter { game -> HiddenGameFilter.passesGog(game.hidden, currentState.showHiddenGamesByDefault) }
             .toList()
 
         val gogEntries = filteredGOGGames
@@ -3207,7 +3380,7 @@ class LibraryViewModel @Inject constructor(
 
         // A Steam collection can only contain Steam apps, so when one is selected the non-Steam
         // sources can't match it — keep them out of the combined list (and their tab counts).
-        val steamCollectionSelected = allowedSteamAppIds != null
+        val steamCollectionSelected = allowedSteamAppIds != null || allowedCuratedAppIds != null
 
         val favoriteIds = FavoritesManager.favorites.value
 
@@ -3296,10 +3469,12 @@ class LibraryViewModel @Inject constructor(
         }
         val favoriteEligibleIds = buildList {
             addAll(steamEntries)
-            addAll(customEntries)
-            if (GOGService.hasStoredCredentials(context)) addAll(gogEntries)
-            if (EpicService.hasStoredCredentials(context)) addAll(epicEntries)
-            if (AmazonService.hasStoredCredentials(context)) addAll(amazonEntries)
+            if (!steamCollectionSelected) {
+                addAll(customEntries)
+                if (GOGService.hasStoredCredentials(context)) addAll(gogEntries)
+                if (EpicService.hasStoredCredentials(context)) addAll(epicEntries)
+                if (AmazonService.hasStoredCredentials(context)) addAll(amazonEntries)
+            }
         }.mapTo(linkedSetOf()) { it.item.appId }
         val favoriteEligibleGroups = favoriteEligibleIds.map(::setOf)
 
@@ -3327,17 +3502,18 @@ class LibraryViewModel @Inject constructor(
                         totalAppsInFilter = totalFound,
                         isLoading = false,
                         allCount = (if (currentState.showSteamInLibrary) steamEntries.size else 0) +
-                            (if (currentState.showCustomGamesInLibrary) customEntries.size else 0) +
-                            (if (currentState.showGOGInLibrary && hasGog) gogEntries.size else 0) +
-                            (if (currentState.showEpicInLibrary && hasEpic) epicEntries.size else 0) +
-                            (if (currentState.showAmazonInLibrary && hasAmazon) amazonEntries.size else 0),
+                            (if (currentState.showCustomGamesInLibrary && !steamCollectionSelected) customEntries.size else 0) +
+                            (if (currentState.showGOGInLibrary && hasGog && !steamCollectionSelected) gogEntries.size else 0) +
+                            (if (currentState.showEpicInLibrary && hasEpic && !steamCollectionSelected) epicEntries.size else 0) +
+                            (if (currentState.showAmazonInLibrary && hasAmazon && !steamCollectionSelected) amazonEntries.size else 0),
                         steamCount = if (currentState.showSteamInLibrary) steamEntries.size else 0,
-                        gogCount = if (currentState.showGOGInLibrary && hasGog) gogEntries.size else 0,
-                        epicCount = if (currentState.showEpicInLibrary && hasEpic) epicEntries.size else 0,
-                        amazonCount = if (currentState.showAmazonInLibrary && hasAmazon) amazonEntries.size else 0,
-                        localCount = if (currentState.showCustomGamesInLibrary) customEntries.size else 0,
+                        gogCount = if (currentState.showGOGInLibrary && hasGog && !steamCollectionSelected) gogEntries.size else 0,
+                        epicCount = if (currentState.showEpicInLibrary && hasEpic && !steamCollectionSelected) epicEntries.size else 0,
+                        amazonCount = if (currentState.showAmazonInLibrary && hasAmazon && !steamCollectionSelected) amazonEntries.size else 0,
+                        localCount = if (currentState.showCustomGamesInLibrary && !steamCollectionSelected) customEntries.size else 0,
                         favoritesCount = FavoritesUtils.countPresent(favoriteIds, favoriteEligibleIds),
                         steamCollectionCounts = steamCollectionCounts,
+                        curatedListCounts = curatedListCounts,
                     )
                 }
                 true
@@ -3491,13 +3667,5 @@ class LibraryViewModel @Inject constructor(
 
     private fun compatibilityStatusFor(
         response: GameCompatibilityService.GameCompatibilityResponse,
-    ): GameCompatibilityStatus {
-        return when {
-            response.isNotWorking -> GameCompatibilityStatus.NOT_COMPATIBLE
-            !response.hasBeenTried -> GameCompatibilityStatus.UNKNOWN
-            response.gpuPlayableCount > 0 -> GameCompatibilityStatus.GPU_COMPATIBLE
-            response.totalPlayableCount > 0 -> GameCompatibilityStatus.COMPATIBLE
-            else -> GameCompatibilityStatus.UNKNOWN
-        }
-    }
+    ): GameCompatibilityStatus = GameCompatibilityService.statusFor(response)
 }

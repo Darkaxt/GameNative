@@ -7,6 +7,7 @@ import app.gamenative.PluviaApp
 import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
+import app.gamenative.data.FavoritesManager
 import app.gamenative.data.GameSource
 import app.gamenative.data.GOGGame
 import app.gamenative.data.HeroResponse
@@ -15,6 +16,8 @@ import app.gamenative.data.RecommendationRepository
 import app.gamenative.data.SteamApp
 import app.gamenative.data.SteamCollection
 import app.gamenative.data.SteamCollectionRepository
+import app.gamenative.steam.curated.CuratedListDescriptor
+import app.gamenative.steam.curated.CuratedListRepository
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameId
@@ -134,9 +137,11 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Config(application = android.app.Application::class)
 class CanonicalLibraryViewModelTest {
 
     private lateinit var context: Context
@@ -162,6 +167,9 @@ class CanonicalLibraryViewModelTest {
             PrefManager.librarySortOption = SortOption.INSTALLED_FIRST
         }
         if (PrefManager.librarySteamCollections.isNotEmpty()) PrefManager.librarySteamCollections = emptySet()
+        if (PrefManager.libraryCuratedLists.isNotEmpty()) PrefManager.libraryCuratedLists = emptySet()
+        if (!PrefManager.showHiddenGamesByDefault) PrefManager.showHiddenGamesByDefault = true
+        if (PrefManager.libraryTabs != LibraryTab.visibleEntries) PrefManager.libraryTabs = LibraryTab.visibleEntries
         if (PrefManager.libraryGenreKeys.isNotEmpty()) PrefManager.libraryGenreKeys = emptySet()
         if (PrefManager.libraryTagIds.isNotEmpty()) PrefManager.libraryTagIds = emptySet()
         if (PrefManager.libraryTagMatchMode != TagMatchMode.ANY) {
@@ -180,6 +188,9 @@ class CanonicalLibraryViewModelTest {
                 PrefManager.libraryFilter == defaultFilters &&
                 PrefManager.librarySortOption == SortOption.INSTALLED_FIRST &&
                 PrefManager.librarySteamCollections.isEmpty() &&
+                PrefManager.libraryCuratedLists.isEmpty() &&
+                PrefManager.showHiddenGamesByDefault &&
+                PrefManager.libraryTabs == LibraryTab.visibleEntries &&
                 PrefManager.libraryGenreKeys.isEmpty() &&
                 PrefManager.libraryTagIds.isEmpty() &&
                 PrefManager.libraryTagMatchMode == TagMatchMode.ANY &&
@@ -244,6 +255,145 @@ class CanonicalLibraryViewModelTest {
         clearAllMocks()
         unmockkAll()
         Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `legacy hidden GOG presentation respects preference without retiring rows`() {
+        withLegacyLibrary(gogGames = listOf(GOGGame(id = "10", title = "Hidden GOG", hidden = true))) { vm ->
+            assertEquals(listOf("Hidden GOG"), vm.state.value.cards.map { it.name })
+            PluviaApp.events.emit(AndroidEvent.HiddenGamesSettingChanged(false))
+            awaitState { it.cards.isEmpty() && it.gogCount == 0 && !it.isLoading }
+        }
+    }
+
+    @Test
+    fun `legacy curated selection intersects Steam rows and publishes counts`() {
+        val id = CuratedListDescriptor.entries.first().id
+        mockkObject(CuratedListRepository)
+        every { CuratedListRepository.curatedLists } returns MutableStateFlow(mapOf(id to setOf(10)))
+        withLegacyLibrary(steamApps = listOf(legacySteam(10), legacySteam(20))) { vm ->
+            awaitState { it.curatedLists?.any { list -> list.id == id } == true }
+            vm.onCuratedListToggle(id)
+            awaitState { it.cards.map { card -> card.name } == listOf("Steam 10") && !it.isLoading }
+            assertEquals(1, vm.state.value.curatedListCounts[id])
+        }
+    }
+
+    @Test
+    fun `legacy curated selection removes non-Steam source and favorite counts`() {
+        val id = CuratedListDescriptor.entries.first().id
+        mockkObject(CuratedListRepository)
+        every { CuratedListRepository.curatedLists } returns MutableStateFlow(mapOf(id to setOf(10)))
+        mockkObject(FavoritesManager)
+        every { FavoritesManager.favorites } returns MutableStateFlow(setOf("GOG_30"))
+        withLegacyLibrary(
+            steamApps = listOf(legacySteam(10), legacySteam(20)),
+            gogGames = listOf(GOGGame(id = "30", title = "GOG 30")),
+        ) { vm ->
+            awaitState { it.cards.size == 3 && it.curatedLists?.isNotEmpty() == true }
+            vm.onCuratedListToggle(id)
+            awaitState { it.cards.map { card -> card.name } == listOf("Steam 10") && !it.isLoading }
+
+            assertEquals(1, vm.state.value.allCount)
+            assertEquals(0, vm.state.value.gogCount)
+            assertEquals(0, vm.state.value.favoritesCount)
+        }
+    }
+
+    @Test
+    fun `legacy VR-only app is excluded from the ordinary game bucket`() {
+        withLegacyLibrary(steamApps = listOf(legacySteam(10).copy(isVrOnly = true), legacySteam(20))) { vm ->
+            awaitState { it.cards.map { card -> card.name } == listOf("Steam 20") && !it.isLoading }
+        }
+    }
+
+    private fun legacySteam(id: Int) = SteamApp(id = id, name = "Steam $id", type = app.gamenative.enums.AppType.game)
+
+    private fun withLegacyLibrary(
+        steamApps: List<SteamApp> = emptyList(),
+        gogGames: List<GOGGame> = emptyList(),
+        action: (LibraryViewModel) -> Unit,
+    ) {
+        val io = Executors.newFixedThreadPool(4).asCoroutineDispatcher()
+        every { GOGService.hasStoredCredentials(any()) } returns gogGames.isNotEmpty()
+        try {
+            val vm = viewModel(
+                repository = repository(MutableStateFlow(emptyList())),
+                gateEnabled = false,
+                readiness = CanonicalProjectionReadiness(),
+                steamRows = MutableStateFlow(steamApps),
+                gogRows = MutableStateFlow(gogGames),
+                ioDispatcher = io,
+            )
+            awaitState { !it.isLoading && it.cards.isNotEmpty() }
+            action(vm)
+        } finally {
+            viewModelStore.clear()
+            io.close()
+        }
+    }
+
+    @Test
+    fun `curated metadata emission retires older render authority`() {
+        val metadata = MutableStateFlow<Map<String, Set<Int>>?>(null)
+        mockkObject(CuratedListRepository)
+        every { CuratedListRepository.curatedLists } returns metadata
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(card(name = "Authority card")))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        scheduler.runCurrent()
+        awaitState { it.cards.isNotEmpty() && !it.isLoading }
+        val field = LibraryViewModel::class.java.getDeclaredField("filterInputRevision").apply { isAccessible = true }
+        val revision = field.get(vm) as java.util.concurrent.atomic.AtomicLong
+        val before = revision.get()
+
+        metadata.value = mapOf(CuratedListDescriptor.entries.first().id to setOf(10))
+        awaitState { it.curatedLists?.isNotEmpty() == true }
+
+        assertTrue("Metadata publication must supersede older input authority", revision.get() > before)
+    }
+
+    @Test
+    fun `curated toggle supersedes the render input synchronously`() = assertInputSuperseded { vm ->
+        vm.onCuratedListToggle("test-list")
+    }
+
+    @Test
+    fun `curated clear supersedes the render input synchronously`() = assertInputSuperseded { vm ->
+        vm.onClearCuratedLists()
+    }
+
+    @Test
+    fun `hidden preference event supersedes render and snapshots its event value`() = assertInputSuperseded { vm ->
+        PluviaApp.events.emit(AndroidEvent.HiddenGamesSettingChanged(false))
+        assertFalse(vm.state.value.showHiddenGamesByDefault)
+    }
+
+    @Test
+    fun `removing active tab supersedes render before replacing tab state`() = assertInputSuperseded(
+        prepare = { vm -> vm.onTabChanged(LibraryTab.STEAM) },
+    ) {
+        PluviaApp.events.emit(AndroidEvent.LibraryTabsChanged(listOf(LibraryTab.ALL)))
+    }
+
+    private fun assertInputSuperseded(
+        prepare: (LibraryViewModel) -> Unit = {},
+        change: (LibraryViewModel) -> Unit,
+    ) {
+        val vm = viewModel(
+            repository = repository(MutableStateFlow(listOf(card(name = "Authority card")))),
+            gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() },
+        )
+        scheduler.runCurrent()
+        prepare(vm)
+        val field = LibraryViewModel::class.java.getDeclaredField("filterInputRevision").apply { isAccessible = true }
+        val revision = field.get(vm) as java.util.concurrent.atomic.AtomicLong
+        val before = revision.get()
+        change(vm)
+        assertTrue("New input must retire older render authority before scheduling work", revision.get() > before)
     }
 
     @Test
@@ -2002,12 +2152,7 @@ class CanonicalLibraryViewModelTest {
         val legacyStarted = CountDownLatch(1)
         val releaseLegacy = CountDownLatch(1)
         val attempts = AtomicInteger(0)
-        every { DownloadService.getDownloadDirectoryApps() } answers {
-            attempts.incrementAndGet()
-            legacyStarted.countDown()
-            releaseLegacy.await(15, TimeUnit.SECONDS)
-            mutableListOf()
-        }
+        every { DownloadService.getDownloadDirectoryApps() } returns mutableListOf()
         every { GOGService.hasStoredCredentials(any()) } returns true
 
         try {
@@ -2018,18 +2163,30 @@ class CanonicalLibraryViewModelTest {
                 gogRows = MutableStateFlow(listOf(GOGGame(id = "slow-legacy", title = "Slow Legacy Success", isInstalled = true))),
                 ioDispatcher = io,
             )
+            awaitState { it.cards.map { card -> card.name } == listOf("Slow Legacy Success") && !it.isLoading }
+            every { DownloadService.getDownloadDirectoryApps() } answers {
+                attempts.incrementAndGet()
+                legacyStarted.countDown()
+                releaseLegacy.await(15, TimeUnit.SECONDS)
+                mutableListOf()
+            }
+            vm.onTabChanged(LibraryTab.ALL)
             awaitLatch(legacyStarted, "long legacy computation")
             Thread.sleep(5_500L)
             assertEquals("long legacy work timed out or overlapped", 1, attempts.get())
 
             releaseLegacy.countDown()
+            val published = awaitCondition(timeoutMs = 5_000L) {
+                attempts.get() == 1 &&
+                    vm.state.value.cards.map { it.name } == listOf("Slow Legacy Success") &&
+                    !vm.state.value.isLoading
+            }
             assertTrue(
-                "long legacy computation did not publish",
-                awaitCondition(timeoutMs = 5_000L) {
-                    attempts.get() == 1 &&
-                        vm.state.value.cards.map { it.name } == listOf("Slow Legacy Success") &&
-                        !vm.state.value.isLoading
-                },
+                "long legacy computation did not publish: attempts=${attempts.get()}, " +
+                    "loading=${vm.state.value.isLoading}, cards=${vm.state.value.cards.map { it.name }}, " +
+                    "failure=${vm.state.value.canonicalPublicFailure}, curated=${vm.state.value.selectedCuratedListIds}, " +
+                    "tab=${vm.state.value.currentTab}",
+                published,
             )
             assertEquals("long legacy work was retried after the timeout", 1, attempts.get())
         } finally {

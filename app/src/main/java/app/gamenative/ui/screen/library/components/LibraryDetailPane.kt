@@ -46,8 +46,9 @@ import java.util.EnumSet
 internal fun LibraryDetailPane(
     libraryItem: LibraryItem?,
     onClickPlay: (Boolean) -> Unit,
-    onTestGraphics: () -> Unit,
-    onPlayWithDiagnostics: () -> Unit,
+    onTestGraphics: (LibraryItem) -> Unit,
+    onPlayWithDiagnostics: (LibraryItem) -> Unit,
+    onAiDebugRun: (LibraryItem) -> Unit,
     onBack: () -> Unit,
 ) {
     val card = libraryItem?.let { item ->
@@ -62,6 +63,7 @@ internal fun LibraryDetailPane(
         onClickPlay = { _, confirm -> onClickPlay(confirm) },
         onTestGraphics = onTestGraphics,
         onPlayWithDiagnostics = onPlayWithDiagnostics,
+        onAiDebugRun = onAiDebugRun,
         onBack = onBack,
     )
 }
@@ -76,8 +78,9 @@ internal fun LibraryDetailPane(
     onInitialOperationConsumed: () -> Unit = {},
     onCanonicalActionUnavailable: (ActionFailureReason) -> Unit = {},
     onClickPlay: (LibraryItem, Boolean) -> Unit,
-    onTestGraphics: () -> Unit,
-    onPlayWithDiagnostics: () -> Unit,
+    onTestGraphics: (LibraryItem) -> Unit,
+    onPlayWithDiagnostics: (LibraryItem) -> Unit,
+    onAiDebugRun: (LibraryItem) -> Unit,
     onBack: () -> Unit,
 ) {
     Surface {
@@ -90,7 +93,7 @@ internal fun LibraryDetailPane(
                 }
                 LaunchedEffect(card.recommendedGameId) {
                     game = if (card.isFeatured) {
-                        RecommendationRepository.getFeaturedGame(context)
+                        RecommendationRepository.getFeaturedGame(context, card.recommendedGameId)
                     } else {
                         GogRecommendationsRepository.getRecommendedGame(card.recommendedGameId)
                             ?: RecommendationRepository.getCurrentRecommendation(context)
@@ -139,6 +142,7 @@ internal fun LibraryDetailPane(
                             onClickPlay = onClickPlay,
                             onTestGraphics = onTestGraphics,
                             onPlayWithDiagnostics = onPlayWithDiagnostics,
+                            onAiDebugRun = onAiDebugRun,
                             onBack = onBack,
                             actionGuard = actionGuard,
                             initialOperation = initialOperation,
@@ -166,6 +170,7 @@ internal fun LibraryDetailPane(
                         onClickPlay = onClickPlay,
                         onTestGraphics = onTestGraphics,
                         onPlayWithDiagnostics = onPlayWithDiagnostics,
+                        onAiDebugRun = onAiDebugRun,
                         onBack = onBack,
                     )
                 }
@@ -216,6 +221,7 @@ private fun Preview_LibraryDetailPane() {
             onClickPlay = { _, _ -> },
             onTestGraphics = { },
             onPlayWithDiagnostics = { },
+            onAiDebugRun = { },
             onBack = { },
         )
     }

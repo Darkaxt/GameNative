@@ -239,6 +239,9 @@ class CanonicalLibraryRepository @Inject constructor(
                 decisionCandidateSteamAppId = match.candidateSteamAppId,
                 decisionResolverVersion = match.resolverVersion,
                 decisionRevision = match.matchedAt,
+                isHidden = runtime.isHidden,
+                isVrOnly = runtime.isVrOnly,
+                isVrSupported = runtime.isVrSupported,
             )
         } else {
             val unavailable = checkNotNull(entry.unavailable)

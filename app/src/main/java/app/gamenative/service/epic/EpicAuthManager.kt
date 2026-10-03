@@ -440,7 +440,7 @@ object EpicAuthManager {
         }
     }
 
-    private fun loadCredentials(context: Context): EpicCredentials? =
+    internal fun loadCredentials(context: Context): EpicCredentials? =
         synchronized(credentialLifecycleLock) {
             try {
                 val file = File(getCredentialsFilePath(context))

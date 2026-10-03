@@ -25,6 +25,7 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.discovery.GameFacetRepository
+import app.gamenative.library.discovery.DiscoveryFilterState
 import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.AppFilter
@@ -188,7 +189,12 @@ class CanonicalLibraryScaleTest {
             showEpicInLibrary = true,
             showAmazonInLibrary = true,
             showCustomGamesInLibrary = true,
+            showHiddenGamesByDefault = true,
             selectedSteamCollectionIds = emptySet(),
+            discoveryFilters = DiscoveryFilterState(),
+            steamReviewMinimum = null,
+            selectedCuratedListIds = emptySet(),
+            visibleLibraryTabs = LibraryTab.visibleEntries,
         ),
         paginationPage = paginationPage,
         pageSize = PAGE_SIZE,

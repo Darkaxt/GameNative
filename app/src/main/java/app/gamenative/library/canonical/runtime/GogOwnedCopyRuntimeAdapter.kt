@@ -373,6 +373,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                 lastPlayedEpochMs = latestPositiveTimestamp(game.lastPlayed, localLastPlayed),
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, item != null, sourceState),
+                isHidden = game.hidden,
             ),
         )
     }

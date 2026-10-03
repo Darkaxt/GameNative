@@ -205,6 +205,8 @@ class OwnedCopyRuntimeAdapterTest {
             storeTagIds = listOf(492, 19, 492, -1),
             categoryIds = listOf(22, 2, 0),
             ownerAccountId = listOf(7),
+            isVrOnly = true,
+            isVrSupported = true,
         )
         val dao = mockk<SteamAppDao>()
         val source = sourceAdapter<SteamOwnedCopySourceAdapter>(key, SourceOwnedCopyReference.Steam(key, 42))
@@ -252,6 +254,8 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(setOf("steam:2", "steam:4"), point.genreKeys)
         assertEquals(setOf(19, 492), point.tagIds)
         assertEquals(setOf("steam:2", "steam:22"), point.featureKeys)
+        assertTrue(point.isVrOnly)
+        assertTrue(point.isVrSupported)
         assertEquals(app.clientIconUrl, point.iconUrl)
         assertEquals(app.getCapsuleUrl(), point.capsuleImageUrl)
         assertEquals(app.headerUrl, point.headerImageUrl)
@@ -280,6 +284,7 @@ class OwnedCopyRuntimeAdapterTest {
         val game = GOGGame(
             id = "12345",
             title = "GOG Native",
+            hidden = true,
             developer = "GOG Studio Ltd.",
             releaseDate = "2023-04-01",
             type = AppType.application,
@@ -332,6 +337,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(2023, point.releaseYear)
         assertEquals(CanonicalAppType.APPLICATION, point.appType)
         assertEquals(setOf("gog:action", "gog:role playing"), point.genreKeys)
+        assertTrue(point.isHidden)
         assertTrue(point.tagIds.isEmpty())
         assertTrue(point.featureKeys.isEmpty())
         assertEquals(game.iconUrl, point.iconUrl)

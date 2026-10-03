@@ -36,6 +36,9 @@ data class OwnedCopyRuntime(
     val lastPlayedEpochMs: Long?,
     val playtimeMinutes: Long?,
     val capabilities: Set<OwnedCopyOperation>,
+    val isHidden: Boolean = false,
+    val isVrOnly: Boolean = false,
+    val isVrSupported: Boolean = false,
 )
 
 sealed interface OwnedCopyRuntimeResult {

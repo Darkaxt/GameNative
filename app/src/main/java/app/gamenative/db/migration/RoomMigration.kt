@@ -68,7 +68,7 @@ private fun addSteamPicsRevisionColumnsV26(connection: SQLiteConnection) {
     connection.execSQL("ALTER TABLE `steam_app` ADD COLUMN `pics_parse_version` INTEGER NOT NULL DEFAULT 0")
 }
 
-private fun createCanonicalCoreStorageV26(connection: SQLiteConnection) {
+internal fun createCanonicalCoreStorageV26(connection: SQLiteConnection) {
     connection.execSQL(
         """
         CREATE TABLE IF NOT EXISTS `canonical_game` (
@@ -146,7 +146,7 @@ private fun createCanonicalCoreStorageV26(connection: SQLiteConnection) {
     )
 }
 
-private fun createCanonicalFacetStorageV26(connection: SQLiteConnection) {
+internal fun createCanonicalFacetStorageV26(connection: SQLiteConnection) {
     connection.execSQL(
         """
         CREATE TABLE IF NOT EXISTS `canonical_game_genre` (
@@ -224,7 +224,7 @@ private fun createCanonicalFacetStorageV26(connection: SQLiteConnection) {
     )
 }
 
-private fun createOwnedCopyLedgerStorageV26(connection: SQLiteConnection) {
+internal fun createOwnedCopyLedgerStorageV26(connection: SQLiteConnection) {
     connection.execSQL(
         """
         CREATE TABLE IF NOT EXISTS `owned_copy_sync` (
@@ -255,6 +255,11 @@ private fun createOwnedCopyLedgerStorageV26(connection: SQLiteConnection) {
 }
 
 private fun migrateManagedModSourcesToV25(connection: SQLiteConnection) {
+    val modSequences = listOf("mod_placement_recipe", "mod_overwrite_manifest").associateWith { table ->
+        connection.prepare("SELECT seq FROM sqlite_sequence WHERE name = '$table'").use { statement ->
+            if (statement.step()) statement.getLong(0) else 0L
+        }
+    }
     connection.execSQL(
         """
         CREATE TABLE IF NOT EXISTS `mod_install_v25` (
@@ -457,6 +462,10 @@ private fun migrateManagedModSourcesToV25(connection: SQLiteConnection) {
     connection.execSQL("DROP TABLE `mod_profile_install_state_v25`")
     connection.execSQL("DROP TABLE `mod_placement_recipe_v25`")
     connection.execSQL("DROP TABLE `mod_overwrite_manifest_v25`")
+    // Copying surviving rows alone loses deleted IDs, including when the old table is empty.
+    modSequences.forEach { (table, sequence) ->
+        connection.execSQL("UPDATE sqlite_sequence SET seq = MAX(seq, $sequence) WHERE name = '$table'")
+    }
 
     connection.execSQL("CREATE INDEX IF NOT EXISTS `index_mod_install_app_id` ON `mod_install` (`app_id`)")
     connection.execSQL(

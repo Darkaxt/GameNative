@@ -9,7 +9,7 @@
 [![Official Discord](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv9%2Finvites%2F2hKv4VfZfE%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&style=flat-square&logo=discord&logoColor=white&label=official%20discord&color=5865F2&suffix=%20members)](https://discord.gg/2hKv4VfZfE)
 [![License](https://img.shields.io/badge/license-GPL%203.0-blue?style=flat-square)](LICENSE)
 
-[**Download Darkaxt builds**](https://github.com/Darkaxt/GameNative/releases) · [**Official upstream**](https://github.com/utkarshdalal/GameNative) · [**Official Discord**](https://discord.gg/2hKv4VfZfE)
+[**Download Darkaxt builds**](https://github.com/Darkaxt/GameNative/releases) · [**Official upstream**](https://github.com/utkarshdalal/GameNative) · [**Official Discord**](https://discord.gg/2hKv4VfZfE) · [**Support upstream on Ko-fi**](https://ko-fi.com/gamenative)
 
 <video src="https://github.com/user-attachments/assets/95b5397b-908a-44ef-a10a-dac7723580b0" autoplay loop muted playsinline width="100%"></video>
 

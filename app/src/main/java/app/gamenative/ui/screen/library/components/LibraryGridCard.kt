@@ -99,6 +99,7 @@ internal fun GridViewCard(
     hideText: Boolean,
     imageAlpha: Float,
     onImageLoadFailed: () -> Unit,
+    onImageLoaded: () -> Unit = {},
     showFocusGlow: Boolean,
     context: Context,
     animateStats: Boolean = true,
@@ -217,11 +218,12 @@ internal fun GridViewCard(
             Box(modifier = Modifier.fillMaxSize()) {
                 // Game image (primary + optional fallback for Steam header/hero)
                 val sourceItem = card.sourceItemOrNull()
-                val imageUrls = if (
+                // Don't report image failure while the custom game's URL is still resolving.
+                val resolvedImageUrls: GridImageUrls? = if (
                     card.orderedSources.firstOrNull() == GameSource.CUSTOM_GAME && sourceItem != null
                 ) {
-                    produceState(
-                        initialValue = GridImageUrls("", ""),
+                    produceState<GridImageUrls?>(
+                        initialValue = null,
                         key1 = card.composeKey,
                         key2 = paneType,
                         key3 = imageRefreshCounter,
@@ -235,6 +237,7 @@ internal fun GridViewCard(
                         getGridImageUrl(context, card, paneType)
                     }
                 }
+                val imageUrls = resolvedImageUrls ?: GridImageUrls("", "")
 
                 var currentImageUrl by remember(
                     imageUrls.primary,
@@ -242,7 +245,11 @@ internal fun GridViewCard(
                     card.composeKey,
                     imageRefreshCounter,
                 ) {
-                    mutableStateOf(imageUrls.primary)
+                    mutableStateOf(imageUrls.primary.ifEmpty { imageUrls.fallback })
+                }
+
+                if (resolvedImageUrls != null && currentImageUrl.isEmpty()) {
+                    LaunchedEffect(resolvedImageUrls) { onImageLoadFailed() }
                 }
 
                 if (isCapsule && currentImageUrl.isNotEmpty()) {
@@ -262,23 +269,26 @@ internal fun GridViewCard(
                     Modifier
                 }
 
-                ListItemImage(
-                    modifier = Modifier.fillMaxSize(),
-                    imageModifier = Modifier
-                        .fillMaxSize()
-                        .alpha(imageAlpha)
-                        .then(gridHeroZoom)
-                        .then(if (frost > 0f) Modifier.blur(10.dp * frost) else Modifier),
-                    contentScale = getGridContentScale(paneType),
-                    image = { currentImageUrl },
-                    onFailure = {
-                        if (imageUrls.fallback.isNotEmpty() && currentImageUrl == imageUrls.primary) {
-                            currentImageUrl = imageUrls.fallback
-                        } else {
-                            onImageLoadFailed()
-                        }
-                    },
-                )
+                if (currentImageUrl.isNotEmpty()) {
+                    ListItemImage(
+                        modifier = Modifier.fillMaxSize(),
+                        imageModifier = Modifier
+                            .fillMaxSize()
+                            .alpha(imageAlpha)
+                            .then(gridHeroZoom)
+                            .then(if (frost > 0f) Modifier.blur(10.dp * frost) else Modifier),
+                        contentScale = getGridContentScale(paneType),
+                        image = { currentImageUrl },
+                        onFailure = {
+                            if (imageUrls.fallback.isNotEmpty() && currentImageUrl == imageUrls.primary) {
+                                currentImageUrl = imageUrls.fallback
+                            } else {
+                                onImageLoadFailed()
+                            }
+                        },
+                        onSuccess = onImageLoaded,
+                    )
+                }
 
                 val displayName = if (card.isRecTeaser) {
                     stringResource(R.string.rec_teaser_title)

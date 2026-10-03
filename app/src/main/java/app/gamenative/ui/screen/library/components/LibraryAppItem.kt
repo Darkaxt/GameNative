@@ -204,6 +204,10 @@ internal fun AppItem(
                 hideText = false
                 alpha = 0.1f
             },
+            onImageLoaded = {
+                hideText = true
+                alpha = 1f
+            },
             showFocusGlow = showFocusGlow,
             context = context,
             animateStats = animateStats,

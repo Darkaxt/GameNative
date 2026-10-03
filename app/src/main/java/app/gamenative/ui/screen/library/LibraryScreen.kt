@@ -167,6 +167,7 @@ fun HomeLibraryScreen(
     onClickPlay: (String, Boolean) -> Unit,
     onTestGraphics: (String) -> Unit,
     onPlayWithDiagnostics: (String) -> Unit,
+    onAiDebugRun: (String) -> Unit,
     onNavigateRoute: (String) -> Unit,
     onLogout: () -> Unit,
     onGoOnline: () -> Unit,
@@ -212,6 +213,7 @@ fun HomeLibraryScreen(
         onClickPlay = onClickPlay,
         onTestGraphics = onTestGraphics,
         onPlayWithDiagnostics = onPlayWithDiagnostics,
+        onAiDebugRun = onAiDebugRun,
         onNavigateRoute = onNavigateRoute,
         onLogout = onLogout,
         onGoOnline = onGoOnline,
@@ -228,6 +230,8 @@ fun HomeLibraryScreen(
         onClearTags = viewModel::onClearTags,
         onSteamReviewMinimumChanged = viewModel::onSteamReviewMinimumChanged,
         onRetrySteamPopularity = viewModel::retrySteamPopularityEnrichment,
+        onCuratedListToggle = viewModel::onCuratedListToggle,
+        onClearCuratedLists = viewModel::onClearCuratedLists,
         onOptionsPanelToggle = viewModel::onOptionsPanelToggle,
         onTabChanged = viewModel::onTabChanged,
         onPreviousTab = viewModel::onPreviousTab,
@@ -303,6 +307,7 @@ internal fun LibraryScreenContent(
     onClickPlay: (String, Boolean) -> Unit,
     onTestGraphics: (String) -> Unit,
     onPlayWithDiagnostics: (String) -> Unit,
+    onAiDebugRun: (String) -> Unit,
     onRefresh: () -> Unit,
     onNavigateRoute: (String) -> Unit,
     onLogout: () -> Unit,
@@ -320,6 +325,8 @@ internal fun LibraryScreenContent(
     onClearTags: () -> Unit = {},
     onSteamReviewMinimumChanged: (Int?) -> Unit = {},
     onRetrySteamPopularity: () -> Unit = {},
+    onCuratedListToggle: (String) -> Unit = {},
+    onClearCuratedLists: () -> Unit = {},
     onOptionsPanelToggle: (Boolean) -> Unit,
     onTabChanged: (LibraryTab) -> Unit,
     onPreviousTab: () -> Unit,
@@ -1613,6 +1620,7 @@ internal fun LibraryScreenContent(
                     // Tab bar when not searching
                     LibraryTabBar(
                         currentTab = state.currentTab,
+                        tabs = state.visibleLibraryTabs,
                         tabCounts = mapOf(
                             LibraryTab.ALL to state.allCount,
                             LibraryTab.FAVORITES to state.favoritesCount,
@@ -1735,15 +1743,14 @@ internal fun LibraryScreenContent(
                     onClickPlay = { currentItem, confirm ->
                         onClickPlay(currentItem.appId, confirm)
                     },
-                    onTestGraphics = {
-                        selectedSourceItem?.let { libraryItem ->
-                            onTestGraphics(libraryItem.appId)
-                        }
+                    onTestGraphics = { currentItem ->
+                        onTestGraphics(currentItem.appId)
                     },
-                    onPlayWithDiagnostics = {
-                        selectedSourceItem?.let { libraryItem ->
-                            onPlayWithDiagnostics(libraryItem.appId)
-                        }
+                    onAiDebugRun = { currentItem ->
+                        onAiDebugRun(currentItem.appId)
+                    },
+                    onPlayWithDiagnostics = { currentItem ->
+                        onPlayWithDiagnostics(currentItem.appId)
                     },
                 )
             }
@@ -1827,6 +1834,7 @@ internal fun LibraryScreenContent(
                 steamCollectionCounts = state.steamCollectionCounts,
                 skippedDynamicCollections = state.skippedDynamicCollections,
                 isSteamConnected = isSteamConnected,
+                hasSteamCredentials = SteamUtils.hasStoredCredentials(),
                 isOffline = isOffline,
                 onSteamCollectionToggle = onSteamCollectionToggle,
                 onClearSteamCollections = onClearSteamCollections,
@@ -1862,6 +1870,11 @@ internal fun LibraryScreenContent(
                 onTestSteamApiKey = onTestSteamApiKey,
                 onSaveSteamApiKey = onSaveSteamApiKey,
                 onClearSteamApiKeyFeedback = onClearSteamApiKeyFeedback,
+                curatedLists = state.curatedLists,
+                selectedCuratedListIds = state.selectedCuratedListIds,
+                curatedListCounts = state.curatedListCounts,
+                onCuratedListToggle = onCuratedListToggle,
+                onClearCuratedLists = onClearCuratedLists,
             )
 
             // System menu (START) - renders on top of everything
@@ -1912,6 +1925,7 @@ internal fun LibraryScreenContent(
                     )
                 },
             )
+
         }
 
         val currentCopiesCard = copiesSheetCardKey?.let(canonicalCard)
@@ -2226,6 +2240,7 @@ private fun Preview_LibraryScreenContent() {
             onClickPlay = { _, _ -> },
             onTestGraphics = { },
             onPlayWithDiagnostics = { },
+            onAiDebugRun = { },
             onRefresh = { },
             onNavigateRoute = {},
             onLogout = {},
@@ -2235,6 +2250,8 @@ private fun Preview_LibraryScreenContent() {
             onSortOptionChanged = {},
             onSteamCollectionToggle = {},
             onClearSteamCollections = {},
+            onCuratedListToggle = {},
+            onClearCuratedLists = {},
             onOptionsPanelToggle = { isOpen ->
                 state = state.copy(isOptionsPanelOpen = isOpen)
             },

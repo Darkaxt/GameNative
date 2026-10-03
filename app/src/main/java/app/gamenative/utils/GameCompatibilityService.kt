@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.ui.graphics.Color
 import app.gamenative.BuildConfig
 import app.gamenative.R
+import app.gamenative.data.GameCompatibilityStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -36,7 +37,8 @@ object GameCompatibilityService {
         val gpuPlayableCount: Int,
         val avgRating: Float,
         val hasBeenTried: Boolean,
-        val isNotWorking: Boolean
+        val isNotWorking: Boolean,
+        val state: String? = null,
     )
 
     /**
@@ -64,6 +66,19 @@ object GameCompatibilityService {
         }
     }
 
+    fun statusFor(response: GameCompatibilityResponse): GameCompatibilityStatus = when {
+        response.isNotWorking -> GameCompatibilityStatus.NOT_COMPATIBLE
+        !response.hasBeenTried -> GameCompatibilityStatus.UNKNOWN
+        response.gpuPlayableCount > 0 -> GameCompatibilityStatus.GPU_COMPATIBLE
+        response.totalPlayableCount > 0 -> GameCompatibilityStatus.COMPATIBLE
+        else -> GameCompatibilityStatus.UNKNOWN
+    }
+
+    fun badgeProperties(gameName: String): Map<String, Any> {
+        val cached = GameCompatibilityCache.getCached(gameName) ?: return emptyMap()
+        return mapOf("compat_badge" to (cached.state ?: statusFor(cached).name))
+    }
+
     /**
      * Fetches compatibility information for a batch of games.
      * Returns a map of game name to compatibility response, or null on error.
@@ -84,6 +99,8 @@ object GameCompatibilityService {
                 // compatibility responses against bionic-only configs when true.
                 put("modernBuild", BuildConfig.MODERN_ANDROID)
             }
+
+            PlayIntegrity.signingCertSha256?.let { requestBody.put("signingCertSha256", it) }
 
             val attestation = KeyAttestationHelper.getAttestationFields("https://api.gamenative.app")
             if (attestation != null) {

@@ -21,6 +21,9 @@ object IntentLaunchManager {
 
     private const val EXTRA_GAME_SOURCE = "game_source"
     private const val EXTRA_CONTAINER_CONFIG = "container_config"
+    private const val ACTION_VIEW = "android.intent.action.VIEW"
+    private const val URI_SCHEME = "gamenative"
+    private const val URI_HOST = "run"
     private const val MAX_CONFIG_JSON_SIZE = 50000 // 50KB limit to prevent memory exhaustion
 
     fun launchAction(applicationId: String = BuildConfig.APPLICATION_ID): String = "$applicationId.LAUNCH_GAME"
@@ -36,40 +39,52 @@ object IntentLaunchManager {
     ): LaunchRequest? {
         Timber.d("[IntentLaunchManager]: Parsing intent: action=${intent.action}")
 
-        if (intent.action != expectedAction) {
-            Timber.d("[IntentLaunchManager]: Intent action '${intent.action}' doesn't match expected action '$expectedAction'")
+        if (intent.action != expectedAction && intent.action != ACTION_VIEW) {
+            Timber.d("[IntentLaunchManager]: Intent action doesn't match this package's launch action or ACTION_VIEW")
             return null
         }
+        val gameId: Int
+        val gameSource: String?
+        val containerConfig: ContainerData?
 
-        val gameId = intent.getIntExtra(EXTRA_APP_ID, -1)
-        Timber.d("[IntentLaunchManager]: Extracted app_id: $gameId from intent extras")
+        if (intent.action == ACTION_VIEW) {
+            val data = intent.data
+            if (data?.scheme != URI_SCHEME || data.host != URI_HOST) {
+                Timber.d("[IntentLaunchManager]: URI doesn't match the expected launch scheme and host")
+                return null
+            }
+            gameId = data.getQueryParameter("appid")?.toIntOrNull() ?: -1
+            gameSource = data.getQueryParameter("gamesource")?.uppercase(java.util.Locale.ROOT)
+            containerConfig = null
+        } else {
+            gameId = intent.getIntExtra(EXTRA_APP_ID, -1)
+            Timber.d("[IntentLaunchManager]: Extracted app_id: $gameId from intent extras")
+            gameSource = intent.getStringExtra(EXTRA_GAME_SOURCE)?.uppercase(java.util.Locale.ROOT)
+                ?.takeIf { source -> GameSource.entries.any { it.name == source } }
+                ?: GameSource.STEAM.name
+            containerConfig = intent.getStringExtra(EXTRA_CONTAINER_CONFIG)?.let { json ->
+                try {
+                    parseContainerConfig(json)
+                } catch (e: Exception) {
+                    Timber.e(e, "[IntentLaunchManager]: Failed to parse container configuration JSON")
+                    null
+                }
+            }
+        }
 
         if (gameId <= 0) {
             Timber.w("[IntentLaunchManager]: Invalid or missing app_id in launch intent: $gameId")
             return null
         }
 
-        // Get Game Source for launch intent
-        var gameSource = intent.getStringExtra(EXTRA_GAME_SOURCE)?.uppercase(java.util.Locale.ROOT)
         val isValidGameSource = GameSource.entries.any { it.name == gameSource }
         if (!isValidGameSource) {
-            gameSource = GameSource.STEAM.name
+            Timber.w("[IntentLaunchManager]: Invalid or missing game source in launch intent: $gameSource")
+            return null
         }
 
         val appId = "${gameSource}_$gameId"
         Timber.d("[IntentLaunchManager]: Converted to appId: $appId")
-
-        val containerConfigJson = intent.getStringExtra(EXTRA_CONTAINER_CONFIG)
-        val containerConfig = if (containerConfigJson != null) {
-            try {
-                parseContainerConfig(containerConfigJson)
-            } catch (e: Exception) {
-                Timber.e(e, "[IntentLaunchManager]: Failed to parse container configuration JSON")
-                null
-            }
-        } else {
-            null
-        }
 
         return LaunchRequest(appId, containerConfig)
     }

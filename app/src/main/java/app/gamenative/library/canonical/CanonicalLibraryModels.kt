@@ -78,6 +78,9 @@ data class OwnedCopySummary(
     val decisionCandidateSteamAppId: Int?,
     val decisionResolverVersion: Int,
     val decisionRevision: Long,
+    val isHidden: Boolean = false,
+    val isVrOnly: Boolean = false,
+    val isVrSupported: Boolean = false,
 )
 
 data class CanonicalLibraryCard(
