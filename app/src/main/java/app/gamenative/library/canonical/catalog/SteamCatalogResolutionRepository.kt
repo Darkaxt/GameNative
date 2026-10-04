@@ -1,11 +1,15 @@
 package app.gamenative.library.canonical.catalog
 
+import androidx.room.withTransaction
+import app.gamenative.db.PluviaDatabase
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.data.canonical.SteamCatalogResolutionAttemptEntity
+import app.gamenative.data.canonical.SteamCatalogResolutionStatus
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.dao.StoreMatchDao
 import app.gamenative.library.canonical.CURRENT_RESOLVER_VERSION
@@ -26,17 +30,15 @@ import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilitySource
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
 import app.gamenative.library.metadata.SteamRateLimitExhaustedException
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -82,7 +84,10 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val diagnostics: SteamCatalogResolutionDiagnosticSink,
     private val acceptedIdentityEnrichment: SteamAcceptedIdentityEnrichmentSink,
     private val clock: MetadataClock,
+    private val db: PluviaDatabase,
+    private val resumeScheduler: SteamCatalogResumeScheduler,
 ) {
+    private val resolutionDao = db.steamCatalogResolutionDao()
     private val scanMutex = Mutex()
     private val progressMutex = Mutex()
     private val mutableProgress = MutableStateFlow(SteamResolutionProgress())
@@ -90,7 +95,6 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val mutableKeyRequired = MutableStateFlow(false)
     private val candidateLists = ConcurrentHashMap<OwnedCopyKey, List<SteamCatalogCandidate>>()
     private val candidateRecords = ConcurrentHashMap<Int, ValidatedSteamCatalogRecord>()
-    private var automaticScanCompleted = false
 
     val progress: StateFlow<SteamResolutionProgress> = mutableProgress.asStateFlow()
     val isScanning: StateFlow<Boolean> = mutableIsScanning.asStateFlow()
@@ -103,18 +107,40 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         return runAutomaticScan(force = true)
     }
 
-    private suspend fun runAutomaticScan(force: Boolean): SteamResolutionProgress = scanMutex.withLock {
-        mutableKeyRequired.value = false
-        if (!force && automaticScanCompleted) return@withLock mutableProgress.value
+    internal suspend fun resumeAutomatically(): Boolean {
+        runAutomaticScan(force = false, scheduleResume = false)
+        return eligibleMatches(force = false).isEmpty()
+    }
 
+    private suspend fun runAutomaticScan(
+        force: Boolean,
+        scheduleResume: Boolean = true,
+    ): SteamResolutionProgress = scanMutex.withLock {
+        val matches = eligibleMatches(force)
+        if (!scheduleResume && matches.isEmpty()) return@withLock mutableProgress.value
+        mutableKeyRequired.value = false
         mutableIsScanning.value = true
         try {
-            val selectedMatches = eligibleMatches(force)
-            mutableProgress.value = SteamResolutionProgress(total = selectedMatches.size)
-            if (selectedMatches.isNotEmpty()) {
-                resolveWithBoundedWorkers(selectedMatches)
+            mutableProgress.value = SteamResolutionProgress(total = matches.size)
+            if (scheduleResume && matches.isNotEmpty()) {
+                try {
+                    resumeScheduler.enqueue()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    matches.forEach { match ->
+                        updateProgress(match.source, ItemResolution(
+                            SteamResolutionItemResult.ProviderUnavailable, RESUME_SCHEDULING_FAILED,
+                        ))
+                    }
+                    return@withLock mutableProgress.value
+                }
             }
-            automaticScanCompleted = true
+            val attempts = matches.mapNotNull { prepareAttempt(it, force) }
+            mutableProgress.value = SteamResolutionProgress(total = attempts.size)
+            if (attempts.isNotEmpty()) {
+                resolveSerially(attempts)
+            }
             mutableProgress.value
         } finally {
             mutableIsScanning.value = false
@@ -164,11 +190,11 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     suspend fun rejectCandidate(
         expected: ExpectedMatchState,
         steamAppId: Int,
-    ): CanonicalGuardedMutationResult = decisionWriter.reject(
-        expected = expected,
-        steamAppId = steamAppId,
-        nowEpochMs = clock.nowEpochMs(),
-    )
+    ): CanonicalGuardedMutationResult = if (candidateLists[expected.key].orEmpty().any { it.steamAppId == steamAppId }) {
+        decisionWriter.rejectValidatedCandidate(expected, steamAppId, clock.nowEpochMs())
+    } else {
+        decisionWriter.reject(expected, steamAppId, clock.nowEpochMs())
+    }
 
     suspend fun resetDecision(
         expected: ExpectedMatchState,
@@ -185,10 +211,18 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         .values
         .filterNot { matches ->
             matches.any { match -> match.decisionSource == MatchDecisionSource.USER } ||
-                (!force && matches.any { match ->
-                    match.matchMethod == MatchMethod.STEAM_CATALOG &&
-                        match.confidence == MatchConfidence.REVIEW_REQUIRED &&
-                        match.resolverVersion >= CURRENT_RESOLVER_VERSION
+                (!force && resolutionDao.getAttempt(strongestEvidence(matches).canonicalId).let { attempt ->
+                    if (attempt == null) {
+                        matches.any { match ->
+                            match.matchMethod == MatchMethod.STEAM_CATALOG &&
+                                match.confidence == MatchConfidence.REVIEW_REQUIRED &&
+                                match.resolverVersion >= CURRENT_RESOLVER_VERSION
+                        }
+                    } else {
+                        attempt.evidenceHash == evidenceHash(strongestEvidence(matches), localeProvider.current()) &&
+                            attempt.resolverVersion == CURRENT_RESOLVER_VERSION &&
+                            attempt.status !in setOf(SteamCatalogResolutionStatus.PENDING, SteamCatalogResolutionStatus.FAILED)
+                    }
                 })
         }
         .map(::strongestEvidence)
@@ -207,65 +241,62 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             (if (match.evidenceDeveloperKey.isNotBlank()) 2 else 0) +
             (if (match.evidenceReleaseYear != null) 1 else 0)
 
-    private suspend fun resolveWithBoundedWorkers(matches: List<StoreMatchEntity>) = coroutineScope {
-        val nextIndex = AtomicInteger(0)
-        repeat(minOf(MAX_CONCURRENCY, matches.size)) {
-            launch {
-                while (true) {
-                    val index = nextIndex.getAndIncrement()
-                    if (index >= matches.size) break
-                    resolveAndRecord(matches[index])
-                    if (index + 1 < matches.size) {
-                        delay(AUTOMATIC_ITEM_INTERVAL_MS)
-                    }
-                }
-            }
+    private suspend fun resolveSerially(attempts: List<ResolutionAttempt>) {
+        attempts.forEachIndexed { index, attempt ->
+            resolveAndRecord(attempt)
+            if (index + 1 < attempts.size) delay(AUTOMATIC_ITEM_INTERVAL_MS)
         }
     }
 
-    private suspend fun resolveAndRecord(match: StoreMatchEntity) {
+    private suspend fun resolveAndRecord(attempt: ResolutionAttempt) {
         val resolution = try {
-            resolve(match)
+            resolve(attempt)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            publishAttempt(attempt, SteamCatalogResolutionStatus.FAILED) { CanonicalGuardedMutationResult.APPLIED }
             ItemResolution(
                 result = SteamResolutionItemResult.ProviderUnavailable,
                 errorType = error.diagnosticCategory(),
             )
         }
-        updateProgress(match.source, resolution)
+        updateProgress(attempt.match.source, resolution)
     }
 
-    private suspend fun resolve(match: StoreMatchEntity): ItemResolution {
+    private suspend fun resolve(attempt: ResolutionAttempt): ItemResolution {
+        val match = attempt.match
         val expected = match.expectedState()
-        val locale = localeProvider.current()
+        val locale = attempt.locale
         val evidence = match.sourceEvidence()
         val fetched = fetchCandidates(match.evidenceDisplayName, locale)
-        val candidates = candidatePolicy.rankCandidates(evidence, fetched.candidates)
-        candidateLists[expected.key] = candidates.take(MAX_VISIBLE_CANDIDATES)
+        val rejected = resolutionDao.getRejectedSteamAppIds(match.accountScope, match.source, match.stableSourceId).toSet()
+        val candidates = candidatePolicy.rankCandidates(evidence, fetched.candidates.filterNot { it.steamAppId in rejected })
         if (fetched.incomplete) {
             val selected = candidates.firstOrNull()
                 ?: throw SteamCatalogCandidateFetchException()
-            return decisionWriter.recordCandidate(
-                expected = expected,
-                steamAppId = selected.steamAppId,
-                resolverVersion = CURRENT_RESOLVER_VERSION,
-                nowEpochMs = clock.nowEpochMs(),
-            ).asItemResolution(SteamResolutionItemResult.ReviewRequired).copy(
+            return publishAttempt(attempt, SteamCatalogResolutionStatus.FAILED, candidates) {
+                decisionWriter.recordCandidate(
+                    expected = expected,
+                    steamAppId = selected.steamAppId,
+                    resolverVersion = CURRENT_RESOLVER_VERSION,
+                    nowEpochMs = clock.nowEpochMs(),
+                )
+            }.asItemResolution(SteamResolutionItemResult.ReviewRequired).copy(
                 errorType = requireNotNull(fetched.incompleteReason),
             )
         }
         return when (val decision = candidatePolicy.evaluate(evidence, candidates)) {
             is CatalogDecision.AutoAccept -> {
                 val selected = candidates.first { it.steamAppId == decision.steamAppId }
-                val mutation = decisionWriter.acceptAutomatic(
-                    expected = expected,
-                    steamAppId = selected.steamAppId,
-                    candidateAppType = selected.appType,
-                    resolverVersion = CURRENT_RESOLVER_VERSION,
-                    nowEpochMs = clock.nowEpochMs(),
-                )
+                val mutation = publishAttempt(attempt, SteamCatalogResolutionStatus.AUTO_ACCEPTED, candidates) {
+                    decisionWriter.acceptAutomatic(
+                        expected = expected,
+                        steamAppId = selected.steamAppId,
+                        candidateAppType = selected.appType,
+                        resolverVersion = CURRENT_RESOLVER_VERSION,
+                        nowEpochMs = clock.nowEpochMs(),
+                    )
+                }
                 if (mutation == CanonicalGuardedMutationResult.APPLIED) {
                     enrichAcceptedIdentity(selected.steamAppId)
                 }
@@ -273,12 +304,14 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             }
 
             is CatalogDecision.ReviewRequired -> {
-                decisionWriter.recordCandidate(
-                    expected = expected,
-                    steamAppId = decision.steamAppIds.first(),
-                    resolverVersion = CURRENT_RESOLVER_VERSION,
-                    nowEpochMs = clock.nowEpochMs(),
-                ).asItemResolution(SteamResolutionItemResult.ReviewRequired)
+                publishAttempt(attempt, SteamCatalogResolutionStatus.REVIEW_REQUIRED, candidates) {
+                    decisionWriter.recordCandidate(
+                        expected = expected,
+                        steamAppId = decision.steamAppIds.first(),
+                        resolverVersion = CURRENT_RESOLVER_VERSION,
+                        nowEpochMs = clock.nowEpochMs(),
+                    )
+                }.asItemResolution(SteamResolutionItemResult.ReviewRequired)
             }
 
             CatalogDecision.NoPlausibleCandidate -> {
@@ -292,42 +325,129 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                     } catch (error: CancellationException) {
                         throw error
                     } catch (error: Exception) {
-                        return decisionWriter.recordUnmatched(
-                            expected = expected,
-                            resolverVersion = CURRENT_RESOLVER_VERSION,
-                            nowEpochMs = clock.nowEpochMs(),
-                        ).asItemResolution(
+                        return publishAttempt(attempt, SteamCatalogResolutionStatus.UNMATCHED, candidates) {
+                            decisionWriter.recordUnmatched(
+                                expected = expected,
+                                resolverVersion = CURRENT_RESOLVER_VERSION,
+                                nowEpochMs = clock.nowEpochMs(),
+                            )
+                        }.asItemResolution(
                             SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(
                                 epicPresentation = EpicPresentationOutcome.EPIC_CMS_UNAVAILABLE,
                                 pcGamingWikiEvidence = decisionEvidence,
                             ),
                         ).copy(errorType = error.diagnosticCategory())
                     }
-                    epicFallbackWriter.recordEpicFallback(
-                        expected = expected,
-                        resolverVersion = CURRENT_RESOLVER_VERSION,
-                        nowEpochMs = clock.nowEpochMs(),
-                        locale = locale,
-                        record = epicRecord,
-                        decisionEvidence = decisionEvidence,
-                    ).asItemResolution(
+                    publishAttempt(attempt, SteamCatalogResolutionStatus.UNMATCHED, candidates) {
+                        epicFallbackWriter.recordEpicFallback(
+                            expected = expected,
+                            resolverVersion = CURRENT_RESOLVER_VERSION,
+                            nowEpochMs = clock.nowEpochMs(),
+                            locale = locale,
+                            record = epicRecord,
+                            decisionEvidence = decisionEvidence,
+                        )
+                    }.asItemResolution(
                         SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(
                             epicPresentation = EpicPresentationOutcome.EPIC_CMS_PERSISTED,
                             pcGamingWikiEvidence = decisionEvidence,
                         ),
                     )
                 } else {
-                    decisionWriter.recordUnmatched(
-                        expected = expected,
-                        resolverVersion = CURRENT_RESOLVER_VERSION,
-                        nowEpochMs = clock.nowEpochMs(),
-                    ).asItemResolution(
+                    publishAttempt(attempt, SteamCatalogResolutionStatus.UNMATCHED, candidates) {
+                        decisionWriter.recordUnmatched(
+                            expected = expected,
+                            resolverVersion = CURRENT_RESOLVER_VERSION,
+                            nowEpochMs = clock.nowEpochMs(),
+                        )
+                    }.asItemResolution(
                         SteamResolutionItemResult.CompleteNoPlausibleSteamMatch(),
                     )
                 }
             }
         }
     }
+
+    private suspend fun currentAutomaticEvidenceMatches(match: StoreMatchEntity): Boolean {
+        val canonical = db.canonicalGameDao().get(match.canonicalId) ?: return false
+        if (canonical.steamAppId != null) return false
+        val present = storeMatchDao.getByCanonicalId(match.canonicalId).filter {
+            it.isPresent && it.source != GameSource.STEAM && it.ownedCopyKeyOrNull() != null
+        }
+        return present.isNotEmpty() && present.none { it.decisionSource == MatchDecisionSource.USER } &&
+            strongestEvidence(present) == match
+    }
+
+    private suspend fun prepareAttempt(match: StoreMatchEntity, force: Boolean): ResolutionAttempt? = db.withTransaction {
+        if (!currentAutomaticEvidenceMatches(match)) return@withTransaction null
+        val locale = localeProvider.current()
+        val hash = evidenceHash(match, locale)
+        val previous = resolutionDao.getAttempt(match.canonicalId)
+        if (!force && previous?.isCompleteFor(hash) == true) return@withTransaction null
+        val attemptedAt = maxOf(clock.nowEpochMs(), previous?.attemptedAt?.let { Math.addExact(it, 1L) } ?: 0L)
+        val entity = SteamCatalogResolutionAttemptEntity(
+            match.canonicalId, hash, CURRENT_RESOLVER_VERSION, SteamCatalogResolutionStatus.PENDING, attemptedAt,
+        )
+        resolutionDao.upsertAttempt(entity)
+        ResolutionAttempt(match, entity, locale)
+    }
+
+    private suspend fun publishAttempt(
+        attempt: ResolutionAttempt,
+        status: SteamCatalogResolutionStatus,
+        candidates: List<SteamCatalogCandidate> = emptyList(),
+        mutation: suspend () -> CanonicalGuardedMutationResult,
+    ): CanonicalGuardedMutationResult {
+        val result = db.withTransaction {
+            val match = attempt.match
+            if (resolutionDao.getAttempt(match.canonicalId) != attempt.entity) {
+                return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+            }
+            if (!currentAutomaticEvidenceMatches(match) ||
+                evidenceHash(match, localeProvider.current()) != attempt.entity.evidenceHash
+            ) {
+                resolutionDao.deleteAttempt(match.canonicalId)
+                return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
+            }
+            // Only local guarded mutations run here; all provider work finishes before this transaction.
+            val applied = mutation()
+            if (applied == CanonicalGuardedMutationResult.APPLIED) {
+                check(resolutionDao.completeAttempt(
+                    attempt.entity.canonicalId, attempt.entity.evidenceHash, attempt.entity.resolverVersion,
+                    attempt.entity.attemptedAt, status,
+                ) == 1)
+            } else {
+                resolutionDao.deleteAttempt(match.canonicalId)
+            }
+            applied
+        }
+        if (result == CanonicalGuardedMutationResult.APPLIED && status != SteamCatalogResolutionStatus.FAILED) {
+            candidateLists[attempt.match.expectedState().key] = candidates.take(MAX_VISIBLE_CANDIDATES)
+        } else if (result == CanonicalGuardedMutationResult.APPLIED && candidates.isNotEmpty()) {
+            candidateLists[attempt.match.expectedState().key] = candidates.take(MAX_VISIBLE_CANDIDATES)
+        }
+        return result
+    }
+
+    private fun SteamCatalogResolutionAttemptEntity.isCompleteFor(hash: String): Boolean =
+        evidenceHash == hash && resolverVersion == CURRENT_RESOLVER_VERSION &&
+            status != SteamCatalogResolutionStatus.PENDING && status != SteamCatalogResolutionStatus.FAILED
+
+    private fun evidenceHash(match: StoreMatchEntity, locale: MetadataLocale): String {
+        val publicEvidence = listOf(
+            match.source.name, match.evidenceDisplayName, match.evidenceDeveloperKey,
+            match.evidenceReleaseYear?.toString().orEmpty(), match.evidenceAppType.name,
+            locale.normalizedLocale, locale.normalizedCountry,
+        ).joinToString("") { "${it.length}:$it" }
+        return MessageDigest.getInstance("SHA-256").digest(publicEvidence.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }
+
+    private data class ResolutionAttempt(
+        val match: StoreMatchEntity,
+        val entity: SteamCatalogResolutionAttemptEntity,
+        val locale: MetadataLocale,
+    )
 
     private suspend fun fetchPcGamingWikiEvidence(
         match: StoreMatchEntity,
@@ -620,7 +740,6 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         IllegalStateException("Steam catalog search incomplete")
 
     private companion object {
-        const val MAX_CONCURRENCY = 1
         const val MAX_QUERY_FAN_OUT = 3
         const val MAX_VALIDATED_HITS = 15
         const val MAX_VISIBLE_CANDIDATES = 5
@@ -631,6 +750,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         const val CANDIDATE_DETAILS_INCOMPLETE = "CANDIDATE_DETAILS_INCOMPLETE"
         const val RATE_LIMIT_EXHAUSTED = "RATE_LIMIT_EXHAUSTED"
         const val EPIC_CMS_UNAVAILABLE = "EPIC_CMS_UNAVAILABLE"
+        const val RESUME_SCHEDULING_FAILED = "RESUME_SCHEDULING_FAILED"
         const val UNEXPECTED_FAILURE = "UNEXPECTED_FAILURE"
     }
 }

@@ -60,6 +60,7 @@ import app.gamenative.db.dao.LibraryPlayHistoryDao
 import app.gamenative.db.dao.ModDao
 import app.gamenative.db.dao.OwnedCopyLedgerDao
 import app.gamenative.db.dao.SteamAppDao
+import app.gamenative.db.dao.SteamCatalogResolutionDao
 import app.gamenative.db.dao.SteamFileHashCacheDao
 import app.gamenative.db.dao.SteamLicenseDao
 import app.gamenative.db.dao.SteamUnlockedBranchDao
@@ -181,4 +182,6 @@ abstract class PluviaDatabase : RoomDatabase() {
     abstract fun gameDetailSnapshotDao(): GameDetailSnapshotDao
 
     abstract fun ownedCopyLedgerDao(): OwnedCopyLedgerDao
+
+    abstract fun steamCatalogResolutionDao(): SteamCatalogResolutionDao
 }

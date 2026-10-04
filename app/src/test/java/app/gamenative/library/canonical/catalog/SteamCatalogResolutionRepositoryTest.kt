@@ -59,7 +59,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest = Config.NONE, application = android.app.Application::class)
+@Config(manifest = Config.NONE, application = ResolutionWorkerTestApplication::class)
 class SteamCatalogResolutionRepositoryTest {
     private lateinit var db: PluviaDatabase
     private lateinit var writer: FakeDecisionWriter
@@ -1321,6 +1321,474 @@ class SteamCatalogResolutionRepositoryTest {
         assertFalse(repository.isScanning.value)
     }
 
+    @Test
+    fun `automatic attempt is pending before provider work and complete afterward`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        var duringSearch: String? = null
+        repository(SteamCatalogSearchSource { _, _ ->
+            duringSearch = attemptStatus(game.canonicalId)
+            emptyList()
+        }).scanAutomatically()
+        assertEquals("PENDING", duringSearch)
+        assertEquals("UNMATCHED", attemptStatus(game.canonicalId))
+    }
+
+    @Test
+    fun `completed evidence is not searched again after repository recreation`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        val calls = AtomicInteger()
+        val search = SteamCatalogSearchSource { _, _ -> calls.incrementAndGet(); emptyList() }
+        repository(search).scanAutomatically()
+        repository(search).scanAutomatically()
+        assertEquals(1, calls.get())
+        assertEquals("UNMATCHED", attemptStatus(game.canonicalId))
+    }
+
+    @Test
+    fun `failed attempts persist and are eligible without a new process or explicit reset`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        var unavailable = true
+        val resolver = repository(SteamCatalogSearchSource { _, _ ->
+            if (unavailable) throw SteamCatalogSearchException()
+            emptyList()
+        })
+        assertEquals(1, resolver.scanAutomatically().failed)
+        assertEquals("FAILED", attemptStatus(game.canonicalId))
+        unavailable = false
+        assertEquals(1, resolver.scanAutomatically().unmatched)
+        assertEquals("UNMATCHED", attemptStatus(game.canonicalId))
+    }
+
+    @Test
+    fun `canceled provider leaves pending work for a recreated repository`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        val started = CompletableDeferred<Unit>()
+        val resolver = repository(SteamCatalogSearchSource { _, _ ->
+            started.complete(Unit)
+            awaitCancellation()
+        })
+        val job = launch { resolver.scanAutomatically() }
+        started.await()
+        job.cancelAndJoin()
+        assertEquals("PENDING", attemptStatus(game.canonicalId))
+        assertEquals(1, repository(SteamCatalogSearchSource { _, _ -> emptyList() }).scanAutomatically().unmatched)
+        assertEquals("UNMATCHED", attemptStatus(game.canonicalId))
+    }
+
+    @Test
+    fun `newly projected games are scanned after the same repository completed earlier work`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        val calls = AtomicInteger()
+        val resolver = repository(SteamCatalogSearchSource { _, _ -> calls.incrementAndGet(); emptyList() })
+        resolver.scanAutomatically()
+        val added = canonical(2, null)
+        db.canonicalGameDao().insert(added)
+        seedMatch(match(key(GameSource.GOG, "2"), added.canonicalId, "Added Game"))
+        assertEquals(1, resolver.scanAutomatically().unmatched)
+        assertEquals(2, calls.get())
+    }
+
+    @Test
+    fun `changed public evidence rejects publication even with unchanged decision revision`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game")
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        val progress = repository(SteamCatalogSearchSource { _, _ ->
+            seedMatch(selected.copy(evidenceDeveloperKey = "different studio"))
+            emptyList()
+        }).scanAutomatically()
+        assertEquals(0, progress.unmatched)
+        assertTrue(writer.operations.isEmpty())
+    }
+
+    @Test
+    fun `retired copy rejects automatic publication`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game")
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        repository(SteamCatalogSearchSource { _, _ ->
+            seedMatch(selected.copy(isPresent = false))
+            emptyList()
+        }).scanAutomatically()
+        assertTrue(writer.operations.isEmpty())
+    }
+
+    @Test
+    fun `superseded attempt cannot overwrite or publish over a newer completion`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val old = repository(SteamCatalogSearchSource { _, _ ->
+            started.complete(Unit)
+            release.await()
+            emptyList()
+        })
+        val oldJob = launch { old.scanAutomatically() }
+        started.await()
+        try {
+            repository(SteamCatalogSearchSource { _, _ -> emptyList() }).retryAutomatically()
+        } finally {
+            release.complete(Unit)
+        }
+        oldJob.join()
+        assertEquals(1, writer.operations.size)
+        assertEquals("UNMATCHED", attemptStatus(game.canonicalId))
+    }
+
+    @Test
+    fun `persisted rejection cannot reappear in an automatic candidate list`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game")
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        db.openHelper.writableDatabase.execSQL(
+            "INSERT INTO rejected_steam_candidate VALUES (?, ?, ?, 99, 1)",
+            arrayOf(selected.accountScope, selected.source.name, selected.stableSourceId),
+        )
+        val resolver = repository(
+            SteamCatalogSearchSource { _, _ -> listOf(SteamStoreSearchHit(99, "Public Game", null)) },
+            SteamCatalogRecordSource { _, _ -> record(99, "Public Game", "studio", 2020) },
+        )
+        assertEquals(1, resolver.scanAutomatically().unmatched)
+        assertTrue(resolver.candidatesFor(requireNotNull(selected.ownedCopyKeyOrNull())).isEmpty())
+        assertTrue(writer.operations.none { it is DecisionOperation.Accepted })
+    }
+
+    @Test
+    fun `manual picker can reject multiple validated candidates without resetting history`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game").copy(
+            candidateSteamAppId = 99, matchMethod = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.REVIEW_REQUIRED,
+        )
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        val decisions = app.gamenative.library.canonical.RoomCanonicalMutationRepository(db) {
+            app.gamenative.data.canonical.CanonicalGameId.random()
+        }
+        val resolver = repository(
+            search = SteamCatalogSearchSource { _, _ -> emptyList() },
+            records = SteamCatalogRecordSource { appId, _ -> record(appId, "Public Game", "studio", 2020) },
+            decisions = decisions,
+        )
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, resolver.rejectCandidate(expected(selected), 99))
+        val rejected = requireNotNull(db.storeMatchDao().get(selected.accountScope, selected.source, selected.stableSourceId))
+        resolver.searchManually(expected(rejected), "42")
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, resolver.rejectCandidate(expected(rejected), 42))
+        assertEquals(listOf(42, 99), db.steamCatalogResolutionDao().getRejectedSteamAppIds(
+            selected.accountScope, selected.source, selected.stableSourceId,
+        ))
+    }
+
+    @Test
+    fun `automatic scan schedules network constrained resume without private work data`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val config = androidx.work.Configuration.Builder()
+            .setExecutor(androidx.work.testing.SynchronousExecutor())
+            .setTaskExecutor(androidx.work.testing.SynchronousExecutor())
+            .build()
+        androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(context, config)
+        val manager = androidx.work.WorkManager.getInstance(context)
+        try {
+            val game = canonical(1, null)
+            db.canonicalGameDao().insert(game)
+            seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+            var queuedBeforeProvider = 0
+            repository(search = SteamCatalogSearchSource { _, _ ->
+                queuedBeforeProvider = manager.getWorkInfosForUniqueWork("steam-catalog-resolution-resume")
+                    .get(5, java.util.concurrent.TimeUnit.SECONDS).size
+                emptyList()
+            }, resumeScheduler = SteamCatalogResolutionScheduler(context)).scanAutomatically()
+            val infos = manager.getWorkInfosForUniqueWork("steam-catalog-resolution-resume")
+                .get(5, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(1, queuedBeforeProvider)
+            assertEquals(1, infos.size)
+            val spec = (manager as androidx.work.impl.WorkManagerImpl).workDatabase.workSpecDao()
+                .getWorkSpec(infos.single().id.toString())!!
+            assertEquals(androidx.work.NetworkType.CONNECTED, spec.constraints.requiredNetworkType)
+            assertTrue(spec.input.keyValueMap.isEmpty())
+        } finally {
+            manager.cancelAllWork().result.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            androidx.work.testing.WorkManagerTestInitHelper.closeWorkDatabase()
+        }
+    }
+
+    @Test
+    fun `resume worker completes pending history after database and repository recreation`() = runTest {
+        val files = org.junit.rules.TemporaryFolder()
+        files.create()
+        try {
+            db.close()
+            val context = object : android.content.ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
+                override fun getDatabasePath(name: String) = java.io.File(files.root, name)
+            }
+            fun openDatabase() = Room.databaseBuilder(context, PluviaDatabase::class.java, "resume.db")
+                .allowMainThreadQueries().build()
+            db = openDatabase()
+            val game = canonical(1, null)
+            db.canonicalGameDao().insert(game)
+            seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+            val started = CompletableDeferred<Unit>()
+            val job = launch {
+                repository(SteamCatalogSearchSource { _, _ ->
+                    started.complete(Unit)
+                    awaitCancellation()
+                }).scanAutomatically()
+            }
+            started.await()
+            job.cancelAndJoin()
+            assertEquals("PENDING", attemptStatus(game.canonicalId))
+            db.close()
+            db = openDatabase()
+            var calls = 0
+            var scheduled = 0
+            val mutations = app.gamenative.library.canonical.RoomCanonicalMutationRepository(db) {
+                app.gamenative.data.canonical.CanonicalGameId.random()
+            }
+            val recreated = repository(
+                search = SteamCatalogSearchSource { _, _ -> calls++; emptyList() },
+                decisions = mutations,
+                resumeScheduler = SteamCatalogResumeScheduler { scheduled++ },
+            )
+            assertEquals(androidx.work.ListenableWorker.Result.success(), worker(recreated).doWork())
+            assertEquals("UNMATCHED", attemptStatus(game.canonicalId))
+            assertEquals(androidx.work.ListenableWorker.Result.success(), worker(recreated).doWork())
+            assertEquals(1, calls)
+            assertEquals(0, scheduled)
+        } finally {
+            db.close()
+            files.delete()
+        }
+    }
+
+    @Test
+    fun `resume worker retries incomplete review evidence rather than treating it as complete`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        var complete = false
+        var scheduled = 0
+        val search = object : SteamCatalogSearchSource {
+            override suspend fun search(query: String, locale: MetadataLocale) = searchResult(query, locale).hits
+            override suspend fun searchResult(query: String, locale: MetadataLocale) = SteamCatalogSearchResult(
+                listOf(SteamStoreSearchHit(99, "Public Game", null)), complete = complete,
+            )
+        }
+        val resolver = repository(
+            search, SteamCatalogRecordSource { _, _ -> record(99, "Public Game", "studio", 2020) },
+            resumeScheduler = SteamCatalogResumeScheduler { scheduled++ },
+        )
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), worker(resolver).doWork())
+        assertEquals("FAILED", attemptStatus(game.canonicalId))
+        assertEquals(1, resolver.progress.value.needsReview)
+        assertEquals(0, resolver.progress.value.failed)
+        complete = true
+        assertEquals(androidx.work.ListenableWorker.Result.success(), worker(resolver).doWork())
+        assertEquals("AUTO_ACCEPTED", attemptStatus(game.canonicalId))
+        assertEquals(0, scheduled)
+    }
+
+    @Test
+    fun `resume worker waits for projection readiness without contacting providers`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        var calls = 0
+        val resolver = repository(SteamCatalogSearchSource { _, _ -> calls++; emptyList() })
+        assertEquals(androidx.work.ListenableWorker.Result.retry(), worker(resolver, ready = false).doWork())
+        assertEquals(0, calls)
+        assertNull(attemptStatus(game.canonicalId))
+        assertEquals(androidx.work.ListenableWorker.Result.success(), worker(resolver).doWork())
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun `resume worker exits when the public library is disabled`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        var calls = 0
+        val resolver = repository(SteamCatalogSearchSource { _, _ -> calls++; emptyList() })
+        assertEquals(androidx.work.ListenableWorker.Result.success(), worker(resolver, enabled = false, ready = false).doWork())
+        assertEquals(0, calls)
+        assertNull(attemptStatus(game.canonicalId))
+    }
+
+    @Test
+    fun `resume worker revalidates current presence and sticky user decisions`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game")
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        repository(SteamCatalogSearchSource { _, _ -> throw SteamCatalogSearchException() }).scanAutomatically()
+        assertEquals("FAILED", attemptStatus(game.canonicalId))
+        seedMatch(selected.copy(decisionSource = MatchDecisionSource.USER, confidence = MatchConfidence.REJECTED))
+        var calls = 0
+        val resolver = repository(SteamCatalogSearchSource { _, _ -> calls++; emptyList() })
+        assertEquals(androidx.work.ListenableWorker.Result.success(), worker(resolver).doWork())
+        seedMatch(selected.copy(isPresent = false))
+        assertEquals(androidx.work.ListenableWorker.Result.success(), worker(resolver).doWork())
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun `resume worker propagates cancellation and preserves pending history`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        val resolver = repository(SteamCatalogSearchSource { _, _ -> throw kotlinx.coroutines.CancellationException() })
+        val failure = runCatching { worker(resolver).doWork() }.exceptionOrNull()
+        assertTrue(failure is kotlinx.coroutines.CancellationException)
+        assertEquals("PENDING", attemptStatus(game.canonicalId))
+        assertFalse(resolver.isScanning.value)
+    }
+
+    @Test
+    fun `resume scheduling failure is reported without provider work or a stranded attempt`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        var calls = 0
+        val resolver = repository(
+            SteamCatalogSearchSource { _, _ -> calls++; emptyList() },
+            resumeScheduler = SteamCatalogResumeScheduler { error("synthetic scheduling failure") },
+        )
+        val result = runCatching { resolver.scanAutomatically() }.getOrNull()
+        org.junit.Assert.assertNotNull("Scheduling failure must not crash the foreground scan", result)
+        assertEquals(1, result!!.failed)
+        assertEquals(0, calls)
+        assertNull(attemptStatus(game.canonicalId))
+        assertFalse(resolver.isScanning.value)
+        assertEquals("RESUME_SCHEDULING_FAILED", diagnostics.events.single().errorType)
+    }
+
+    @Test
+    fun `publication revalidates a sibling user decision made during provider work`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game")
+        val sibling = selected.copy(stableSourceId = "2")
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        seedMatch(sibling)
+        val resolver = repository(
+            SteamCatalogSearchSource { _, _ ->
+                seedMatch(sibling.copy(decisionSource = MatchDecisionSource.USER, confidence = MatchConfidence.REJECTED))
+                listOf(SteamStoreSearchHit(99, "Public Game", null))
+            },
+            SteamCatalogRecordSource { _, _ -> record(99, "Public Game", "studio", 2020) },
+        )
+        assertEquals(0, resolver.scanAutomatically().autoAccepted)
+        assertTrue(writer.operations.isEmpty())
+    }
+
+    @Test
+    fun `publication revalidates a canonical identity assigned during provider work`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        val resolver = repository(
+            SteamCatalogSearchSource { _, _ ->
+                db.canonicalGameDao().update(game.copy(steamAppId = 42))
+                listOf(SteamStoreSearchHit(99, "Public Game", null))
+            },
+            SteamCatalogRecordSource { _, _ -> record(99, "Public Game", "studio", 2020) },
+        )
+        assertEquals(0, resolver.scanAutomatically().autoAccepted)
+        assertTrue(writer.operations.isEmpty())
+        assertEquals(42, db.canonicalGameDao().get(game.canonicalId)?.steamAppId)
+    }
+
+    @Test
+    fun `preparation revalidates sibling decisions after the durable wakeup is persisted`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game")
+        val sibling = selected.copy(stableSourceId = "2")
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        seedMatch(sibling)
+        var calls = 0
+        val resolver = repository(
+            SteamCatalogSearchSource { _, _ -> calls++; emptyList() },
+            resumeScheduler = SteamCatalogResumeScheduler {
+                seedMatch(sibling.copy(decisionSource = MatchDecisionSource.USER, confidence = MatchConfidence.REJECTED))
+            },
+        )
+        assertEquals(0, resolver.scanAutomatically().total)
+        assertEquals(0, calls)
+        assertNull(attemptStatus(game.canonicalId))
+    }
+
+    @Test
+    fun `manual picker preserves the earlier rejection from a pre history database`() = runTest {
+        val game = canonical(1, null)
+        val selected = match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game").copy(
+            candidateSteamAppId = 99, matchMethod = MatchMethod.MANUAL,
+            confidence = MatchConfidence.REJECTED, decisionSource = MatchDecisionSource.USER,
+        )
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        val mutations = app.gamenative.library.canonical.RoomCanonicalMutationRepository(db) {
+            app.gamenative.data.canonical.CanonicalGameId.random()
+        }
+        val resolver = repository(
+            SteamCatalogSearchSource { _, _ -> emptyList() },
+            SteamCatalogRecordSource { appId, _ -> record(appId, "Public Game", "studio", 2020) },
+            decisions = mutations,
+        )
+        resolver.searchManually(expected(selected), "42")
+        assertEquals(CanonicalGuardedMutationResult.APPLIED, resolver.rejectCandidate(expected(selected), 42))
+        assertEquals(listOf(42, 99), db.steamCatalogResolutionDao().getRejectedSteamAppIds(
+            selected.accountScope, selected.source, selected.stableSourceId,
+        ))
+    }
+
+    @Test
+    fun `resume worker with no unfinished work preserves foreground completion progress`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        val resolver = repository(SteamCatalogSearchSource { _, _ -> emptyList() })
+        val completed = resolver.scanAutomatically()
+        assertEquals(1, completed.unmatched)
+        assertEquals(androidx.work.ListenableWorker.Result.success(), worker(resolver).doWork())
+        assertEquals(completed, resolver.progress.value)
+    }
+
+    private fun worker(
+        resolver: SteamCatalogResolutionRepository,
+        ready: Boolean = true,
+        enabled: Boolean = true,
+    ): SteamCatalogResolutionWorker {
+        val application = ApplicationProvider.getApplicationContext<ResolutionWorkerTestApplication>()
+        val readiness = app.gamenative.library.canonical.CanonicalProjectionReadiness()
+        if (ready) readiness.markSucceeded()
+        application.component = object : SteamCatalogResolutionWorker.Dependencies, dagger.hilt.internal.GeneratedComponent {
+            override fun resolutionRepository() = resolver
+            override fun projectionReadiness() = readiness
+            override fun publicLibraryGate() = app.gamenative.library.canonical.CanonicalPublicLibraryGate { enabled }
+        }
+        return androidx.work.testing.TestListenableWorkerBuilder<SteamCatalogResolutionWorker>(application).build()
+    }
+
+    private fun attemptStatus(canonicalId: String): String? = db.openHelper.writableDatabase.query(
+        "SELECT status FROM steam_catalog_resolution_attempt WHERE canonical_id = ?",
+        arrayOf(canonicalId),
+    ).use { if (it.moveToFirst()) it.getString(0) else null }
+
     private fun repository(
         search: SteamCatalogSearchSource,
         records: SteamCatalogRecordSource = SteamCatalogRecordSource { _, _ -> null },
@@ -1331,12 +1799,14 @@ class SteamCatalogResolutionRepositoryTest {
         epicCatalogSource: EpicCmsCatalogSource = EpicCmsCatalogSource {
             throw AssertionError("Epic CMS fallback must not run")
         },
+        decisions: SteamCatalogDecisionWriter = writer,
+        resumeScheduler: SteamCatalogResumeScheduler = SteamCatalogResumeScheduler {},
     ) = SteamCatalogResolutionRepository(
         storeMatchDao = db.storeMatchDao(),
         searchSource = search,
         recordSource = records,
         candidatePolicy = SteamCatalogCandidatePolicy(),
-        decisionWriter = writer,
+        decisionWriter = decisions,
         pcGamingWikiSource = pcGamingWikiSource,
         epicCatalogSource = epicCatalogSource,
         epicFallbackWriter = epicFallbackWriter,
@@ -1344,6 +1814,8 @@ class SteamCatalogResolutionRepositoryTest {
         diagnostics = diagnostics,
         acceptedIdentityEnrichment = enrichment,
         clock = MetadataClock { 1_000L },
+        db = db,
+        resumeScheduler = resumeScheduler,
     )
 
     private suspend fun seedMatch(match: StoreMatchEntity) {

@@ -35,6 +35,8 @@ import app.gamenative.library.canonical.catalog.SteamAppListCache
 import app.gamenative.library.canonical.catalog.SteamAppListRemoteSource
 import app.gamenative.library.canonical.catalog.SteamCatalogSearchCoordinator
 import app.gamenative.library.canonical.catalog.SteamCatalogResolutionDiagnosticSink
+import app.gamenative.library.canonical.catalog.SteamCatalogResolutionScheduler
+import app.gamenative.library.canonical.catalog.SteamCatalogResumeScheduler
 import app.gamenative.library.canonical.catalog.SteamCatalogSearchSource
 import app.gamenative.library.canonical.catalog.SteamPublicPicsFacetSource
 import app.gamenative.library.canonical.catalog.SteamSessionPublicPicsFacetSource
@@ -211,6 +213,12 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamCatalogResolutionDiagnostics(
         implementation: FeatureSteamCatalogResolutionDiagnostics,
     ): SteamCatalogResolutionDiagnosticSink
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamCatalogResumeScheduler(
+        implementation: SteamCatalogResolutionScheduler,
+    ): SteamCatalogResumeScheduler
 
     @Binds
     @Singleton

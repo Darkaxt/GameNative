@@ -251,7 +251,8 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all {
-                it.maxHeapSize = "4g"
+                it.maxHeapSize = "1g"
+                it.maxParallelForks = 1
                 it.testLogging { events("started", "failed") }
             }
         }
@@ -516,6 +517,7 @@ dependencies {
     ksp(libs.bundles.ksp)
 
     // Room Database
+    implementation(libs.androidx.work.runtime)
     implementation(libs.bundles.room)
 
     // Memory Leak Detection
@@ -537,6 +539,7 @@ dependencies {
     testImplementation(libs.androidx.ui.test.junit4)
     testImplementation(libs.zstd.jni)
     testImplementation(libs.orgJson)
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.mockwebserver)
 
     // Add PostHog Android SDK dependency

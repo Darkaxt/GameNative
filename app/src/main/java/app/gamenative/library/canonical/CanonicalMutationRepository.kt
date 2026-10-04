@@ -17,6 +17,7 @@ import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.data.canonical.RejectedSteamCandidateEntity
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.library.canonical.source.OwnedCopyProjection
@@ -77,6 +78,12 @@ interface SteamCatalogDecisionWriter {
         steamAppId: Int,
         nowEpochMs: Long,
     ): CanonicalGuardedMutationResult
+
+    suspend fun rejectValidatedCandidate(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = reject(expected, steamAppId, nowEpochMs)
 
     suspend fun reset(
         expected: ExpectedMatchState,
@@ -190,6 +197,7 @@ class RoomCanonicalMutationRepository @Inject constructor(
     private val preferenceDao = db.canonicalPreferenceDao()
     private val facetDao = db.canonicalFacetDao()
     private val snapshotDao = db.gameDetailSnapshotDao()
+    private val resolutionDao = db.steamCatalogResolutionDao()
 
     override suspend fun confirmSteamMatch(
         key: OwnedCopyKey,
@@ -254,6 +262,12 @@ class RoomCanonicalMutationRepository @Inject constructor(
         steamAppId,
         nowEpochMs,
     )
+
+    override suspend fun rejectValidatedCandidate(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = guardedRejectSteamMatch(expected, steamAppId, nowEpochMs, fromValidatedSearch = true)
 
     override suspend fun reset(
         expected: ExpectedMatchState,
@@ -436,12 +450,20 @@ class RoomCanonicalMutationRepository @Inject constructor(
         expected: ExpectedMatchState,
         steamAppId: Int,
         nowEpochMs: Long,
+    ): CanonicalGuardedMutationResult = guardedRejectSteamMatch(expected, steamAppId, nowEpochMs, fromValidatedSearch = false)
+
+    private suspend fun guardedRejectSteamMatch(
+        expected: ExpectedMatchState,
+        steamAppId: Int,
+        nowEpochMs: Long,
+        fromValidatedSearch: Boolean,
     ): CanonicalGuardedMutationResult = db.withTransaction {
         val match = expectedMatchOrNull(expected)
         val canonical = match?.let { canonicalGameDao.get(it.canonicalId) }
         val identifiesCurrentDecision = match != null &&
             steamAppId > 0 &&
-            (match.candidateSteamAppId == steamAppId || canonical?.steamAppId == steamAppId)
+            (match.candidateSteamAppId == steamAppId || canonical?.steamAppId == steamAppId ||
+                (fromValidatedSearch && canonical != null && canonical.steamAppId == null))
         if (!identifiesCurrentDecision) {
             return@withTransaction CanonicalGuardedMutationResult.EXPECTED_STATE_CHANGED
         }
@@ -603,10 +625,12 @@ class RoomCanonicalMutationRepository @Inject constructor(
         val siblingRejectedRequestedIdentity = storeMatchDao
             .getByCanonicalId(currentCanonical.canonicalId)
             .any { match ->
-                !match.hasKey(key) &&
-                    match.decisionSource == MatchDecisionSource.USER &&
-                    match.confidence == MatchConfidence.REJECTED &&
-                    match.candidateSteamAppId == steamAppId
+                !match.hasKey(key) && (
+                    (match.decisionSource == MatchDecisionSource.USER &&
+                        match.confidence == MatchConfidence.REJECTED &&
+                        match.candidateSteamAppId == steamAppId) ||
+                        steamAppId in resolutionDao.getRejectedSteamAppIds(match.accountScope, match.source, match.stableSourceId)
+                    )
             }
 
         return when {
@@ -706,6 +730,22 @@ class RoomCanonicalMutationRepository @Inject constructor(
                 nowEpochMs = nowEpochMs,
             ),
         )
+        val previousRejection = selectedMatch.candidateSteamAppId?.takeIf {
+            it > 0 && selectedMatch.decisionSource == MatchDecisionSource.USER &&
+                selectedMatch.confidence == MatchConfidence.REJECTED
+        }
+        if (previousRejection != null && previousRejection !in
+            resolutionDao.getRejectedSteamAppIds(key.accountScope.value, key.source, key.stableSourceId)
+        ) {
+            resolutionDao.upsertRejection(
+                RejectedSteamCandidateEntity(
+                    key.accountScope.value, key.source, key.stableSourceId, previousRejection, selectedMatch.matchedAt,
+                ),
+            )
+        }
+        resolutionDao.upsertRejection(
+            RejectedSteamCandidateEntity(key.accountScope.value, key.source, key.stableSourceId, steamAppId, nowEpochMs),
+        )
     }
 
     private suspend fun expectedMatchOrNull(expected: ExpectedMatchState): StoreMatchEntity? {
@@ -783,11 +823,18 @@ class RoomCanonicalMutationRepository @Inject constructor(
             ),
         )
         insertFacets(canonical.canonicalId, snapshot)
+        originalCanonical.steamAppId?.let { appId ->
+            resolutionDao.upsertRejection(
+                RejectedSteamCandidateEntity(snapshot.key.accountScope.value, snapshot.key.source, snapshot.key.stableSourceId, appId, nowEpochMs),
+            )
+        }
         clearPreferredCopy(originalCanonical.canonicalId, snapshot.key, nowEpochMs)
         return canonical.canonicalId
     }
 
     private suspend fun resetDecision(match: StoreMatchEntity, nowEpochMs: Long) {
+        resolutionDao.deleteRejections(match.accountScope, match.source, match.stableSourceId)
+        resolutionDao.deleteAttempt(match.canonicalId)
         storeMatchDao.upsert(
             match.copy(
                 candidateSteamAppId = null,
