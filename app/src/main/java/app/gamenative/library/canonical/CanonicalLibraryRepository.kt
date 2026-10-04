@@ -319,7 +319,7 @@ class CanonicalLibraryRepository @Inject constructor(
         val locale = localeProvider.current()
         val snapshot = aggregate.detailSnapshots.singleOrNull {
             it.canonicalId == aggregate.game.canonicalId && it.locale == locale.normalizedLocale &&
-                it.country == locale.normalizedCountry && it.sourceRevision == "steam_appdetails_v2"
+                it.country == locale.normalizedCountry && it.sourceRevision in setOf("steam_appdetails_v2", "steam_appdetails_v3")
         } ?: return null
         return try {
             val provenance = JSON.decodeFromString<GameMetadataProvenance>(snapshot.provenanceJson)

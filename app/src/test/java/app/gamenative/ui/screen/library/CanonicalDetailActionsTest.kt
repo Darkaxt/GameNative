@@ -5,6 +5,8 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalInputModeManager
@@ -17,6 +19,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
@@ -37,6 +40,13 @@ import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.OwnedCopyRouteResult
+import app.gamenative.library.community.DiscussionSectionState
+import app.gamenative.library.discovery.SteamReviewSummary
+import app.gamenative.ui.model.ReviewSummaryState
+import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.GameDetailState
+import app.gamenative.library.metadata.MetadataProvider
+import kotlinx.serialization.json.Json
 import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryState
 import app.gamenative.ui.enums.PaneType
@@ -176,12 +186,169 @@ class CanonicalDetailActionsTest {
         composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
         composeRule.runOnIdle { assertEquals(listOf(OwnedCopyOperation.PLAY), operations) }
+        composeRule.onNodeWithTag("copies-sheet").performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+    }
+
+    @Test
+    fun detailsShowGenresAndDistinctMinimumRecommendedRequirements() {
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)), mutableListOf(), detailState = detailState())
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+
+        composeRule.onNodeWithText("Genres").assertExists()
+        composeRule.onNodeWithText("Strategy").assertExists()
+        composeRule.onNodeWithText("Minimum requirements").assertExists()
+        composeRule.onNodeWithText("Recommended requirements").assertExists()
+    }
+
+    @Test
+    fun overviewSeparatesOwnedGogCopyFromSteamMetadataProvenance() {
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)), mutableListOf(), detailState = detailState())
+        composeRule.onNodeWithTag("canonical-card").performClick()
+
+        composeRule.onNodeWithText("Metadata source").assertExists()
+        composeRule.onNodeWithText("Steam Store").assertExists()
+        composeRule.onNodeWithTag("canonical-detail-ownership").assertExists()
+    }
+
+    @Test
+    fun epicFallbackDisplaysTruthfulProviderInsteadOfSteamProvenance() {
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)), mutableListOf(),
+            detailState = detailState().copy(provider = MetadataProvider.EPIC_CMS))
+        composeRule.onNodeWithTag("canonical-card").performClick()
+
+        composeRule.onNodeWithText("Epic Games Store").assertExists()
+        composeRule.onNodeWithText("Steam Store").assertDoesNotExist()
+    }
+
+    @Test
+    fun detailsExposeReadOnlyStorePriceRatingsAndExternalLinks() {
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)), mutableListOf(), detailState = detailState())
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+
+        composeRule.onNodeWithTag("canonical-detail-store-price").assertExists()
+        composeRule.onNodeWithText("Fixture Deluxe Edition").assertExists()
+        composeRule.onNodeWithText("Fantasy violence").assertExists()
+        composeRule.onNodeWithText("Website").assertExists()
+        composeRule.onNodeWithText("Support").assertExists()
+        composeRule.onNodeWithText("Manual").assertExists()
+        composeRule.onNodeWithTag("canonical-detail-provenance").assertExists()
+    }
+
+    @Test
+    fun disposingLibraryHostClearsCanonicalDetailOwnerExactlyOnce() {
+        val mounted = mutableStateOf(true)
+        var clears = 0
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)), mutableListOf(),
+            mounted = mounted, onClearDetail = { clears++ })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.runOnIdle { mounted.value = false }
+        composeRule.runOnIdle { assertEquals(1, clears) }
+    }
+
+    @Test
+    fun matchedOverviewExposesItsAggregateSteamReviewSummary() {
+        val card = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)).copy(steamAppId = 480, steamReviewCount = 100)
+        screen(card, mutableListOf(), detailState = detailState())
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-review-summary").assertExists()
+    }
+
+    @Test
+    fun backClosesDetailAndClearsItsOwnerOnlyOnce() {
+        var clears = 0
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)), mutableListOf(), onClearDetail = { clears++ })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithContentDescription("Back").performClick()
+        composeRule.runOnIdle { assertEquals(1, clears) }
+    }
+
+    @Test
+    fun retainedDiscussionThreadDoesNotHijackBackOnAnotherTab() {
+        var threadCloses = 0
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)).copy(steamAppId = 480), mutableListOf(),
+            discussionState = DiscussionSectionState.Thread("Fixture thread", emptyList(), "/app/480/discussions/0/1/", false),
+            onCloseThread = { threadCloses++; true })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+        composeRule.onNodeWithContentDescription("Back").performClick()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(0, threadCloses) }
+    }
+
+    @Test
+    fun overviewSummaryRemainsVisibleWhenStoreMetadataIsUnavailable() {
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)).copy(steamAppId = 480, steamReviewCount = 100),
+            mutableListOf(), detailState = GameDetailState.Unavailable(null))
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-review-summary").assertExists()
+        composeRule.onNodeWithText("100 reviews").assertExists()
+    }
+
+    @Test
+    fun visibleDiscussionGamepadBackReturnsToListThenClosesDetail() {
+        val discussion = mutableStateOf<DiscussionSectionState>(
+            DiscussionSectionState.Thread("Fixture thread", emptyList(), "/app/480/discussions/0/1/", false))
+        var closes = 0
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)).copy(steamAppId = 480), mutableListOf(),
+            liveDiscussionState = discussion, onCloseThread = {
+                closes++
+                discussion.value = DiscussionSectionState.Listing(emptyList(), false)
+                true
+            })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DISCUSSIONS").performClick()
+        composeRule.onRoot().performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+        composeRule.runOnIdle { assertEquals(1, closes) }
+        composeRule.onRoot().performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(1, closes) }
+    }
+
+    @Test
+    fun overviewDisplaysPublicRatingAndCountWithoutOwnedSteamCopy() {
+        screen(card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS)).copy(steamAppId = 480), mutableListOf(),
+            detailState = detailState(), reviewSummaryState = ReviewSummaryState.Content(
+                SteamReviewSummary(100, 90, 10, 8, "Very Positive"), 1234))
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithText("Very Positive").assertExists()
+        composeRule.onNodeWithText("100 reviews").assertExists()
+        composeRule.onNodeWithText("90% positive").assertExists()
+    }
+
+    private fun detailState(): GameDetailState.Content {
+        val metadata = Json { ignoreUnknownKeys = true }.decodeFromString<CanonicalGameMetadata>("""
+            {
+              "title":"Fixture Game", "shortDescription":"Public description", "about":null,
+              "headerImageUrl":null, "screenshots":[], "movies":[], "developers":["Fixture Studio"],
+              "publishers":[], "releaseDate":"2020", "platforms":["WINDOWS"], "languages":["English"],
+              "requirements":{"minimum":"8 GB RAM","recommended":"16 GB RAM"},
+              "genres":[{"id":2,"label":"Strategy"}], "features":[], "achievementCount":12,
+              "dlcCount":2, "fetchedAtEpochMs":1234,
+              "storePrice":{"currency":"GBP","country":"GB","initialMinor":2499,"finalMinor":1249,"discountPercent":50},
+              "storePackages":[{"packageId":123,"label":"Fixture Deluxe Edition","finalMinor":2499}],
+              "contentRatings":{"requiredAge":18,"criticScore":86,"descriptorIds":[2,5],"notes":"Fantasy violence"},
+              "storeLinks":{"website":"https://studio.example/game","support":"https://studio.example/support","manual":"https://store.steampowered.com/manual/424242"}
+            }
+        """.trimIndent())
+        return GameDetailState.Content(metadata, stale = false)
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
     private fun screen(
         card: CanonicalLibraryCard,
         operations: MutableList<OwnedCopyOperation>,
+        detailState: GameDetailState = GameDetailState.Loading,
+        mounted: State<Boolean>? = null,
+        onClearDetail: () -> Unit = {},
+        discussionState: DiscussionSectionState = DiscussionSectionState.Idle,
+        liveDiscussionState: State<DiscussionSectionState>? = null,
+        reviewSummaryState: ReviewSummaryState = ReviewSummaryState.Idle,
+        onCloseThread: () -> Boolean = { false },
         routeResult: (OwnedCopyOperation) -> OwnedCopyRouteResult = {
             OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
         },
@@ -193,6 +360,7 @@ class CanonicalDetailActionsTest {
         composeRule.setContent {
             val inputModeManager = LocalInputModeManager.current
             LaunchedEffect(Unit) { inputModeManager.requestInputMode(InputMode.Keyboard) }
+            if (mounted?.value == false) return@setContent
             PluviaTheme {
                 LibraryScreenContent(
                     state = state,
@@ -220,6 +388,11 @@ class CanonicalDetailActionsTest {
                     onTabChanged = {},
                     onPreviousTab = {},
                     onNextTab = {},
+                    gameDetailState = detailState,
+                    onClearCanonicalDetail = onClearDetail,
+                    discussionState = liveDiscussionState?.value ?: discussionState,
+                    reviewSummaryState = reviewSummaryState,
+                    onCloseDiscussionThread = onCloseThread,
                     canonicalCard = { card.takeIf { candidate -> candidate.key == it } },
                     onRouteCanonicalAction = { key, operation, explicitKey, rememberChoice ->
                         assertEquals(card.key, key)

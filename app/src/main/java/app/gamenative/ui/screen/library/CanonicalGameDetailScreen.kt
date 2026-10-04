@@ -1,5 +1,7 @@
 package app.gamenative.ui.screen.library
 
+import android.view.KeyEvent
+import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -65,6 +68,15 @@ import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GamePlatform
 import app.gamenative.library.metadata.MetadataProvider
+import app.gamenative.library.metadata.MetadataField
+import app.gamenative.library.metadata.GameStorePrice
+import app.gamenative.library.metadata.safeMetadataExternalLink
+import java.math.BigDecimal
+import java.text.DateFormat
+import java.text.NumberFormat
+import java.util.Currency
+import java.util.Date
+import app.gamenative.ui.model.ReviewSummaryState
 import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.screen.library.components.GameMediaItem
 import app.gamenative.ui.screen.library.components.GameMediaPager
@@ -114,6 +126,11 @@ internal fun CanonicalGameDetailScreen(
     copies: List<OwnedCopySummary> = emptyList(),
     onOperation: (OwnedCopyOperation) -> Unit = {},
     actionInProgress: Boolean = false,
+    reviewSummaryState: ReviewSummaryState = ReviewSummaryState.Idle,
+    cachedReviewCount: Int? = null,
+    onLoadReviewSummary: () -> Unit = {},
+    onRetryReviewSummary: () -> Unit = {},
+    backEnabled: Boolean = true,
 ) {
     val metadata = when (state) {
         is GameDetailState.Content -> state.metadata
@@ -128,6 +145,9 @@ internal fun CanonicalGameDetailScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     val validSteamAppId = steamAppId?.takeIf { it > 0 }
 
+    LaunchedEffect(validSteamAppId, isOffline) {
+        if (validSteamAppId != null) onLoadReviewSummary()
+    }
     LaunchedEffect(selectedTab, validSteamAppId) {
         if (validSteamAppId == null) return@LaunchedEffect
         when (tabs[selectedTab]) {
@@ -137,15 +157,23 @@ internal fun CanonicalGameDetailScreen(
         }
     }
     val detailBack = {
-        if (discussionState !is DiscussionSectionState.Thread || !onCloseDiscussionThread()) {
-            onBack()
-        }
+        val visibleThread = tabs[selectedTab] == CanonicalDetailTab.DISCUSSIONS &&
+            discussionState is DiscussionSectionState.Thread
+        if (!visibleThread || !onCloseDiscussionThread()) onBack()
     }
+    BackHandler(enabled = backEnabled, onBack = detailBack)
 
     Surface(
         modifier = Modifier
             .fillMaxSize()
-            .testTag("canonical-detail-screen"),
+            .testTag("canonical-detail-screen")
+            .onPreviewKeyEvent { event ->
+                if (backEnabled && event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
+                    event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+                    detailBack()
+                    true
+                } else false
+            },
         color = MaterialTheme.colorScheme.background,
         contentColor = MaterialTheme.colorScheme.onBackground,
     ) {
@@ -210,6 +238,12 @@ internal fun CanonicalGameDetailScreen(
                             mediaProvider = mediaProvider,
                             compatibilityStatus = compatibilityStatus,
                             hltbStats = hltbStats,
+                            copies = copies,
+                            ownedSources = ownedSources,
+                            reviewSummaryState = reviewSummaryState,
+                            cachedReviewCount = cachedReviewCount.takeIf { validSteamAppId != null },
+                            hasSteamIdentity = validSteamAppId != null,
+                            onRetryReviewSummary = onRetryReviewSummary,
                             onRetry = onRetry,
                         )
                         CanonicalDetailTab.REVIEWS -> SteamReviewsTab(
@@ -244,6 +278,7 @@ internal fun CanonicalGameDetailScreen(
                             },
                         )
                         CanonicalDetailTab.DETAILS -> DetailFields(
+                            state = state,
                             metadata = metadata,
                             steamMatchStatus = steamMatchStatus,
                             onFixSteamMatch = onFixSteamMatch,
@@ -425,6 +460,12 @@ private fun DetailOverview(
     mediaProvider: MetadataProvider,
     compatibilityStatus: GameCompatibilityStatus?,
     hltbStats: HltbService.Stats?,
+    copies: List<OwnedCopySummary>,
+    ownedSources: Set<GameSource>,
+    reviewSummaryState: ReviewSummaryState,
+    cachedReviewCount: Int?,
+    hasSteamIdentity: Boolean,
+    onRetryReviewSummary: () -> Unit,
     onRetry: () -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -499,6 +540,9 @@ private fun DetailOverview(
                             }
                         }
                     }
+                    if (hasSteamIdentity) {
+                        DetailReviewSummary(reviewSummaryState, cachedReviewCount, onRetryReviewSummary)
+                    }
                     compatibilityStatus?.let { status ->
                         HorizontalDivider()
                         Text(
@@ -513,9 +557,61 @@ private fun DetailOverview(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                    metadata.releaseDate?.let { DetailField(R.string.canonical_detail_release, it) }
+                    Column(modifier = Modifier.testTag("canonical-detail-ownership"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.canonical_copies_title), style = MaterialTheme.typography.titleMedium)
+                        OwnedSourceBadges(sources = ownedSources.toList(), iconSize = 16)
+                        copies.forEach { copy ->
+                            Text(copy.nativeTitle, style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(if (copy.isInstalled) R.string.library_installed else R.string.library_not_installed))
+                            copy.playtimeMinutes?.let { Text(stringResource(R.string.canonical_copy_playtime_minutes, it)) }
+                        }
+                    }
+                    DetailProvenance(state, metadata, showFields = false)
                 }
             }
         }
+        if (metadata == null && hasSteamIdentity) {
+            DetailReviewSummary(reviewSummaryState, cachedReviewCount, onRetryReviewSummary)
+        }
+        }
+    }
+}
+
+@Composable
+private fun DetailReviewSummary(state: ReviewSummaryState, cachedCount: Int?, onRetry: () -> Unit) {
+    val content = state as? ReviewSummaryState.Content
+    val summary = content?.summary
+    val count = summary?.totalReviews ?: cachedCount?.takeIf { it >= 0 }
+    Column(
+        modifier = Modifier.testTag("canonical-detail-review-summary"),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(stringResource(R.string.canonical_detail_review_summary), style = MaterialTheme.typography.titleMedium)
+        summary?.description?.let { Text(it) }
+        count?.let { Text(stringResource(R.string.canonical_detail_review_total, NumberFormat.getIntegerInstance().format(it))) }
+        if (summary != null && summary.totalReviews > 0) {
+            summary.positiveReviews?.let { positive ->
+                Text(stringResource(R.string.canonical_detail_review_positive,
+                    NumberFormat.getPercentInstance().format(positive.toDouble() / summary.totalReviews)))
+            }
+        }
+        content?.let {
+            Text(stringResource(R.string.canonical_detail_verified_at,
+                DateFormat.getDateTimeInstance().format(Date(it.fetchedAtEpochMs))), style = MaterialTheme.typography.bodySmall)
+            if (it.stale) Text(stringResource(R.string.canonical_detail_stale))
+            if (it.refreshFailed) Text(stringResource(R.string.canonical_detail_refresh_failed))
+        }
+        when (state) {
+            ReviewSummaryState.Idle, ReviewSummaryState.Loading -> Text(stringResource(R.string.canonical_detail_summary_loading))
+            ReviewSummaryState.Offline -> Text(stringResource(R.string.canonical_detail_summary_offline))
+            ReviewSummaryState.Unavailable -> Text(stringResource(R.string.canonical_detail_summary_unavailable))
+            is ReviewSummaryState.Content -> Unit
+        }
+        if (state == ReviewSummaryState.Unavailable || content?.refreshFailed == true) {
+            OutlinedButton(onClick = onRetry, modifier = Modifier.testTag("canonical-detail-summary-retry")) {
+                Text(stringResource(R.string.canonical_detail_retry))
+            }
         }
     }
 }
@@ -547,6 +643,7 @@ private fun DetailPlaceholder(
 
 @Composable
 private fun DetailFields(
+    state: GameDetailState,
     metadata: CanonicalGameMetadata?,
     steamMatchStatus: SteamMatchStatus?,
     onFixSteamMatch: (() -> Unit)?,
@@ -573,15 +670,30 @@ private fun DetailFields(
                     .filter(metadata.platforms::contains)
                     .joinToString(", ") { platform -> platform.label() },
             )
+            DetailField(R.string.canonical_detail_genres, metadata.genres.joinToString(", ") { it.label })
+            DetailField(R.string.canonical_detail_features, metadata.features.joinToString(", ") { it.label })
             DetailField(R.string.canonical_detail_languages, metadata.languages.joinToString(", "))
+            metadata.languageSupport.forEach { language ->
+                Text(stringResource(R.string.canonical_detail_language_capabilities, language.name,
+                    language.interfaceSupported.capabilityLabel(), language.fullAudioSupported.capabilityLabel(),
+                    language.subtitlesSupported.capabilityLabel()))
+            }
             metadata.requirements?.minimum?.let { minimum ->
-                DetailField(R.string.canonical_detail_requirements, minimum)
+                DetailField(R.string.canonical_detail_minimum_requirements, minimum)
             }
             metadata.requirements?.recommended?.let { recommended ->
-                DetailField(R.string.canonical_detail_requirements, recommended)
+                DetailField(R.string.canonical_detail_recommended_requirements, recommended)
             }
             DetailField(R.string.canonical_detail_achievements, metadata.achievementCount?.toString())
             DetailField(R.string.canonical_detail_dlc, metadata.dlcCount?.toString())
+            metadata.contentRatings?.let { ratings ->
+                DetailField(R.string.canonical_detail_required_age, ratings.requiredAge?.toString())
+                DetailField(R.string.canonical_detail_critic_score, ratings.criticScore?.toString())
+                DetailField(R.string.canonical_detail_content_descriptors, ratings.descriptorIds.joinToString(", "))
+                DetailField(R.string.canonical_detail_content_notes, ratings.notes)
+            }
+            DetailStoreInformation(metadata, onOpen)
+            DetailProvenance(state, metadata, showFields = true)
         }
         steamMatchStatus?.let { status ->
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -606,6 +718,99 @@ private fun DetailFields(
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
         DetailResourcesSection(links = links, onOpen = onOpen)
     }
+}
+
+@Composable
+private fun Boolean?.capabilityLabel(): String = stringResource(when (this) {
+    true -> R.string.yes
+    false -> R.string.no
+    null -> R.string.canonical_detail_support_unknown
+})
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DetailStoreInformation(metadata: CanonicalGameMetadata, onOpen: (String) -> Unit) {
+    if (metadata.storePrice != null || metadata.storePackages.isNotEmpty() || metadata.isFree == true) {
+        Text(stringResource(R.string.canonical_detail_store_information), style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.canonical_detail_store_disclaimer), style = MaterialTheme.typography.bodySmall)
+        if (metadata.isFree == true) Text(stringResource(R.string.canonical_detail_free))
+        metadata.storePrice?.let { price ->
+            Column(modifier = Modifier.testTag("canonical-detail-store-price")) {
+                Text(stringResource(R.string.canonical_detail_price, formatStoreMoney(price.finalMinor, price), price.country, price.discountPercent))
+                Text(stringResource(R.string.canonical_detail_base_price, formatStoreMoney(price.initialMinor, price)))
+            }
+        }
+        metadata.storePackages.forEach { storePackage ->
+            Text(storePackage.label)
+            val price = metadata.storePrice
+            if (storePackage.finalMinor != null && price != null) {
+                Text(stringResource(R.string.canonical_detail_package_price, price.country, formatStoreMoney(storePackage.finalMinor, price)))
+            }
+        }
+    }
+    val links = listOf(
+        R.string.canonical_detail_website to metadata.storeLinks?.website,
+        R.string.canonical_detail_support to metadata.storeLinks?.support,
+        R.string.canonical_detail_manual to metadata.storeLinks?.manual,
+    ).mapNotNull { (label, raw) -> safeMetadataExternalLink(raw)?.let { label to it } }
+    if (links.isNotEmpty()) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            links.forEach { (label, url) ->
+                OutlinedButton(onClick = { onOpen(url) }) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(label))
+                }
+            }
+        }
+    }
+}
+
+private fun formatStoreMoney(minor: Int, price: GameStorePrice): String {
+    val currency = runCatching { Currency.getInstance(price.currency) }.getOrNull()
+    val digits = currency?.defaultFractionDigits?.takeIf { it >= 0 } ?: 2
+    val amount = BigDecimal.valueOf(minor.toLong()).movePointLeft(digits)
+    if (currency == null) return "${price.currency} $amount"
+    return NumberFormat.getCurrencyInstance().apply {
+        this.currency = currency
+        minimumFractionDigits = digits
+        maximumFractionDigits = digits
+    }.format(amount)
+}
+
+@Composable
+private fun DetailProvenance(state: GameDetailState, metadata: CanonicalGameMetadata, showFields: Boolean) {
+    val content = state as? GameDetailState.Content ?: return
+    val provider = stringResource(when (content.provider) {
+        MetadataProvider.STEAM_APPDETAILS -> R.string.canonical_detail_provider_steam
+        MetadataProvider.EPIC_CMS -> R.string.canonical_detail_provider_epic
+    })
+    Column(modifier = Modifier.testTag("canonical-detail-provenance"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        DetailField(R.string.canonical_detail_metadata_source, provider)
+        if (metadata.fetchedAtEpochMs > 0) {
+            Text(stringResource(R.string.canonical_detail_verified_at,
+                DateFormat.getDateTimeInstance().format(Date(metadata.fetchedAtEpochMs))), style = MaterialTheme.typography.bodySmall)
+        }
+        if (showFields) {
+            content.provenance?.fields?.map(MetadataField::groupLabel)?.distinct()?.forEach { label ->
+                Text(stringResource(R.string.canonical_detail_source_field, stringResource(label), provider), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+private fun MetadataField.groupLabel(): Int = when (this) {
+    MetadataField.TITLE -> R.string.canonical_detail_title
+    MetadataField.SHORT_DESCRIPTION, MetadataField.ABOUT -> R.string.canonical_detail_descriptions
+    MetadataField.HEADER_IMAGE, MetadataField.SCREENSHOTS, MetadataField.MOVIES -> R.string.canonical_detail_media
+    MetadataField.DEVELOPERS -> R.string.canonical_detail_developer
+    MetadataField.PUBLISHERS -> R.string.canonical_detail_publisher
+    MetadataField.RELEASE_DATE -> R.string.canonical_detail_release
+    MetadataField.PLATFORMS, MetadataField.LANGUAGES, MetadataField.LANGUAGE_SUPPORT, MetadataField.REQUIREMENTS -> R.string.canonical_detail_technical
+    MetadataField.GENRES, MetadataField.FEATURES -> R.string.canonical_detail_facets
+    MetadataField.ACHIEVEMENT_COUNT, MetadataField.DLC_COUNT -> R.string.canonical_detail_extras
+    MetadataField.STORE_PRICE, MetadataField.STORE_PACKAGES, MetadataField.STORE_LINKS, MetadataField.IS_FREE -> R.string.canonical_detail_store_information
+    MetadataField.CONTENT_RATINGS -> R.string.canonical_detail_content_notes
 }
 
 @OptIn(ExperimentalLayoutApi::class)

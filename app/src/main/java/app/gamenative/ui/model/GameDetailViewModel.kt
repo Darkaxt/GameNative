@@ -11,6 +11,10 @@ import app.gamenative.library.community.SteamDiscussionSummary
 import app.gamenative.library.community.SteamReviewCard
 import app.gamenative.library.community.SteamReviewPageSource
 import app.gamenative.library.community.SteamReviewQuery
+import app.gamenative.library.discovery.SteamReviewSummary
+import app.gamenative.library.discovery.SteamReviewSummarySource
+import app.gamenative.library.metadata.MetadataClock
+import app.gamenative.library.metadata.SystemMetadataClock
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GameMetadataRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,13 +32,33 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+sealed interface ReviewSummaryState {
+    data object Idle : ReviewSummaryState
+    data object Loading : ReviewSummaryState
+    data object Offline : ReviewSummaryState
+    data object Unavailable : ReviewSummaryState
+    data class Content(
+        val summary: SteamReviewSummary,
+        val fetchedAtEpochMs: Long,
+        val stale: Boolean = false,
+        val refreshFailed: Boolean = false,
+    ) : ReviewSummaryState
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class GameDetailViewModel @Inject constructor(
     private val repository: GameMetadataRepository,
     private val reviewSource: SteamReviewPageSource,
     private val discussionSource: SteamDiscussionSource,
+    private val reviewSummarySource: SteamReviewSummarySource,
+    private val clock: MetadataClock = SystemMetadataClock(),
 ) : ViewModel() {
+    private val mutableReviewSummaryState = MutableStateFlow<ReviewSummaryState>(ReviewSummaryState.Idle)
+    private var summaryJob: Job? = null
+    private var activeSummaryAppId: Int? = null
+    private var summaryRevision = 0L
+    private val summaryCache = linkedMapOf<Int, ReviewSummaryState.Content>()
     private val selectedCanonicalId = MutableStateFlow<CanonicalGameId?>(null)
     private val reloadRevision = MutableStateFlow(0L)
     private val mutableReviewState = MutableStateFlow<ReviewSectionState>(ReviewSectionState.Idle)
@@ -66,6 +90,7 @@ class GameDetailViewModel @Inject constructor(
             initialValue = GameDetailState.Loading,
         )
 
+    val reviewSummaryState: StateFlow<ReviewSummaryState> = mutableReviewSummaryState.asStateFlow()
     val reviewState: StateFlow<ReviewSectionState> = mutableReviewState.asStateFlow()
     val reviewQuery: StateFlow<SteamReviewQuery> = mutableReviewQuery.asStateFlow()
     val discussionState: StateFlow<DiscussionSectionState> = mutableDiscussionState.asStateFlow()
@@ -79,6 +104,59 @@ class GameDetailViewModel @Inject constructor(
         if (selectedCanonicalId.value != null) {
             reloadRevision.value += 1L
         }
+    }
+
+    fun loadReviewSummary(steamAppId: Int, isOffline: Boolean, force: Boolean = false) {
+        if (steamAppId <= 0) {
+            clearReviewSummary()
+            mutableReviewSummaryState.value = ReviewSummaryState.Unavailable
+            return
+        }
+        val cached = summaryCache[steamAppId]?.let {
+            it.copy(stale = clock.nowEpochMs() - it.fetchedAtEpochMs !in 0 until SUMMARY_MAX_AGE_MS)
+        }
+        if (isOffline || (!force && cached != null && !cached.stale)) {
+            summaryJob?.cancel()
+            summaryRevision += 1L
+            activeSummaryAppId = steamAppId
+            mutableReviewSummaryState.value = cached ?: ReviewSummaryState.Offline
+            return
+        }
+        val sameRequest = activeSummaryAppId == steamAppId
+        val current = mutableReviewSummaryState.value
+        if (!force && sameRequest && (summaryJob?.isActive == true || current == ReviewSummaryState.Unavailable ||
+                (current as? ReviewSummaryState.Content)?.refreshFailed == true)) return
+        val previous = cached
+            ?: (current as? ReviewSummaryState.Content)?.takeIf { sameRequest }
+        summaryJob?.cancel()
+        activeSummaryAppId = steamAppId
+        val revision = ++summaryRevision
+        mutableReviewSummaryState.value = previous ?: ReviewSummaryState.Loading
+        summaryJob = viewModelScope.launch {
+            try {
+                val summary = reviewSummarySource.fetch(steamAppId)
+                if (revision != summaryRevision) return@launch
+                val content = ReviewSummaryState.Content(summary, clock.nowEpochMs())
+                summaryCache.remove(steamAppId)
+                summaryCache[steamAppId] = content
+                if (summaryCache.size > MAX_SUMMARY_CACHE_ITEMS) summaryCache.remove(summaryCache.keys.first())
+                mutableReviewSummaryState.value = content
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (revision != summaryRevision) return@launch
+                mutableReviewSummaryState.value = previous?.copy(stale = true, refreshFailed = true)
+                    ?: ReviewSummaryState.Unavailable
+            }
+        }
+    }
+
+    private fun clearReviewSummary() {
+        summaryJob?.cancel()
+        summaryJob = null
+        activeSummaryAppId = null
+        summaryRevision += 1L
+        mutableReviewSummaryState.value = ReviewSummaryState.Idle
     }
 
     fun loadReviews(
@@ -425,6 +503,7 @@ class GameDetailViewModel @Inject constructor(
     }
 
     private fun clearCommunity() {
+        clearReviewSummary()
         clearReviews()
         clearDiscussions()
     }
@@ -512,6 +591,8 @@ class GameDetailViewModel @Inject constructor(
     )
 
     private companion object {
+        const val SUMMARY_MAX_AGE_MS = 6L * 60L * 60L * 1_000L
+        const val MAX_SUMMARY_CACHE_ITEMS = 32
         const val MAX_REVIEW_PAGES = 5
         const val MAX_REVIEW_CARDS = 100
         const val MAX_DISCUSSION_PAGES = 5

@@ -1,6 +1,8 @@
 package app.gamenative.library.discovery
 
 import app.gamenative.utils.Net
+import app.gamenative.library.metadata.SteamHttpRetryExecutor
+import app.gamenative.library.metadata.sanitizeSteamText
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -24,7 +26,13 @@ fun interface SteamReviewSummarySource {
     suspend fun fetch(steamAppId: Int): SteamReviewSummary
 }
 
-data class SteamReviewSummary(val totalReviews: Int)
+data class SteamReviewSummary(
+    val totalReviews: Int,
+    val positiveReviews: Int? = null,
+    val negativeReviews: Int? = null,
+    val score: Int? = null,
+    val description: String? = null,
+)
 
 @Singleton
 class SteamReviewSummaryProvider internal constructor(
@@ -33,6 +41,7 @@ class SteamReviewSummaryProvider internal constructor(
     private val allowedHosts: Set<String>,
     private val requireHttps: Boolean,
     private val allowedPorts: Set<Int>,
+    private val retryExecutor: SteamHttpRetryExecutor = SteamHttpRetryExecutor(),
 ) : SteamReviewSummarySource {
     @Inject
     constructor() : this(
@@ -68,17 +77,18 @@ class SteamReviewSummaryProvider internal constructor(
 
     private suspend fun executeValidated(initialRequest: Request): String {
         var request = initialRequest
+        val expectedPath = initialRequest.url.encodedPath
         repeat(MAX_NETWORK_HOPS) {
-            if (!isAllowedNetworkUrl(request.url)) throw SteamReviewSummaryUnavailable()
-            val response = client.newCall(request).awaitSteamReviewResponse()
-            if (!isAllowedNetworkUrl(response.request.url)) {
+            if (!isAllowedSummaryUrl(request.url, expectedPath)) throw SteamReviewSummaryUnavailable()
+            val response = retryExecutor.execute { client.newCall(request).awaitSteamReviewResponse() }
+            if (!isAllowedSummaryUrl(response.request.url, expectedPath)) {
                 response.close()
                 throw SteamReviewSummaryUnavailable()
             }
             if (response.code in REDIRECT_CODES) {
                 val next = response.header("Location")?.let(response.request.url::resolve)
                 response.close()
-                if (next == null || !isAllowedNetworkUrl(next)) throw SteamReviewSummaryUnavailable()
+                if (next == null || !isAllowedSummaryUrl(next, expectedPath)) throw SteamReviewSummaryUnavailable()
                 request = Request.Builder()
                     .url(next)
                     .get()
@@ -115,8 +125,28 @@ class SteamReviewSummaryProvider internal constructor(
             ?.takeIf { it in 0..Int.MAX_VALUE.toLong() }
             ?.toInt()
             ?: throw SteamReviewSummaryUnavailable()
-        return SteamReviewSummary(total)
+        val raw = response.querySummary ?: throw SteamReviewSummaryUnavailable()
+        val positive = raw.totalPositive.aggregateCount()?.takeIf { it <= total }
+        val negative = raw.totalNegative.aggregateCount()?.takeIf { it <= total }
+        val consistent = positive == null || negative == null || positive.toLong() + negative == total.toLong()
+        return SteamReviewSummary(
+            totalReviews = total,
+            positiveReviews = positive.takeIf { consistent },
+            negativeReviews = negative.takeIf { consistent },
+            score = raw.reviewScore.aggregateCount()?.takeIf { it in 1..9 },
+            description = raw.reviewScoreDescription?.takeIf(JsonPrimitive::isString)
+                ?.content?.let(::sanitizeSteamText)?.take(128),
+        )
     }
+
+    private fun JsonPrimitive?.aggregateCount(): Int? =
+        this?.takeUnless(JsonPrimitive::isString)?.longOrNull
+            ?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
+
+    private fun isAllowedSummaryUrl(url: HttpUrl, expectedPath: String): Boolean =
+        isAllowedNetworkUrl(url) && url.encodedPath == expectedPath &&
+            url.queryParameterNames == SUMMARY_QUERY.keys &&
+            SUMMARY_QUERY.all { (key, value) -> url.queryParameterValues(key) == listOf(value) }
 
     private fun isAllowedEndpoint(url: HttpUrl): Boolean =
         isAllowedNetworkUrl(url) && url.encodedPath == APP_REVIEWS_PATH && url.query == null
@@ -135,6 +165,10 @@ class SteamReviewSummaryProvider internal constructor(
         const val APP_REVIEWS_PATH = "/appreviews"
         const val MAX_NETWORK_HOPS = 4
         const val MAX_RESPONSE_BYTES = 64L * 1024L
+        val SUMMARY_QUERY = mapOf(
+            "json" to "1", "filter" to "summary", "language" to "all",
+            "purchase_type" to "all", "num_per_page" to "0",
+        )
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
         val JSON = Json { ignoreUnknownKeys = true }
     }
@@ -148,6 +182,10 @@ private data class SteamReviewSummaryResponse(
 @Serializable
 private data class SteamReviewQuerySummary(
     @SerialName("total_reviews") val totalReviews: JsonPrimitive? = null,
+    @SerialName("total_positive") val totalPositive: JsonPrimitive? = null,
+    @SerialName("total_negative") val totalNegative: JsonPrimitive? = null,
+    @SerialName("review_score") val reviewScore: JsonPrimitive? = null,
+    @SerialName("review_score_desc") val reviewScoreDescription: JsonPrimitive? = null,
 )
 
 private class SteamReviewSummaryUnavailable : IOException("Steam review summary unavailable")

@@ -114,6 +114,7 @@ import app.gamenative.ui.enums.SortOption
 import app.gamenative.ui.internal.fakeAppInfo
 import app.gamenative.ui.model.CanonicalCopyChangeResult
 import app.gamenative.ui.model.GameDetailViewModel
+import app.gamenative.ui.model.ReviewSummaryState
 import app.gamenative.ui.model.LibraryViewModel
 import app.gamenative.ui.model.SteamMatchEffect
 import app.gamenative.ui.model.SteamMatchPickerState
@@ -177,6 +178,7 @@ fun HomeLibraryScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val gameDetailState by detailViewModel.state.collectAsStateWithLifecycle()
+    val reviewSummaryState by detailViewModel.reviewSummaryState.collectAsStateWithLifecycle()
     val reviewState by detailViewModel.reviewState.collectAsStateWithLifecycle()
     val reviewQuery by detailViewModel.reviewQuery.collectAsStateWithLifecycle()
     val discussionState by detailViewModel.discussionState.collectAsStateWithLifecycle()
@@ -242,6 +244,9 @@ fun HomeLibraryScreen(
         onSeparateCanonicalCopy = viewModel::separateCanonicalCopy,
         onResetCanonicalDecision = viewModel::resetCanonicalDecision,
         gameDetailState = gameDetailState,
+        reviewSummaryState = reviewSummaryState,
+        onLoadReviewSummary = { appId -> detailViewModel.loadReviewSummary(appId, isOffline) },
+        onRetryReviewSummary = { appId -> detailViewModel.loadReviewSummary(appId, isOffline, force = true) },
         onOpenCanonicalDetail = detailViewModel::load,
         onRetryCanonicalDetail = detailViewModel::retry,
         reviewState = reviewState,
@@ -342,6 +347,9 @@ internal fun LibraryScreenContent(
     onSeparateCanonicalCopy: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult,
     onResetCanonicalDecision: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult,
     gameDetailState: GameDetailState = GameDetailState.Loading,
+    reviewSummaryState: ReviewSummaryState = ReviewSummaryState.Idle,
+    onLoadReviewSummary: (Int) -> Unit = {},
+    onRetryReviewSummary: (Int) -> Unit = {},
     onOpenCanonicalDetail: (CanonicalGameId) -> Unit = {},
     onRetryCanonicalDetail: () -> Unit = {},
     reviewState: ReviewSectionState = ReviewSectionState.Idle,
@@ -664,7 +672,6 @@ internal fun LibraryScreenContent(
 
     fun clearSelectedSource() {
         supersedeRouteRequests()
-        if (showCanonicalDetail) onClearCanonicalDetail()
         selectedCardIdentity = null
         selectedSourceItem = null
         selectedPresentationCard = null
@@ -934,19 +941,10 @@ internal fun LibraryScreenContent(
     }
 
     BackHandler(
-        enabled = selectedCardIdentity != null &&
-            !isSteamMatchPickerOpen &&
-            !(showCanonicalDetail && discussionState is DiscussionSectionState.Thread),
-    ) {
-        clearSelectedSource()
-    }
-
-    BackHandler(
-        enabled = showCanonicalDetail &&
-            discussionState is DiscussionSectionState.Thread &&
+        enabled = selectedCardIdentity != null && !showCanonicalDetail &&
             !isSteamMatchPickerOpen,
     ) {
-        onCloseDiscussionThread()
+        clearSelectedSource()
     }
 
     BackHandler(enabled = copiesSheetCardKey != null && !isSteamMatchPickerOpen) {
@@ -1394,15 +1392,9 @@ internal fun LibraryScreenContent(
                             if (copiesSheetCardKey != null) {
                                 dismissCopiesSheet()
                                 true
-                            } else if (
-                                showCanonicalDetail &&
-                                discussionState is DiscussionSectionState.Thread
-                            ) {
-                                onCloseDiscussionThread()
-                                true
                             } else if (showCanonicalDetail) {
-                                clearSelectedSource()
-                                true
+                                // The native detail owns tab-aware thread/detail Back.
+                                false
                             } else if (selectedCardIdentity != null) {
                                 // Let LibraryAppScreen handle its own B-button
                                 false
@@ -1680,8 +1672,16 @@ internal fun LibraryScreenContent(
                     ?: selectedCanonicalCard.copies.firstOrNull { copy -> copy.source == GameSource.STEAM }
                 val detailSteamMatchStatus =
                     detailSteamMatchCopy?.steamMatchStatus(steamMatchState.isScanning)
+                val clearCanonicalDetail by rememberUpdatedState(onClearCanonicalDetail)
+                DisposableEffect(Unit) {
+                    onDispose { clearCanonicalDetail() }
+                }
                 CanonicalGameDetailScreen(
                     state = gameDetailState,
+                    reviewSummaryState = reviewSummaryState,
+                    cachedReviewCount = selectedCanonicalCard.steamReviewCount,
+                    onLoadReviewSummary = { selectedCanonicalCard.steamAppId?.let(onLoadReviewSummary) },
+                    onRetryReviewSummary = { selectedCanonicalCard.steamAppId?.let(onRetryReviewSummary) },
                     fallbackTitle = selectedCanonicalCard.displayName,
                     fallbackImageUrl = selectedCanonicalCard.headerImageUrl,
                     steamAppId = selectedCanonicalCard.steamAppId,
@@ -1730,6 +1730,7 @@ internal fun LibraryScreenContent(
                     },
                     actionInProgress = routeRequestIdentity != null,
                     onRetry = onRetryCanonicalDetail,
+                    backEnabled = !isSteamMatchPickerOpen && copiesSheetCardKey == null,
                 )
             } else {
                 LibraryDetailPane(

@@ -51,7 +51,7 @@ class SteamReviewSummaryProviderTest {
     }
 
     @Test
-    fun aggregateOnlyResponseUsesMinimumRequestAndReturnsOnlyTotal() = runTest {
+    fun aggregateOnlyResponseUsesMinimumRequestAndReturnsOnlyPublicSummary() = runTest {
         server.enqueue(
             MockResponse().setBody(
                 """
@@ -66,9 +66,9 @@ class SteamReviewSummaryProviderTest {
 
         val summary = provider().fetch(480)
 
-        assertEquals(SteamReviewSummary(totalReviews = 12_345), summary)
+        assertEquals(SteamReviewSummary(totalReviews = 12_345, description = "public-summary"), summary)
         assertEquals(
-            listOf("totalReviews"),
+            listOf("totalReviews", "positiveReviews", "negativeReviews", "score", "description"),
             SteamReviewSummary::class.java.declaredFields
                 .filterNot { it.isSynthetic || Modifier.isStatic(it.modifiers) }
                 .map { it.name },
@@ -200,6 +200,39 @@ class SteamReviewSummaryProviderTest {
         job.cancelAndJoin()
 
         assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun retainsPublicAggregateRatingWithoutAnyReviewOrAuthorData() = runTest {
+        server.enqueue(MockResponse().setBody("""
+            {"success":1,"query_summary":{"total_reviews":100,"total_positive":90,"total_negative":10,
+                "review_score":8,"review_score_desc":"<b>Very Positive</b>"},
+             "reviews":[{"author":{"steamid":"private-steamid"},"review":"unused-body"}]}
+        """.trimIndent()))
+        val summary = provider().fetch(480)
+        fun field(name: String): Any? = summary.javaClass.methods.firstOrNull { it.name == name }?.invoke(summary)
+        assertEquals(90, field("getPositiveReviews"))
+        assertEquals(10, field("getNegativeReviews"))
+        assertEquals(8, field("getScore"))
+        assertEquals("Very Positive", field("getDescription"))
+        assertFalse(summary.toString().contains("private-steamid"))
+        assertFalse(summary.toString().contains("unused-body"))
+    }
+
+    @Test
+    fun rejectsRedirectToAnotherGameEvenOnAllowedHost() = runTest {
+        server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", server.url("/appreviews/999?json=1")))
+        server.enqueue(MockResponse().setBody("{\"query_summary\":{\"total_reviews\":5}}"))
+        assertUnavailable { provider().fetch(480) }
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun retriesRateLimitWithoutChangingSummaryRequest() = runTest {
+        server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "0"))
+        server.enqueue(MockResponse().setBody("{\"query_summary\":{\"total_reviews\":5}}"))
+        assertEquals(5, provider().fetch(480).totalReviews)
+        assertEquals(2, server.requestCount)
     }
 
     private fun provider(client: OkHttpClient = client()) = SteamReviewSummaryProvider(

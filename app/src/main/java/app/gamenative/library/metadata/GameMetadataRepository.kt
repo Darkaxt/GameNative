@@ -31,6 +31,7 @@ sealed interface GameDetailState {
         val provider: MetadataProvider = MetadataProvider.STEAM_APPDETAILS,
         val stale: Boolean,
         val refreshFailed: Boolean = false,
+        val provenance: GameMetadataProvenance? = null,
     ) : GameDetailState
 
     data class Unavailable(
@@ -90,6 +91,7 @@ class RoomGameMetadataRepository @Inject constructor(
                 GameDetailState.Content(
                     metadata = initial.metadata,
                     provider = initial.provider,
+                    provenance = initial.provenance,
                     stale = initialStale,
                 ),
             )
@@ -110,6 +112,7 @@ class RoomGameMetadataRepository @Inject constructor(
                             GameDetailState.Content(
                                 metadata = initial.metadata,
                                 provider = initial.provider,
+                                provenance = initial.provenance,
                                 stale = true,
                                 refreshFailed = true,
                             ),
@@ -132,6 +135,7 @@ class RoomGameMetadataRepository @Inject constructor(
                 GameDetailState.Content(
                     metadata = snapshot.metadata,
                     provider = snapshot.provider,
+                    provenance = snapshot.provenance,
                     stale = entity.isStale(clock.nowEpochMs()),
                     refreshFailed = refreshFailed && !isNewerThanInitial,
                 ),
@@ -245,6 +249,7 @@ class RoomGameMetadataRepository @Inject constructor(
             DecodedMetadataSnapshot(
                 metadata = metadata,
                 provider = provenance.provider,
+                provenance = provenance,
             )
         } catch (_: SerializationException) {
             null
@@ -255,7 +260,7 @@ class RoomGameMetadataRepository @Inject constructor(
 
     private fun GameMetadataProvenance.matchesSourceRevision(sourceRevision: String): Boolean =
         when (sourceRevision) {
-            SOURCE_REVISION -> provider == MetadataProvider.STEAM_APPDETAILS
+            SOURCE_REVISION, LEGACY_STEAM_SOURCE_REVISION -> provider == MetadataProvider.STEAM_APPDETAILS
             EPIC_CMS_SOURCE_REVISION ->
                 provider == MetadataProvider.EPIC_CMS &&
                     source == GameSource.EPIC.name &&
@@ -268,7 +273,8 @@ class RoomGameMetadataRepository @Inject constructor(
         }
 
     private fun GameDetailSnapshotEntity.isStale(nowEpochMs: Long): Boolean =
-        nowEpochMs - fetchedAt >= GameMetadataRepository.CACHE_MAX_AGE_MS
+        sourceRevision == LEGACY_STEAM_SOURCE_REVISION ||
+            nowEpochMs - fetchedAt >= GameMetadataRepository.CACHE_MAX_AGE_MS
 
     private fun CanonicalGameMetadata.provenance(): GameMetadataProvenance {
         val fields = buildSet {
@@ -288,6 +294,12 @@ class RoomGameMetadataRepository @Inject constructor(
             if (features.isNotEmpty()) add(MetadataField.FEATURES)
             if (achievementCount != null) add(MetadataField.ACHIEVEMENT_COUNT)
             if (dlcCount != null) add(MetadataField.DLC_COUNT)
+            if (languageSupport.isNotEmpty()) add(MetadataField.LANGUAGE_SUPPORT)
+            if (storePrice != null) add(MetadataField.STORE_PRICE)
+            if (storePackages.isNotEmpty()) add(MetadataField.STORE_PACKAGES)
+            if (contentRatings != null) add(MetadataField.CONTENT_RATINGS)
+            if (storeLinks != null) add(MetadataField.STORE_LINKS)
+            if (isFree != null) add(MetadataField.IS_FREE)
         }
         return GameMetadataProvenance(
             provider = MetadataProvider.STEAM_APPDETAILS,
@@ -298,10 +310,12 @@ class RoomGameMetadataRepository @Inject constructor(
     private data class DecodedMetadataSnapshot(
         val metadata: CanonicalGameMetadata,
         val provider: MetadataProvider,
+        val provenance: GameMetadataProvenance,
     )
 
     private companion object {
-        const val SOURCE_REVISION = "steam_appdetails_v2"
+        const val SOURCE_REVISION = "steam_appdetails_v3"
+        const val LEGACY_STEAM_SOURCE_REVISION = "steam_appdetails_v2"
         const val EPIC_CMS_SOURCE_REVISION = "epic_cms_v1"
         val JSON = Json {
             encodeDefaults = true

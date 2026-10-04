@@ -1055,6 +1055,20 @@ class CanonicalLibraryRepositoryTest {
         assertEquals(1f, card.gridHeroImageScale)
     }
 
+    @Test
+    fun extendedSteamSnapshotKeepsCardPresentationWithoutLosingLegacyCacheSupport() = runTest {
+        val game = game(ID_A, primarySource = GameSource.GOG).copy(steamAppId = 10)
+        val relationship = match(game, GameSource.GOG, "20", MatchConfidence.HIGH)
+        val snapshot = steamSnapshot(game).copy(sourceRevision = "steam_appdetails_v3")
+        val card = harness(
+            listOf(aggregate(game, listOf(relationship)).copy(detailSnapshots = listOf(snapshot))),
+            mapOf(relationship.key() to available(relationship.key(), headerImageUrl = "source-header")),
+        ).repository.observeCards().first().single()
+        assertEquals("Cached Steam title", card.displayName)
+        assertEquals(STEAM_HEADER, card.headerImageUrl)
+        assertEquals(setOf(GameSource.GOG), card.ownedSources)
+    }
+
     private fun steamSnapshot(game: CanonicalGameEntity, header: String = STEAM_HEADER): GameDetailSnapshotEntity {
         val locale = SystemMetadataLocaleProvider().current()
         val metadata = CanonicalGameMetadata(

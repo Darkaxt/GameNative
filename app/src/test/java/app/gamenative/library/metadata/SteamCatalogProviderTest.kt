@@ -6,6 +6,11 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -371,6 +376,85 @@ class SteamCatalogProviderTest {
         assertFalse(output.contains("appdetails"))
         assertFalse(output.contains(server.hostName))
     }
+
+    @Test
+    fun retainsReadOnlyRegionalPricePackagesRatingsAndSupportLinks() = runTest {
+        server.enqueue(MockResponse().setBody(extendedFixture()))
+        val metadata = requireNotNull(provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "GB")))
+        val payload = Json.parseToJsonElement(Json.encodeToString(metadata)).jsonObject
+
+        val price = payload["storePrice"]?.jsonObject
+        assertEquals("GBP", price?.get("currency")?.jsonPrimitive?.content)
+        assertEquals("GB", price?.get("country")?.jsonPrimitive?.content)
+        assertEquals("2499", price?.get("initialMinor")?.jsonPrimitive?.content)
+        assertEquals("1249", price?.get("finalMinor")?.jsonPrimitive?.content)
+        assertEquals("50", price?.get("discountPercent")?.jsonPrimitive?.content)
+        val packages = payload["storePackages"]?.jsonArray
+        assertEquals("Fixture Deluxe Edition", packages?.single()?.jsonObject?.get("label")?.jsonPrimitive?.content)
+        val ratings = payload["contentRatings"]?.jsonObject
+        assertEquals("18", ratings?.get("requiredAge")?.jsonPrimitive?.content)
+        assertEquals("86", ratings?.get("criticScore")?.jsonPrimitive?.content)
+        assertEquals("Fantasy violence", ratings?.get("notes")?.jsonPrimitive?.content)
+        val links = payload["storeLinks"]?.jsonObject
+        assertEquals("https://studio.example/game", links?.get("website")?.jsonPrimitive?.content)
+        assertEquals("https://studio.example/support", links?.get("support")?.jsonPrimitive?.content)
+        assertEquals("https://store.steampowered.com/manual/424242", links?.get("manual")?.jsonPrimitive?.content)
+        assertEquals("Fixture Game", metadata.title)
+    }
+
+    @Test
+    fun languageAudioMarkersDoNotInventInterfaceOrSubtitleCapabilities() = runTest {
+        server.enqueue(MockResponse().setBody(extendedFixture()))
+        val metadata = requireNotNull(provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "GB")))
+        val payload = Json.parseToJsonElement(Json.encodeToString(metadata)).jsonObject
+        val languages = payload["languageSupport"]?.jsonArray
+        assertEquals(2, languages?.size)
+        assertEquals("English", languages?.first()?.jsonObject?.get("name")?.jsonPrimitive?.content)
+        assertEquals("true", languages?.first()?.jsonObject?.get("fullAudioSupported")?.jsonPrimitive?.content)
+        assertEquals("false", languages?.last()?.jsonObject?.get("fullAudioSupported")?.jsonPrimitive?.content)
+        assertNull(languages?.first()?.jsonObject?.get("interfaceSupported"))
+        assertNull(languages?.first()?.jsonObject?.get("subtitlesSupported"))
+        assertEquals(listOf("English", "French"), metadata.languages)
+    }
+
+    @Test
+    fun malformedExtendedFieldsAndCredentialLinksDoNotDiscardDescriptions() = runTest {
+        server.enqueue(MockResponse().setBody(extendedFixture()
+            .replace("\"initial\": 2499", "\"initial\": -1")
+            .replace("\"score\": 86", "\"score\": 999")
+            .replace("https://studio.example/game", "https://secret@studio.example/game")
+            .replace("https://studio.example/support", "https://studio.example/support?token=privateMarker")
+            .replace("https://store.steampowered.com/manual/424242", "javascript:privateMarker()")))
+        val metadata = requireNotNull(provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "GB")))
+        val encoded = Json.encodeToString(metadata)
+        val payload = Json.parseToJsonElement(encoded).jsonObject
+        assertNull(payload["storePrice"])
+        assertNull(payload["contentRatings"]?.jsonObject?.get("criticScore"))
+        assertFalse(encoded.contains("secret@"))
+        assertFalse(encoded.contains("token="))
+        assertFalse(encoded.contains("privateMarker"))
+        assertEquals("Hello & welcome", metadata.shortDescription)
+        assertEquals("18", payload["contentRatings"]?.jsonObject?.get("requiredAge")?.jsonPrimitive?.content)
+    }
+
+    private fun extendedFixture(): String = successFixture().replaceFirst(
+        "\"data\": {",
+        """
+        "data": {
+          "is_free": false,
+          "required_age": "18",
+          "metacritic": {"score": 86},
+          "content_descriptors": {"ids": [2, 5], "notes": "<b>Fantasy violence</b>"},
+          "website": "https://studio.example/game",
+          "support_info": {"url": "https://studio.example/support", "email": "not-persisted@example.com"},
+          "manual": "https://store.steampowered.com/manual/424242",
+          "price_overview": {"currency": "GBP", "initial": 2499, "final": 1249, "discount_percent": 50},
+          "package_groups": [{"subs": [{"packageid": 123, "option_text": "<b>Fixture Deluxe Edition</b>", "price_in_cents_with_discount": 2499}]}],
+        """.trimIndent(),
+    ).replace(
+        "<strong>English</strong>, French<br>German",
+        "English<strong>*</strong>, French<br><strong>*</strong>languages with full audio support",
+    )
 
     private fun provider(): SteamCatalogProvider = SteamCatalogProvider(
         client = OkHttpClient.Builder().followRedirects(false).build(),

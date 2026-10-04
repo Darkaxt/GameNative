@@ -51,7 +51,7 @@ class GameMetadataRepositoryTest {
         assertEquals(canonicalId.value, stored.canonicalId)
         assertEquals("en-US", stored.locale)
         assertEquals("US", stored.country)
-        assertEquals("steam_appdetails_v2", stored.sourceRevision)
+        assertEquals("steam_appdetails_v3", stored.sourceRevision)
         assertTrue(stored.provenanceJson.contains("STEAM_APPDETAILS"))
         assertFalse(stored.payloadJson.contains(TRUSTED_APP_ID.toString()))
         assertEquals(listOf(MetadataFacet(1, "Action")), facetRepository.lastGenres)
@@ -332,6 +332,41 @@ class GameMetadataRepositoryTest {
         }
     }
 
+    @Test
+    fun cachedContentRetainsExactFieldProvenanceForUiWithoutGuessing() = runTest {
+        val fields = setOf(MetadataField.TITLE, MetadataField.RELEASE_DATE)
+        val snapshot = snapshot(metadata("Cached title", NOW)).copy(
+            provenanceJson = JSON.encodeToString(GameMetadataProvenance(MetadataProvider.STEAM_APPDETAILS, fields)),
+        )
+        val repository = repository(FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)),
+            FakeSnapshotDao(snapshot), FakeProvider(failure = AssertionError("fresh cache must not fetch")))
+        val content = repository.observe(canonicalId()).first() as GameDetailState.Content
+        val provenance = content.javaClass.methods.firstOrNull { it.name == "getProvenance" }
+            ?.invoke(content) as? GameMetadataProvenance
+
+        assertEquals(fields, provenance?.fields)
+        assertEquals(MetadataProvider.STEAM_APPDETAILS, provenance?.provider)
+    }
+
+    @Test
+    fun olderUsableDetailSchemaIsServedStaleBeforeItsMissingFieldsRefresh() = runTest {
+        val cached = snapshot(metadata("Old cached title", NOW)).copy(sourceRevision = "steam_appdetails_v2")
+        val repository = repository(FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)), FakeSnapshotDao(cached),
+            FakeProvider(metadata("Fresh title", NOW)))
+        val first = repository.observe(canonicalId()).first() as GameDetailState.Content
+        assertEquals("Old cached title", first.metadata.title)
+        assertTrue(first.stale)
+    }
+
+    @Test
+    fun refreshedExtendedDetailsPublishNewSourceRevision() = runTest {
+        val snapshots = FakeSnapshotDao()
+        val repository = repository(FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)), snapshots,
+            FakeProvider(metadata("Fresh title", NOW)))
+        assertEquals(MetadataRefreshResult.Refreshed, repository.refresh(canonicalId()))
+        assertEquals("steam_appdetails_v3", snapshots.current.value?.sourceRevision)
+    }
+
     private fun repository(
         gameDao: CanonicalGameDao,
         snapshotDao: GameDetailSnapshotDao,
@@ -395,7 +430,7 @@ class GameMetadataRepositoryTest {
                 ),
             ),
             fetchedAt = metadata.fetchedAtEpochMs,
-            sourceRevision = "steam_appdetails_v2",
+            sourceRevision = "steam_appdetails_v3",
         )
 
     private fun decode(entity: GameDetailSnapshotEntity?): CanonicalGameMetadata =

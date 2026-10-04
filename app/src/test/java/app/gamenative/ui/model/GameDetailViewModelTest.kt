@@ -12,6 +12,8 @@ import app.gamenative.library.community.SteamReviewCard
 import app.gamenative.library.community.SteamReviewPage
 import app.gamenative.library.community.SteamReviewPageSource
 import app.gamenative.library.community.SteamReviewQuery
+import app.gamenative.library.discovery.SteamReviewSummary
+import app.gamenative.library.discovery.SteamReviewSummarySource
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GameMetadataRepository
@@ -61,7 +63,7 @@ class GameDetailViewModelTest {
                 ),
             ),
         )
-        val viewModel = GameDetailViewModel(repository, emptyReviews(), emptyDiscussions())
+        val viewModel = GameDetailViewModel(repository, emptyReviews(), emptyDiscussions(), emptySummary())
 
         viewModel.load(id)
         runCurrent()
@@ -85,7 +87,7 @@ class GameDetailViewModelTest {
                 ),
             ),
         )
-        val viewModel = GameDetailViewModel(repository, emptyReviews(), emptyDiscussions())
+        val viewModel = GameDetailViewModel(repository, emptyReviews(), emptyDiscussions(), emptySummary())
 
         viewModel.load(first)
         runCurrent()
@@ -104,7 +106,7 @@ class GameDetailViewModelTest {
         val repository = FakeRepository(
             mutableMapOf(id to MutableStateFlow(GameDetailState.Unavailable(null))),
         )
-        val viewModel = GameDetailViewModel(repository, emptyReviews(), emptyDiscussions())
+        val viewModel = GameDetailViewModel(repository, emptyReviews(), emptyDiscussions(), emptySummary())
         viewModel.load(id)
         runCurrent()
 
@@ -126,7 +128,7 @@ class GameDetailViewModelTest {
             }
         }
         val repository = FakeRepository(mutableMapOf())
-        val viewModel = GameDetailViewModel(repository, reviewSource, emptyDiscussions())
+        val viewModel = GameDetailViewModel(repository, reviewSource, emptyDiscussions(), emptySummary())
 
         viewModel.loadReviews(steamAppId = 42, isOffline = false)
         runCurrent()
@@ -169,6 +171,7 @@ class GameDetailViewModelTest {
             FakeRepository(mutableMapOf()),
             reviewSource,
             emptyDiscussions(),
+            emptySummary(),
         )
 
         viewModel.loadReviews(steamAppId = 42, isOffline = false)
@@ -209,6 +212,7 @@ class GameDetailViewModelTest {
             FakeRepository(mutableMapOf()),
             reviewSource,
             emptyDiscussions(),
+            emptySummary(),
         )
 
         viewModel.loadReviews(steamAppId = 42, isOffline = false)
@@ -264,6 +268,7 @@ class GameDetailViewModelTest {
             FakeRepository(mutableMapOf()),
             emptyReviews(),
             source,
+            emptySummary(),
         )
         viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
         runCurrent()
@@ -314,6 +319,7 @@ class GameDetailViewModelTest {
             FakeRepository(mutableMapOf()),
             emptyReviews(),
             source,
+            emptySummary(),
         )
 
         viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
@@ -376,6 +382,7 @@ class GameDetailViewModelTest {
             FakeRepository(mutableMapOf()),
             emptyReviews(),
             source,
+            emptySummary(),
         )
 
         viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
@@ -445,6 +452,7 @@ class GameDetailViewModelTest {
             FakeRepository(mutableMapOf()),
             emptyReviews(),
             source,
+            emptySummary(),
         )
 
         viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
@@ -505,7 +513,7 @@ class GameDetailViewModelTest {
                 }
             }
         }
-        val viewModel = GameDetailViewModel(FakeRepository(mutableMapOf()), emptyReviews(), source)
+        val viewModel = GameDetailViewModel(FakeRepository(mutableMapOf()), emptyReviews(), source, emptySummary())
 
         viewModel.loadDiscussions(steamAppId = 42, isOffline = false)
         runCurrent()
@@ -530,6 +538,145 @@ class GameDetailViewModelTest {
             threadRoutes,
         )
     }
+
+    @Test
+    fun overviewSummaryLoadsOnceAndClearRemovesItsContent() = runTest(scheduler) {
+        val calls = mutableListOf<Int>()
+        val viewModel = summaryViewModel(SteamReviewSummarySource {
+            calls += it
+            SteamReviewSummary(100, 90, 10, 8, "Very Positive")
+        })
+        loadSummary(viewModel, 480)
+        runCurrent()
+        loadSummary(viewModel, 480)
+        runCurrent()
+        assertEquals(listOf(480), calls)
+        val state = summaryState(viewModel)
+        assertTrue(state is ReviewSummaryState.Content)
+        assertEquals(SteamReviewSummary(100, 90, 10, 8, "Very Positive"),
+            (state as ReviewSummaryState.Content).summary)
+        viewModel.clearDetail()
+        assertEquals("Idle", summaryState(viewModel)?.javaClass?.simpleName)
+    }
+
+    @Test
+    fun overviewSummaryOfflineSkipsProviderAndReconnectLoads() = runTest(scheduler) {
+        val calls = mutableListOf<Int>()
+        val viewModel = summaryViewModel(SteamReviewSummarySource {
+            calls += it
+            SteamReviewSummary(5)
+        })
+        loadSummary(viewModel, 480, offline = true)
+        runCurrent()
+        assertTrue(calls.isEmpty())
+        assertEquals("Offline", summaryState(viewModel)?.javaClass?.simpleName)
+        loadSummary(viewModel, 480)
+        runCurrent()
+        assertEquals(listOf(480), calls)
+        assertEquals("Content", summaryState(viewModel)?.javaClass?.simpleName)
+    }
+
+    @Test
+    fun overviewSummaryFailureIsFixedAndExplicitRetryRecovers() = runTest(scheduler) {
+        var calls = 0
+        val viewModel = summaryViewModel(SteamReviewSummarySource {
+            if (calls++ == 0) throw java.io.IOException("private-error")
+            SteamReviewSummary(7)
+        })
+        loadSummary(viewModel, 480)
+        runCurrent()
+        assertEquals("Unavailable", summaryState(viewModel)?.javaClass?.simpleName)
+        assertTrue(!summaryState(viewModel).toString().contains("private-error"))
+        loadSummary(viewModel, 480, force = true)
+        runCurrent()
+        assertEquals(2, calls)
+        assertEquals("Content", summaryState(viewModel)?.javaClass?.simpleName)
+    }
+
+    @Test
+    fun clearedOverviewRejectsLateSummaryEvenWhenProviderIgnoresCancellation() = runTest(scheduler) {
+        val release = CompletableDeferred<Unit>()
+        val viewModel = summaryViewModel(SteamReviewSummarySource {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+            SteamReviewSummary(100)
+        })
+        loadSummary(viewModel, 480)
+        runCurrent()
+        viewModel.clearDetail()
+        release.complete(Unit)
+        runCurrent()
+        assertEquals("Idle", summaryState(viewModel)?.javaClass?.simpleName)
+    }
+
+    @Test
+    fun overviewSummaryReusesSixHourPublicCacheAfterDetailCloses() = runTest(scheduler) {
+        var calls = 0
+        var now = 1_000L
+        val viewModel = GameDetailViewModel(FakeRepository(mutableMapOf()), emptyReviews(), emptyDiscussions(),
+            SteamReviewSummarySource { calls++; SteamReviewSummary(100) },
+            app.gamenative.library.metadata.MetadataClock { now })
+        loadSummary(viewModel, 480)
+        runCurrent()
+        viewModel.clearDetail()
+        now += 60_000
+        loadSummary(viewModel, 480)
+        runCurrent()
+        assertEquals(1, calls)
+        assertEquals(100, (viewModel.reviewSummaryState.value as ReviewSummaryState.Content).summary.totalReviews)
+    }
+
+    @Test
+    fun staleOverviewSummarySurvivesOfflineAndFailedRefreshThenExplicitRetry() = runTest(scheduler) {
+        var now = 1_000L
+        var fail = false
+        val viewModel = GameDetailViewModel(FakeRepository(mutableMapOf()), emptyReviews(), emptyDiscussions(),
+            SteamReviewSummarySource { if (fail) throw java.io.IOException("private-error"); SteamReviewSummary(100) },
+            app.gamenative.library.metadata.MetadataClock { now })
+        loadSummary(viewModel, 480)
+        runCurrent()
+        viewModel.clearDetail()
+        now += 6 * 60 * 60 * 1_000L
+        loadSummary(viewModel, 480, offline = true)
+        runCurrent()
+        assertTrue((viewModel.reviewSummaryState.value as? ReviewSummaryState.Content)?.stale == true)
+        fail = true
+        loadSummary(viewModel, 480)
+        runCurrent()
+        val failed = viewModel.reviewSummaryState.value as ReviewSummaryState.Content
+        assertTrue(failed.refreshFailed)
+        assertEquals(100, failed.summary.totalReviews)
+        fail = false
+        loadSummary(viewModel, 480, force = true)
+        runCurrent()
+        assertTrue(!(viewModel.reviewSummaryState.value as ReviewSummaryState.Content).refreshFailed)
+    }
+
+    @Test
+    fun switchingOverviewIdentityRejectsLatePreviousGameSummary() = runTest(scheduler) {
+        val release = CompletableDeferred<Unit>()
+        val viewModel = summaryViewModel(SteamReviewSummarySource { appId ->
+            if (appId == 480) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+            SteamReviewSummary(appId)
+        })
+        loadSummary(viewModel, 480)
+        runCurrent()
+        loadSummary(viewModel, 999)
+        runCurrent()
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(999, (viewModel.reviewSummaryState.value as ReviewSummaryState.Content).summary.totalReviews)
+    }
+
+    private fun summaryViewModel(source: SteamReviewSummarySource) =
+        GameDetailViewModel(FakeRepository(mutableMapOf()), emptyReviews(), emptyDiscussions(), source)
+
+    private fun loadSummary(viewModel: GameDetailViewModel, appId: Int, offline: Boolean = false, force: Boolean = false) {
+        viewModel.loadReviewSummary(appId, offline, force)
+    }
+
+    private fun summaryState(viewModel: GameDetailViewModel): ReviewSummaryState = viewModel.reviewSummaryState.value
+
+    private fun emptySummary() = SteamReviewSummarySource { SteamReviewSummary(0) }
 
     private fun emptyReviews() = SteamReviewPageSource { _, _, _ ->
         SteamReviewPage(emptyList(), null)

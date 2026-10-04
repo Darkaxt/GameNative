@@ -2,6 +2,8 @@ package app.gamenative.ui.screen.library.components
 
 import android.text.format.DateUtils
 import android.text.format.Formatter
+import android.view.KeyEvent
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +37,7 @@ import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,7 +48,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -90,12 +96,27 @@ internal fun CanonicalCopiesSheet(
     actionInProgress: Boolean = false,
 ) {
     var pendingSeparation by remember(card.key) { mutableStateOf<OwnedCopySummary?>(null) }
+    val sheetFocusRequester = remember(card.key) { FocusRequester() }
+    val inputModeManager = LocalInputModeManager.current
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
-        modifier = modifier.testTag("copies-sheet"),
+        modifier = modifier
+            .testTag("copies-sheet")
+            .onPreviewKeyEvent { event ->
+                if (event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
+                    event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+                    onDismissRequest()
+                    true
+                } else false
+            }
+            .focusRequester(sheetFocusRequester)
+            .focusable(),
     ) {
+        LaunchedEffect(sheetFocusRequester, inputModeManager.inputMode) {
+            if (inputModeManager.inputMode == InputMode.Keyboard) sheetFocusRequester.requestFocus()
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()

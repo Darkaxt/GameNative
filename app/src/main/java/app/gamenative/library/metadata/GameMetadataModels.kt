@@ -24,6 +24,51 @@ data class CanonicalGameMetadata(
     val achievementCount: Int?,
     val dlcCount: Int?,
     val fetchedAtEpochMs: Long,
+    val languageSupport: List<GameLanguageSupport> = emptyList(),
+    val storePrice: GameStorePrice? = null,
+    val storePackages: List<GameStorePackage> = emptyList(),
+    val contentRatings: GameContentRatings? = null,
+    val storeLinks: GameStoreLinks? = null,
+    val isFree: Boolean? = null,
+)
+
+@Serializable
+data class GameLanguageSupport(
+    val name: String,
+    val fullAudioSupported: Boolean? = null,
+    val interfaceSupported: Boolean? = null,
+    val subtitlesSupported: Boolean? = null,
+)
+
+@Serializable
+data class GameStorePrice(
+    val currency: String,
+    val country: String,
+    val initialMinor: Int,
+    val finalMinor: Int,
+    val discountPercent: Int,
+)
+
+@Serializable
+data class GameStorePackage(
+    val packageId: Int,
+    val label: String,
+    val finalMinor: Int? = null,
+)
+
+@Serializable
+data class GameContentRatings(
+    val requiredAge: Int? = null,
+    val criticScore: Int? = null,
+    val descriptorIds: List<Int> = emptyList(),
+    val notes: String? = null,
+)
+
+@Serializable
+data class GameStoreLinks(
+    val website: String? = null,
+    val support: String? = null,
+    val manual: String? = null,
 )
 
 data class SteamCatalogRecord(
@@ -107,6 +152,12 @@ enum class MetadataField {
     FEATURES,
     ACHIEVEMENT_COUNT,
     DLC_COUNT,
+    LANGUAGE_SUPPORT,
+    STORE_PRICE,
+    STORE_PACKAGES,
+    CONTENT_RATINGS,
+    STORE_LINKS,
+    IS_FREE,
 }
 
 data class MetadataLocale(
@@ -216,6 +267,34 @@ internal fun CanonicalGameMetadata.sanitizedForPersistence(): CanonicalGameMetad
     }.distinctBy { it.id to it.label },
     achievementCount = achievementCount?.takeIf { it >= 0 },
     dlcCount = dlcCount?.takeIf { it >= 0 },
+    languageSupport = languageSupport.take(64).mapNotNull { language ->
+        sanitizeSteamText(language.name)?.take(80)?.takeIf(String::isNotBlank)
+            ?.let { language.copy(name = it) }
+    }.distinctBy(GameLanguageSupport::name),
+    storePrice = storePrice?.takeIf { price ->
+        price.currency.matches(Regex("[A-Z]{3}")) && price.country.matches(Regex("[A-Z]{2}")) &&
+            price.initialMinor >= 0 && price.finalMinor in 0..price.initialMinor && price.discountPercent in 0..100
+    },
+    storePackages = storePackages.take(32).mapNotNull { storePackage ->
+        if (storePackage.packageId <= 0) return@mapNotNull null
+        val label = sanitizeSteamText(storePackage.label)?.take(256) ?: return@mapNotNull null
+        storePackage.copy(label = label, finalMinor = storePackage.finalMinor?.takeIf { it >= 0 })
+    }.distinctBy(GameStorePackage::packageId),
+    contentRatings = contentRatings?.let { ratings ->
+        ratings.copy(
+            requiredAge = ratings.requiredAge?.takeIf { it in 1..120 },
+            criticScore = ratings.criticScore?.takeIf { it in 0..100 },
+            descriptorIds = ratings.descriptorIds.filter { it > 0 }.distinct().take(32),
+            notes = sanitizeSteamText(ratings.notes)?.take(8_192),
+        ).takeIf { it.requiredAge != null || it.criticScore != null || it.descriptorIds.isNotEmpty() || it.notes != null }
+    },
+    storeLinks = storeLinks?.let { links ->
+        GameStoreLinks(
+            website = safeMetadataExternalLink(links.website),
+            support = safeMetadataExternalLink(links.support),
+            manual = safeMetadataExternalLink(links.manual),
+        ).takeIf { it.website != null || it.support != null || it.manual != null }
+    },
 )
 
 private fun decodeHtmlEntities(value: String): String = HTML_ENTITY.replace(value) { match ->

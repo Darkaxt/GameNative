@@ -84,7 +84,7 @@ class SteamCatalogProvider internal constructor(
             .setQueryParameter("cc", locale.normalizedCountry)
             .build()
         val body = executeValidated(Request.Builder().url(requestUrl).get().build())
-        return parseRecord(body, trustedSteamAppId)
+        return parseRecord(body, trustedSteamAppId, locale)
     }
 
     private suspend fun executeValidated(initialRequest: Request): String {
@@ -113,7 +113,7 @@ class SteamCatalogProvider internal constructor(
         throw SteamCatalogException()
     }
 
-    private fun parseRecord(body: String, trustedSteamAppId: Int): SteamCatalogRecord? {
+    private fun parseRecord(body: String, trustedSteamAppId: Int, locale: MetadataLocale): SteamCatalogRecord? {
         val root = JSON.parseToJsonElement(body).objectOrNull() ?: throw SteamCatalogException()
         if (root.size != 1) throw SteamCatalogException()
         val envelope = root[trustedSteamAppId.toString()].objectOrNull()
@@ -150,6 +150,16 @@ class SteamCatalogProvider internal constructor(
                 .nonNegativeIntOrNull(),
             dlcCount = data["dlc"].arrayOrNull()?.size,
             fetchedAtEpochMs = clock.nowEpochMs(),
+            languageSupport = parseLanguageSupport(data["supported_languages"].stringOrNull()),
+            storePrice = parseStorePrice(data["price_overview"], locale),
+            storePackages = parseStorePackages(data["package_groups"]),
+            contentRatings = parseContentRatings(data),
+            storeLinks = GameStoreLinks(
+                website = safeMetadataExternalLink(data["website"].stringOrNull()),
+                support = safeMetadataExternalLink(data["support_info"].objectOrNull()?.get("url").stringOrNull()),
+                manual = safeMetadataExternalLink(data["manual"].stringOrNull()),
+            ),
+            isFree = data["is_free"].booleanOrNull(),
         ).sanitizedForPersistence()
         return SteamCatalogRecord(
             steamAppId = trustedSteamAppId,
@@ -211,14 +221,45 @@ class SteamCatalogProvider internal constructor(
         }
     }
 
-    private fun parseLanguages(raw: String?): List<String> {
-        val separated = raw?.replace(BREAK_TAG, ",") ?: return emptyList()
-        return sanitizeSteamText(separated)
-            ?.split(',')
-            .orEmpty()
-            .map(String::trim)
-            .filter { it.isNotEmpty() && !it.startsWith('*') }
-            .distinct()
+    private fun parseLanguages(raw: String?): List<String> = parseLanguageSupport(raw).map(GameLanguageSupport::name)
+
+    private fun parseLanguageSupport(raw: String?): List<GameLanguageSupport> {
+        val separated = sanitizeSteamText(raw?.replace(BREAK_TAG, ",")) ?: return emptyList()
+        val hasAudioLegend = separated.contains("languages with full audio support", ignoreCase = true)
+        return separated.split(',').take(65).mapNotNull { entry ->
+            val text = entry.trim()
+            if (text.isEmpty() || text.startsWith('*')) return@mapNotNull null
+            val name = text.trimEnd('*').trim().take(80).takeIf(String::isNotBlank) ?: return@mapNotNull null
+            GameLanguageSupport(name = name, fullAudioSupported = if (hasAudioLegend) text.endsWith('*') else null)
+        }.distinctBy(GameLanguageSupport::name).take(64)
+    }
+
+    private fun parseStorePrice(value: JsonElement?, locale: MetadataLocale): GameStorePrice? {
+        val price = value.objectOrNull() ?: return null
+        val currency = price["currency"].stringOrNull()?.takeIf { it.matches(Regex("[A-Z]{3}")) } ?: return null
+        val initial = price["initial"].nonNegativeIntOrNull() ?: return null
+        val final = price["final"].nonNegativeIntOrNull()?.takeIf { it <= initial } ?: return null
+        val discount = price["discount_percent"].nonNegativeIntOrNull()?.takeIf { it <= 100 } ?: return null
+        return GameStorePrice(currency, locale.normalizedCountry, initial, final, discount)
+    }
+
+    private fun parseStorePackages(value: JsonElement?): List<GameStorePackage> = value.arrayOrNull().orEmpty()
+        .take(16).flatMap { it.objectOrNull()?.get("subs").arrayOrNull().orEmpty().take(32) }
+        .mapNotNull { element ->
+            val sub = element.objectOrNull() ?: return@mapNotNull null
+            val id = sub["packageid"].positiveIntOrNull() ?: return@mapNotNull null
+            val label = sanitizeSteamText(sub["option_text"].stringOrNull())?.take(256) ?: return@mapNotNull null
+            GameStorePackage(id, label, sub["price_in_cents_with_discount"].nonNegativeIntOrNull())
+        }.distinctBy(GameStorePackage::packageId).take(32)
+
+    private fun parseContentRatings(data: JsonObject): GameContentRatings {
+        val descriptors = data["content_descriptors"].objectOrNull()
+        return GameContentRatings(
+            requiredAge = data["required_age"].positiveIntOrNull()?.takeIf { it <= 120 },
+            criticScore = data["metacritic"].objectOrNull()?.get("score").nonNegativeIntOrNull()?.takeIf { it <= 100 },
+            descriptorIds = descriptors?.get("ids").arrayOrNull().orEmpty().mapNotNull { it.positiveIntOrNull() }.distinct().take(32),
+            notes = sanitizeSteamText(descriptors?.get("notes").stringOrNull())?.take(8_192),
+        )
     }
 
     private fun parseRequirements(value: JsonElement?): GameRequirements? {
