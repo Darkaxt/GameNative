@@ -41,9 +41,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -52,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
+import app.gamenative.library.canonical.OwnedCopyOperation
+import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.community.DiscussionSectionState
 import app.gamenative.library.community.ReviewSectionState
 import app.gamenative.library.community.SteamReviewQuery
@@ -105,6 +111,9 @@ internal fun CanonicalGameDetailScreen(
     onCloseDiscussionThread: () -> Boolean = { false },
     steamMatchStatus: SteamMatchStatus? = null,
     onFixSteamMatch: (() -> Unit)? = null,
+    copies: List<OwnedCopySummary> = emptyList(),
+    onOperation: (OwnedCopyOperation) -> Unit = {},
+    actionInProgress: Boolean = false,
 ) {
     val metadata = when (state) {
         is GameDetailState.Content -> state.metadata
@@ -161,6 +170,9 @@ internal fun CanonicalGameDetailScreen(
                         .align(Alignment.CenterHorizontally),
                 ) {
                     DetailActions(
+                        copies = copies,
+                        onOperation = onOperation,
+                        actionInProgress = actionInProgress,
                         onCopies = onCopies,
                         onSourceDetails = onSourceDetails,
                     )
@@ -255,6 +267,11 @@ private fun CanonicalHero(
     heroHeight: androidx.compose.ui.unit.Dp,
     onBack: () -> Unit,
 ) {
+    val backFocusRequester = remember { FocusRequester() }
+    val inputMode = LocalInputModeManager.current.inputMode
+    LaunchedEffect(inputMode) {
+        if (inputMode == InputMode.Keyboard) backFocusRequester.requestFocus()
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -289,7 +306,8 @@ private fun CanonicalHero(
             onClick = onBack,
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(8.dp),
+                .padding(8.dp)
+                .focusRequester(backFocusRequester),
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -316,34 +334,85 @@ private fun CanonicalHero(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DetailActions(
+    copies: List<OwnedCopySummary>,
+    onOperation: (OwnedCopyOperation) -> Unit,
+    actionInProgress: Boolean,
     onCopies: () -> Unit,
     onSourceDetails: () -> Unit,
 ) {
-    Row(
+    val operations = listOf(
+        OwnedCopyOperation.PLAY,
+        OwnedCopyOperation.INSTALL,
+        OwnedCopyOperation.UPDATE,
+        OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
+        OwnedCopyOperation.CANCEL_DOWNLOAD,
+        OwnedCopyOperation.UNINSTALL,
+        OwnedCopyOperation.EXPORT_SAVES,
+        OwnedCopyOperation.IMPORT_SAVES,
+    ).filter { operation ->
+        copies.any { copy -> copy.unavailableReason == null && operation in copy.capabilities }
+    }
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Button(
-            onClick = onCopies,
-            modifier = Modifier
-                .weight(1f)
-                .testTag("canonical-detail-copies"),
-        ) {
-            Text(stringResource(R.string.canonical_copies_action))
+        if (operations.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.testTag("canonical-detail-actions"),
+            ) {
+                operations.forEach { operation ->
+                    Button(
+                        onClick = { onOperation(operation) },
+                        enabled = !actionInProgress,
+                        modifier = Modifier.testTag("canonical-detail-operation:${operation.name}"),
+                    ) {
+                        Text(detailOperationLabel(operation))
+                    }
+                }
+            }
         }
-        OutlinedButton(
-            onClick = onSourceDetails,
-            modifier = Modifier
-                .weight(1f)
-                .testTag("canonical-detail-source-details"),
-        ) {
-            Text(stringResource(R.string.canonical_open_source_details))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = onCopies,
+                enabled = !actionInProgress,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("canonical-detail-copies"),
+            ) {
+                Text(stringResource(R.string.canonical_copies_action))
+            }
+            OutlinedButton(
+                onClick = onSourceDetails,
+                enabled = !actionInProgress,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("canonical-detail-source-details"),
+            ) {
+                Text(stringResource(R.string.canonical_open_source_details))
+            }
         }
     }
+}
+
+@Composable
+private fun detailOperationLabel(operation: OwnedCopyOperation): String = when (operation) {
+    OwnedCopyOperation.PLAY -> stringResource(R.string.run_app)
+    OwnedCopyOperation.INSTALL -> stringResource(R.string.install)
+    OwnedCopyOperation.UPDATE -> stringResource(R.string.steam_update_title)
+    OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD ->
+        "${stringResource(R.string.pause_download)} / ${stringResource(R.string.resume_download)}"
+    OwnedCopyOperation.CANCEL_DOWNLOAD -> stringResource(R.string.cancel_download_prompt_title)
+    OwnedCopyOperation.UNINSTALL -> stringResource(R.string.uninstall)
+    OwnedCopyOperation.EXPORT_SAVES -> stringResource(R.string.option_export_saves)
+    OwnedCopyOperation.IMPORT_SAVES -> stringResource(R.string.option_import_saves)
+    OwnedCopyOperation.OPEN_SOURCE_DETAILS -> stringResource(R.string.canonical_open_source_details)
 }
 
 @OptIn(ExperimentalLayoutApi::class)

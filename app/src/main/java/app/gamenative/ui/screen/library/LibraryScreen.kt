@@ -747,9 +747,10 @@ internal fun LibraryScreenContent(
         }
     }
 
-    fun openCanonicalSourceDetails(
+    fun routeCanonicalDetailAction(
         identity: LibraryCardIdentity.Canonical,
         card: LibraryCard,
+        operation: OwnedCopyOperation,
     ) {
         val requestEpoch = supersedeRouteRequests()
         routeRequestIdentity = identity
@@ -757,7 +758,7 @@ internal fun LibraryScreenContent(
             when (
                 val result = onRouteCanonicalAction(
                     identity.key,
-                    OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                    operation,
                     null,
                     false,
                 )
@@ -766,7 +767,9 @@ internal fun LibraryScreenContent(
                     if (requestEpoch != routeRequestEpoch) return@launch
                     routeRequestIdentity = null
                     activeActionGuard = result.guard
-                    pendingInitialOperation = null
+                    pendingInitialOperation = operation.takeUnless {
+                        it == OwnedCopyOperation.OPEN_SOURCE_DETAILS
+                    }
                     selectedFocusRestoreIdentity = identity
                     selectedPresentationCard = card
                     selectedSourceItem = result.guard.initialLibraryItem
@@ -1397,6 +1400,9 @@ internal fun LibraryScreenContent(
                             ) {
                                 onCloseDiscussionThread()
                                 true
+                            } else if (showCanonicalDetail) {
+                                clearSelectedSource()
+                                true
                             } else if (selectedCardIdentity != null) {
                                 // Let LibraryAppScreen handle its own B-button
                                 false
@@ -1714,8 +1720,15 @@ internal fun LibraryScreenContent(
                         openCopiesSheet(selectedCanonicalIdentity.key, selectedCanonicalIdentity)
                     },
                     onSourceDetails = {
-                        openCanonicalSourceDetails(selectedCanonicalIdentity, presentationCard)
+                        routeCanonicalDetailAction(
+                            selectedCanonicalIdentity, presentationCard, OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                        )
                     },
+                    copies = selectedCanonicalCard.copies,
+                    onOperation = { operation ->
+                        routeCanonicalDetailAction(selectedCanonicalIdentity, presentationCard, operation)
+                    },
+                    actionInProgress = routeRequestIdentity != null,
                     onRetry = onRetryCanonicalDetail,
                 )
             } else {
