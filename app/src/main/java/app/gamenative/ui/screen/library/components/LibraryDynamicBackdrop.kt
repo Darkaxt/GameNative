@@ -67,7 +67,7 @@ internal fun LibraryDynamicBackdrop(
             if (targetInfo != null) {
                 val imageUrls by produceState(
                     initialValue = GridImageUrls("", ""),
-                    key1 = targetInfo.composeKey,
+                    key1 = targetInfo,
                     key2 = imageRefreshCounter,
                 ) {
                     value = withContext(Dispatchers.IO) {

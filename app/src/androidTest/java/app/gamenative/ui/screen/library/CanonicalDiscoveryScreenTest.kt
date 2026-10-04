@@ -49,6 +49,7 @@ class CanonicalDiscoveryScreenTest {
                         steamCollectionCounts = emptyMap(),
                         skippedDynamicCollections = false,
                         isSteamConnected = false,
+                        hasSteamCredentials = false,
                         isOffline = false,
                         onSteamCollectionToggle = {},
                         onClearSteamCollections = {},

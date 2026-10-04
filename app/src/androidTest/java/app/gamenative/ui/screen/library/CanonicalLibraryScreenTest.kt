@@ -1040,6 +1040,7 @@ class CanonicalLibraryScreenTest {
                     onClickPlay = { _, _ -> },
                     onTestGraphics = {},
                     onPlayWithDiagnostics = {},
+                    onAiDebugRun = {},
                     onRefresh = {},
                     onNavigateRoute = {},
                     onLogout = {},

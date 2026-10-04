@@ -224,7 +224,7 @@ internal fun GridViewCard(
                 ) {
                     produceState<GridImageUrls?>(
                         initialValue = null,
-                        key1 = card.composeKey,
+                        key1 = card,
                         key2 = paneType,
                         key3 = imageRefreshCounter,
                     ) {
@@ -233,7 +233,7 @@ internal fun GridViewCard(
                         }
                     }.value
                 } else {
-                    remember(card.composeKey, paneType, imageRefreshCounter) {
+                    remember(card, paneType, imageRefreshCounter) {
                         getGridImageUrl(context, card, paneType)
                     }
                 }
@@ -259,10 +259,15 @@ internal fun GridViewCard(
                     )
                 }
 
-                val gridHeroZoom = if (!isCapsule && card.gridHeroImageScale != 1f) {
+                val heroScale = if (currentImageUrl == imageUrls.fallback) {
+                    card.artworkFallback?.gridHeroImageScale ?: card.gridHeroImageScale
+                } else {
+                    card.gridHeroImageScale
+                }
+                val gridHeroZoom = if (!isCapsule && heroScale != 1f) {
                     Modifier.graphicsLayer {
-                        scaleX = card.gridHeroImageScale
-                        scaleY = card.gridHeroImageScale
+                        scaleX = heroScale
+                        scaleY = heroScale
                         transformOrigin = TransformOrigin.Center
                     }
                 } else {
@@ -688,13 +693,31 @@ private fun getGridContentScale(paneType: PaneType): ContentScale {
 
 /**
  * Gets the appropriate image URL(s) for a game in grid view.
- * Matches master: source-specific URLs, Steam uses headerImageUrl with heroImageUrl fallback.
+ * Uses canonical cached presentation and its source fallback when available;
+ * otherwise retains source-specific URLs and Steam header/hero behavior.
  */
 internal fun getGridImageUrl(
     context: Context,
     card: LibraryCard,
     paneType: PaneType,
 ): GridImageUrls {
+    card.artworkFallback?.let { fallback ->
+        val isCapsule = paneType == PaneType.GRID_CAPSULE
+        val primary = if (isCapsule) {
+            card.capsuleImageUrl.ifBlank { card.iconUrl }
+        } else {
+            card.headerImageUrl.ifBlank { card.heroImageUrl.ifBlank { card.iconUrl } }
+        }
+        val candidates = if (isCapsule) {
+            listOf(fallback.capsuleImageUrl, fallback.iconUrl, fallback.headerImageUrl, card.headerImageUrl)
+        } else {
+            listOf(fallback.headerImageUrl, fallback.heroImageUrl, fallback.iconUrl)
+        }
+        return GridImageUrls(
+            primary = primary,
+            fallback = candidates.firstOrNull { it.isNotBlank() && it != primary }.orEmpty(),
+        )
+    }
     val source = card.orderedSources.firstOrNull()
     val sourceAppId = card.sourceItemOrNull()?.appId
 

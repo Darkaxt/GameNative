@@ -377,6 +377,7 @@ internal object CanonicalLibraryFilter {
                 headerImageUrl = card.headerImageUrl,
                 heroImageUrl = card.heroImageUrl,
                 gridHeroImageScale = card.gridHeroImageScale,
+                artworkFallback = card.artworkFallback,
                 ownedSources = card.ownedSources,
                 compatibilityStatus = entry.compatibility,
                 gameStats = entry.stats,

@@ -172,6 +172,12 @@ internal fun ListViewCard(
                     }
                 }
 
+                var currentIconUrl by remember(iconUrl, card.artworkFallback) { mutableStateOf(iconUrl) }
+                val fallbackIconUrl = card.artworkFallback?.let { artwork ->
+                    listOf(artwork.iconUrl, artwork.capsuleImageUrl, artwork.headerImageUrl, artwork.heroImageUrl)
+                        .firstOrNull { it.isNotBlank() && it != iconUrl }
+                }
+
                 Box(
                     modifier = Modifier
                         .size(52.dp)
@@ -190,7 +196,12 @@ internal fun ListViewCard(
                         ListItemImage(
                             modifier = Modifier.fillMaxSize(),
                             imageModifier = Modifier.clip(RoundedCornerShape(10.dp)),
-                            image = { iconUrl },
+                            image = { currentIconUrl },
+                            onFailure = {
+                                if (currentIconUrl == iconUrl && fallbackIconUrl != null) {
+                                    currentIconUrl = fallbackIconUrl
+                                }
+                            },
                         )
                     }
                 }

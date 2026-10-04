@@ -273,7 +273,10 @@ class CanonicalLibraryScaleTest {
                 playHistoryDao = history,
                 diagnostics = mockk(relaxed = true),
             )
-            return CanonicalLibraryRepository(dao, registry, diagnostics, mockk<GameFacetRepository>(relaxed = true))
+            return CanonicalLibraryRepository(
+                dao, registry, diagnostics, mockk<GameFacetRepository>(relaxed = true),
+                app.gamenative.library.metadata.SystemMetadataLocaleProvider(),
+            )
         }
     }
 

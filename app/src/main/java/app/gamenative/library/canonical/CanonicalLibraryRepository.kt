@@ -10,6 +10,16 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntime
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.discovery.GameFacetRepository
+import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.GameMetadataProvenance
+import app.gamenative.library.metadata.MetadataLocaleProvider
+import app.gamenative.library.metadata.MetadataProvider
+import app.gamenative.library.metadata.SteamUrlPolicy
+import app.gamenative.library.metadata.sanitizedForPersistence
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.Collections
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,6 +39,7 @@ class CanonicalLibraryRepository @Inject constructor(
     private val runtimeRegistry: OwnedCopyRuntimeRegistry,
     private val diagnostics: CanonicalLibraryDiagnosticSink,
     private val gameFacetRepository: GameFacetRepository,
+    private val localeProvider: MetadataLocaleProvider,
 ) {
     fun observeCards(): Flow<List<CanonicalLibraryCard>> = combine(
         dao.observePresentGames().map(::freezeAggregates),
@@ -127,10 +138,12 @@ class CanonicalLibraryRepository @Inject constructor(
         val entries = unsortedEntries.sortedWith(VISIBLE_RELATIONSHIP_COMPARATOR)
         val aggregate = entries.first().relationship.aggregate
         val game = aggregate.game
+        val steamMetadata = if (key is CanonicalCardKey.Grouped) cachedSteamMetadata(aggregate) else null
         val displayName = when (key) {
             is CanonicalCardKey.Grouped -> aggregate.preferenceOrNull()
                 ?.titleOverride
                 ?.takeIf(String::isNotBlank)
+                ?: steamMetadata?.title
                 ?: game.displayName
             is CanonicalCardKey.Independent -> entries.single().runtime
                 ?.nativeTitle
@@ -142,9 +155,37 @@ class CanonicalLibraryRepository @Inject constructor(
         val preferredCopy = aggregate.preferenceOrNull()
             ?.preferredCopyKeyOrNull()
             ?.takeIf(emittedKeys::contains)
-        val artwork = artwork(entries, game.primaryMetadataSource)
+        val sourceArtwork = artwork(entries, game.primaryMetadataSource)
+        val steamHeader = steamMetadata?.headerImageUrl?.takeIf { raw ->
+            raw.toHttpUrlOrNull()?.let(STEAM_URL_POLICY::isAllowedMediaUrl) == true
+        }
+        val artwork = if (steamHeader != null) {
+            val ownedSteamArtwork = artwork(
+                entries.filter { entry ->
+                    entry.relationship.key.source == GameSource.STEAM &&
+                        entry.relationship.key.stableSourceId.positiveExactDecimalIntOrNull() == game.steamAppId
+                },
+                GameSource.STEAM,
+            )
+            CanonicalCardArtwork(
+                iconUrl = ownedSteamArtwork.iconUrl.ifBlank { steamHeader },
+                capsuleImageUrl = ownedSteamArtwork.capsuleImageUrl.ifBlank {
+                    "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${game.steamAppId}/library_600x900.jpg"
+                },
+                headerImageUrl = ownedSteamArtwork.headerImageUrl.ifBlank { steamHeader },
+                heroImageUrl = ownedSteamArtwork.heroImageUrl.ifBlank { steamHeader },
+                gridHeroImageScale = if (ownedSteamArtwork.heroImageUrl.isNotBlank()) {
+                    ownedSteamArtwork.gridHeroImageScale
+                } else {
+                    1f
+                },
+            )
+        } else {
+            sourceArtwork
+        }
         val aliases = linkedSetOf<String>().apply {
             addName(displayName)
+            steamMetadata?.title?.let { addName(it) }
             if (key is CanonicalCardKey.Grouped) addName(game.displayName)
             entries.forEach { entry ->
                 addName(entry.relationship.match.evidenceDisplayName)
@@ -178,6 +219,7 @@ class CanonicalLibraryRepository @Inject constructor(
             headerImageUrl = artwork.headerImageUrl,
             heroImageUrl = artwork.heroImageUrl,
             gridHeroImageScale = artwork.gridHeroImageScale,
+            artworkFallback = sourceArtwork.takeIf { it != artwork },
             aliases = immutableSet(aliases),
             ownedSources = immutableSet(ownedSources),
             copies = copies,
@@ -272,10 +314,30 @@ class CanonicalLibraryRepository @Inject constructor(
         }
     }
 
+    private fun cachedSteamMetadata(aggregate: CanonicalLibraryAggregate): CanonicalGameMetadata? {
+        if (aggregate.game.steamAppId?.let { it > 0 } != true) return null
+        val locale = localeProvider.current()
+        val snapshot = aggregate.detailSnapshots.singleOrNull {
+            it.canonicalId == aggregate.game.canonicalId && it.locale == locale.normalizedLocale &&
+                it.country == locale.normalizedCountry && it.sourceRevision == "steam_appdetails_v2"
+        } ?: return null
+        return try {
+            val provenance = JSON.decodeFromString<GameMetadataProvenance>(snapshot.provenanceJson)
+            if (provenance.provider != MetadataProvider.STEAM_APPDETAILS) return null
+            JSON.decodeFromString<CanonicalGameMetadata>(snapshot.payloadJson)
+                .sanitizedForPersistence()
+                .takeIf { it.title.isNotBlank() }
+        } catch (_: SerializationException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
+
     private fun artwork(
         entries: List<VisibleRelationship>,
         primarySource: GameSource,
-    ): CardArtwork {
+    ): CanonicalCardArtwork {
         val runtimes = entries.mapNotNull(VisibleRelationship::runtime)
             .sortedWith(
                 compareBy<OwnedCopyRuntime> { runtime ->
@@ -288,7 +350,7 @@ class CanonicalLibraryRepository @Inject constructor(
                     .thenBy { it.key.stableSourceId },
             )
         val heroRuntime = runtimes.firstOrNull { it.heroImageUrl.isNotBlank() }
-        return CardArtwork(
+        return CanonicalCardArtwork(
             iconUrl = runtimes.firstNonblank(OwnedCopyRuntime::iconUrl),
             capsuleImageUrl = runtimes.firstNonblank(OwnedCopyRuntime::capsuleImageUrl),
             headerImageUrl = runtimes.firstNonblank(OwnedCopyRuntime::headerImageUrl),
@@ -312,14 +374,6 @@ class CanonicalLibraryRepository @Inject constructor(
         val unavailable: OwnedCopyRuntimeResult.Unavailable?,
     )
 
-    private data class CardArtwork(
-        val iconUrl: String,
-        val capsuleImageUrl: String,
-        val headerImageUrl: String,
-        val heroImageUrl: String,
-        val gridHeroImageScale: Float,
-    )
-
     private fun freezeAggregates(
         aggregates: List<CanonicalLibraryAggregate>,
     ): List<CanonicalLibraryAggregate> = immutableList(
@@ -336,6 +390,8 @@ class CanonicalLibraryRepository @Inject constructor(
 
     private companion object {
         const val NANOS_PER_MILLISECOND = 1_000_000L
+        val JSON = Json { ignoreUnknownKeys = true }
+        val STEAM_URL_POLICY = SteamUrlPolicy()
 
         val SOURCE_ORDER = listOf(
             GameSource.STEAM,

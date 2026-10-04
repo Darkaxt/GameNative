@@ -9,6 +9,14 @@ import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.ClassificationState
 import app.gamenative.data.canonical.EpicStableSourceId
+import app.gamenative.data.canonical.GameDetailSnapshotEntity
+import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.GameMetadataProvenance
+import app.gamenative.library.metadata.MetadataField
+import app.gamenative.library.metadata.MetadataProvider
+import app.gamenative.library.metadata.SystemMetadataLocaleProvider
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -860,6 +868,209 @@ class CanonicalLibraryRepositoryTest {
         assertEquals(1, cards.single().copies.size)
     }
 
+    @Test
+    fun acceptedNonSteamCardsPreferCachedSteamPresentationWithoutCreatingSteamOwnership() = runTest {
+        SOURCE_ORDER.filter { it != GameSource.STEAM }.forEachIndexed { index, source ->
+            val game = game(ID_A, displayName = "Source title", primarySource = source).copy(steamAppId = 10)
+            val relationship = match(game, source, stableId(source, index + 1), MatchConfidence.HIGH)
+            val snapshot = steamSnapshot(game)
+            val card = harness(
+                listOf(aggregate(game, listOf(relationship)).copy(detailSnapshots = listOf(snapshot))),
+                mapOf(relationship.key() to available(
+                    relationship.key(), nativeTitle = "Owned source title", headerImageUrl = "source-header",
+                    capsuleImageUrl = "source-capsule", heroImageUrl = "source-hero", gridHeroImageScale = 1.3f,
+                )),
+            ).repository.observeCards().first().single()
+
+            assertEquals("Cached Steam title", card.displayName)
+            assertEquals(STEAM_HEADER, card.headerImageUrl)
+            assertEquals(STEAM_HEADER, card.heroImageUrl)
+            assertEquals("https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/10/library_600x900.jpg", card.capsuleImageUrl)
+            assertEquals("source-capsule", card.artworkFallback?.capsuleImageUrl)
+            assertEquals("source-header", card.artworkFallback?.headerImageUrl)
+            val rendered = app.gamenative.ui.model.CanonicalLibraryFilter.project(
+                cards = listOf(card),
+                state = app.gamenative.ui.data.LibraryState(
+                    appInfoSortType = java.util.EnumSet.of(app.gamenative.ui.enums.AppFilter.GAME),
+                    currentTab = app.gamenative.ui.enums.LibraryTab.ALL,
+                    showSteamInLibrary = true, showGOGInLibrary = true, showEpicInLibrary = true,
+                    showAmazonInLibrary = true, showCustomGamesInLibrary = true, showHiddenGamesByDefault = true,
+                    selectedSteamCollectionIds = emptySet(), selectedCuratedListIds = emptySet(),
+                    discoveryFilters = app.gamenative.library.discovery.DiscoveryFilterState(),
+                    steamReviewMinimum = null,
+                    currentSortOption = app.gamenative.ui.enums.SortOption.NAME_ASC,
+                    visibleLibraryTabs = app.gamenative.ui.enums.LibraryTab.visibleEntries,
+                ),
+                paginationPage = 0, pageSize = 50, promotion = null, showRecommendations = false,
+                compatibility = { null },
+            ).cards.single()
+            assertEquals(card.artworkFallback, rendered.artworkFallback)
+            assertEquals(card.displayName, rendered.name)
+            assertEquals(1f, card.gridHeroImageScale)
+            assertEquals(setOf(source), card.ownedSources)
+            assertEquals(relationship.key(), card.copies.single().key)
+            assertEquals("Owned source title", card.copies.single().nativeTitle)
+            assertEquals(emptySet<Int>(), card.steamCollectionAppIds)
+            assertTrue("Source title" in card.aliases)
+            assertTrue("Cached Steam title" in card.aliases)
+        }
+    }
+
+    @Test
+    fun cachedSteamTitleDoesNotReplaceExplicitUserTitleOverride() = runTest {
+        val game = game(ID_A, primarySource = GameSource.GOG).copy(steamAppId = 10)
+        val relationship = match(game, GameSource.GOG, "20", MatchConfidence.HIGH)
+        val card = harness(
+            listOf(aggregate(game, listOf(relationship), listOf(preference(game, relationship.key()).copy(
+                titleOverride = "My title",
+            ))).copy(detailSnapshots = listOf(steamSnapshot(game)))),
+            mapOf(relationship.key() to available(relationship.key())),
+        ).repository.observeCards().first().single()
+
+        assertEquals("My title", card.displayName)
+        assertEquals(STEAM_HEADER, card.headerImageUrl)
+        assertTrue("Cached Steam title" in card.aliases)
+    }
+
+    @Test
+    fun missingInvalidOrUntrustedSteamCacheKeepsSourcePresentation() = runTest {
+        val game = game(ID_A, displayName = "Source title", primarySource = GameSource.GOG).copy(steamAppId = 10)
+        val relationship = match(game, GameSource.GOG, "20", MatchConfidence.HIGH)
+        val valid = steamSnapshot(game)
+        val snapshots = listOf(
+            emptyList(),
+            listOf(valid.copy(payloadJson = "{broken")),
+            listOf(valid.copy(provenanceJson = "{broken")),
+            listOf(valid.copy(sourceRevision = "steam_appdetails_unknown")),
+            listOf(valid.copy(locale = "zz-ZZ", country = "ZZ")),
+            listOf(valid.copy(canonicalId = ID_B)),
+            listOf(valid.copy(provenanceJson = Json.encodeToString(GameMetadataProvenance(
+                MetadataProvider.EPIC_CMS, setOf(MetadataField.TITLE, MetadataField.HEADER_IMAGE),
+            )))),
+        )
+        snapshots.forEach { cache ->
+            val card = harness(
+                listOf(aggregate(game, listOf(relationship)).copy(detailSnapshots = cache)),
+                mapOf(relationship.key() to available(relationship.key(), headerImageUrl = "source-header")),
+            ).repository.observeCards().first().single()
+            assertEquals("Source title", card.displayName)
+            assertEquals("source-header", card.headerImageUrl)
+        }
+        val untrusted = game.copy(steamAppId = null)
+        val card = harness(
+            listOf(aggregate(untrusted, listOf(relationship)).copy(detailSnapshots = listOf(valid))),
+            mapOf(relationship.key() to available(relationship.key(), headerImageUrl = "source-header")),
+        ).repository.observeCards().first().single()
+        assertEquals("Source title", card.displayName)
+        assertEquals("source-header", card.headerImageUrl)
+    }
+
+    @Test
+    fun unavailableOwnedSourceCanStillDisplayAcceptedCachedSteamMetadata() = runTest {
+        val game = game(ID_A, primarySource = GameSource.EPIC).copy(steamAppId = 10)
+        val relationship = match(game, GameSource.EPIC, EpicStableSourceId.encode("ns", "game"), MatchConfidence.HIGH)
+        val card = harness(
+            listOf(aggregate(game, listOf(relationship)).copy(detailSnapshots = listOf(steamSnapshot(game)))),
+            mapOf(relationship.key() to OwnedCopyRuntimeResult.Unavailable(
+                relationship.key(), CopyUnavailableReason.SOURCE_READ_FAILED,
+            )),
+        ).repository.observeCards().first().single()
+
+        assertEquals("Cached Steam title", card.displayName)
+        assertEquals(STEAM_HEADER, card.headerImageUrl)
+        assertEquals(CopyUnavailableReason.SOURCE_READ_FAILED, card.copies.single().unavailableReason)
+        assertTrue(card.copies.single().capabilities.isEmpty())
+    }
+
+    @Test
+    fun acceptedCacheUpdatesAndRemovalReachCardsWithoutRuntimeInvalidation() = runTest {
+        val game = game(ID_A, displayName = "Source title", primarySource = GameSource.GOG).copy(steamAppId = 10)
+        val relationship = match(game, GameSource.GOG, "20", MatchConfidence.HIGH)
+        val aggregate = aggregate(game, listOf(relationship))
+        val events = MutableSharedFlow<List<CanonicalLibraryAggregate>>(replay = 1).apply { tryEmit(listOf(aggregate)) }
+        val repository = repository(events, completeAdapters(mapOf(
+            relationship.key() to available(relationship.key(), headerImageUrl = "source-header"),
+        )).values)
+        val cards = mutableListOf<CanonicalLibraryCard>()
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            repository.observeCards().collect { cards += it.single() }
+        }
+        runCurrent()
+        events.emit(listOf(aggregate.copy(detailSnapshots = listOf(steamSnapshot(game)))))
+        runCurrent()
+        events.emit(listOf(aggregate))
+        runCurrent()
+
+        assertEquals(listOf("Source title", "Cached Steam title", "Source title"), cards.map { it.displayName })
+        assertEquals(listOf("source-header", STEAM_HEADER, "source-header"), cards.map { it.headerImageUrl })
+        assertTrue(cards.all { it.copies.single().key == relationship.key() })
+    }
+
+    @Test
+    fun unsafeCachedSteamImageFallsBackWithoutDiscardingValidTitle() = runTest {
+        val game = game(ID_A, primarySource = GameSource.GOG).copy(steamAppId = 10)
+        val relationship = match(game, GameSource.GOG, "20", MatchConfidence.HIGH)
+        val unsafeSnapshot = steamSnapshot(game, header = "https://untrusted.example/header.jpg")
+        val card = harness(
+            listOf(aggregate(game, listOf(relationship)).copy(detailSnapshots = listOf(unsafeSnapshot))),
+            mapOf(relationship.key() to available(relationship.key(), headerImageUrl = "source-header")),
+        ).repository.observeCards().first().single()
+
+        assertEquals("Cached Steam title", card.displayName)
+        assertEquals("source-header", card.headerImageUrl)
+    }
+
+    @Test
+    fun cachedSteamMetadataDoesNotDowngradeOwnedSteamLibraryArtwork() = runTest {
+        val game = game(ID_A).copy(steamAppId = 10)
+        val relationship = match(game, GameSource.STEAM, "10", MatchConfidence.VERIFIED)
+        val card = harness(
+            listOf(aggregate(game, listOf(relationship)).copy(detailSnapshots = listOf(steamSnapshot(game)))),
+            mapOf(relationship.key() to available(
+                relationship.key(), iconUrl = "owned-steam-icon", capsuleImageUrl = "owned-steam-capsule",
+                headerImageUrl = "owned-steam-header", heroImageUrl = "owned-steam-hero", gridHeroImageScale = 1.4f,
+            )),
+        ).repository.observeCards().first().single()
+
+        assertEquals("Cached Steam title", card.displayName)
+        assertArtwork(card, "owned-steam", 1.4f)
+    }
+
+    @Test
+    fun cachedSteamArtworkFillsMissingOwnedSteamFieldsWithoutReplacingItsCapsule() = runTest {
+        val game = game(ID_A).copy(steamAppId = 10)
+        val steam = match(game, GameSource.STEAM, "10", MatchConfidence.VERIFIED)
+        val gog = match(game, GameSource.GOG, "20", MatchConfidence.HIGH)
+        val card = harness(
+            listOf(aggregate(game, listOf(steam, gog)).copy(detailSnapshots = listOf(steamSnapshot(game)))),
+            mapOf(
+                steam.key() to available(steam.key(), capsuleImageUrl = "owned-steam-capsule"),
+                gog.key() to available(gog.key(), headerImageUrl = "gog-header", heroImageUrl = "gog-hero"),
+            ),
+        ).repository.observeCards().first().single()
+
+        assertEquals("owned-steam-capsule", card.capsuleImageUrl)
+        assertEquals(STEAM_HEADER, card.headerImageUrl)
+        assertEquals(STEAM_HEADER, card.heroImageUrl)
+        assertEquals(1f, card.gridHeroImageScale)
+    }
+
+    private fun steamSnapshot(game: CanonicalGameEntity, header: String = STEAM_HEADER): GameDetailSnapshotEntity {
+        val locale = SystemMetadataLocaleProvider().current()
+        val metadata = CanonicalGameMetadata(
+            title = "Cached Steam title", shortDescription = null, about = null, headerImageUrl = header,
+            screenshots = emptyList(), movies = emptyList(), developers = emptyList(), publishers = emptyList(),
+            releaseDate = null, platforms = emptySet(), languages = emptyList(), requirements = null,
+            features = emptyList(), achievementCount = null, dlcCount = null, fetchedAtEpochMs = 1L,
+        )
+        return GameDetailSnapshotEntity(
+            canonicalId = game.canonicalId, locale = locale.normalizedLocale, country = locale.normalizedCountry,
+            payloadJson = Json.encodeToString(metadata), provenanceJson = Json.encodeToString(GameMetadataProvenance(
+                MetadataProvider.STEAM_APPDETAILS, setOf(MetadataField.TITLE, MetadataField.HEADER_IMAGE),
+            )), fetchedAt = 1L, sourceRevision = "steam_appdetails_v2",
+        )
+    }
+
     private fun harness(
         aggregates: List<CanonicalLibraryAggregate>,
         results: Map<OwnedCopyKey, OwnedCopyRuntimeResult>,
@@ -889,7 +1100,7 @@ class CanonicalLibraryRepositoryTest {
             history,
             mockk(relaxed = true),
         )
-        return CanonicalLibraryRepository(dao, registry, diagnostics, mockk(relaxed = true))
+        return CanonicalLibraryRepository(dao, registry, diagnostics, mockk(relaxed = true), SystemMetadataLocaleProvider())
     }
 
     private fun completeAdapters(
@@ -1144,6 +1355,7 @@ class CanonicalLibraryRepositoryTest {
     private class SourceBatchFailure : IllegalStateException("source batch failed")
 
     private companion object {
+        const val STEAM_HEADER = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/10/header.jpg"
         val SCOPE = AccountScope.parse("a".repeat(64))
         const val ID_A = "11111111-1111-1111-1111-111111111111"
         const val ID_B = "22222222-2222-2222-2222-222222222222"

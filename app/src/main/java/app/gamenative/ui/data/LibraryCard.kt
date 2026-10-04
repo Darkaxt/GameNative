@@ -4,6 +4,7 @@ import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
 import app.gamenative.library.canonical.CanonicalCardKey
+import app.gamenative.library.canonical.CanonicalCardArtwork
 import app.gamenative.library.canonical.stableComposeKey
 
 sealed interface LibraryCardIdentity {
@@ -41,6 +42,7 @@ data class LibraryCard(
     val isRecTeaser: Boolean = false,
     val isRecLoading: Boolean = false,
     val favoriteAppIds: Set<String> = emptySet(),
+    val artworkFallback: CanonicalCardArtwork? = null,
 ) {
     val composeKey: String
         get() = when (val value = identity) {
@@ -141,6 +143,7 @@ data class LibraryCard(
             isInstalled: Boolean = false,
             isShared: Boolean = false,
             favoriteAppIds: Set<String> = emptySet(),
+            artworkFallback: CanonicalCardArtwork? = null,
         ): LibraryCard = LibraryCard(
             identity = LibraryCardIdentity.Canonical(key),
             index = index,
@@ -168,6 +171,7 @@ data class LibraryCard(
             recSource = "",
             isFeatured = false,
             favoriteAppIds = favoriteAppIds,
+            artworkFallback = artworkFallback,
         )
     }
 }

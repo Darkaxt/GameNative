@@ -83,6 +83,14 @@ data class OwnedCopySummary(
     val isVrSupported: Boolean = false,
 )
 
+data class CanonicalCardArtwork(
+    val iconUrl: String,
+    val capsuleImageUrl: String,
+    val headerImageUrl: String,
+    val heroImageUrl: String,
+    val gridHeroImageScale: Float,
+)
+
 data class CanonicalLibraryCard(
     val key: CanonicalCardKey,
     val canonicalId: CanonicalGameId,
@@ -104,6 +112,7 @@ data class CanonicalLibraryCard(
     val genreKeys: Set<String> = emptySet(),
     val genreLabels: Map<String, String> = emptyMap(),
     val tagIds: Set<Int> = emptySet(),
+    val artworkFallback: CanonicalCardArtwork? = null,
 ) {
     val isInstalled: Boolean get() = copies.any(OwnedCopySummary::isInstalled)
     val lastPlayedEpochMs: Long? get() = copies.mapNotNull { it.lastPlayedEpochMs }.maxOrNull()
