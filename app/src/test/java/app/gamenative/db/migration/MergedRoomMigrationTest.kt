@@ -81,17 +81,30 @@ class MergedRoomMigrationTest {
 
     @Test
     fun publishedFork29PreservesRowsAndAddsDurableResolverHistory() =
-        migrateFixture("fork-29", targetVersion = 30, assertResolverHistory = true)
+        migrateFixture("fork-29", targetVersion = 31, assertResolverHistory = true)
+
+    @Test
+    fun officialEula29PreservesAgreementsThroughRegisteredFork31Upgrade() =
+        migrateFixture("official-eula-29", targetVersion = 31, fixtureResource = "schemas/official-eula-29.json")
+
+    @Test
+    fun publishedFork30PreservesHistoryThroughRegisteredEula31Upgrade() =
+        migrateFixture("fork-30", targetVersion = 31)
+
+    @Test
+    fun publishedFork29PreservesCanonicalRowsThroughRegisteredEula31Upgrade() =
+        migrateFixture("fork-29", targetVersion = 31)
 
     private fun migrateFixture(
         name: String,
         emptyRecipeTable: Boolean = false,
         laterV26Ledger: Boolean = false,
         emptyOverwriteManifest: Boolean = false,
-        targetVersion: Int = 30,
+        targetVersion: Int = 31,
         assertResolverHistory: Boolean = true,
+        fixtureResource: String = "db/upstream-merge-2026-10-03/$name.json",
     ) {
-        val resource = "db/upstream-merge-2026-10-03/$name.json"
+        val resource = fixtureResource
         val fixture = JSONObject(requireNotNull(javaClass.classLoader!!.getResourceAsStream(resource)) {
             "Missing historical schema fixture: $resource"
         }.bufferedReader().use { it.readText() }).getJSONObject("database")
@@ -145,7 +158,9 @@ class MergedRoomMigrationTest {
                         "INTEGER" -> values.put(column, 7L)
                         "REAL" -> values.put(column, 7.0)
                         "BLOB" -> values.put(column, byteArrayOf(7))
-                        else -> values.put(column, "retained")
+                        else -> values.put(column, if (column == "eulas") {
+                            """[{"id":"fixture-agreement","name":"Public terms","url":"https://store.steampowered.com/eula/10","version":"2","countries":["US"]}]"""
+                        } else "retained")
                     }
                 }
                 val columns = values.keySet().sorted()
@@ -235,6 +250,10 @@ class MergedRoomMigrationTest {
                 assertEquals("0", database.columnDefault("steam_app", "is_vr_only"))
                 assertEquals("0", database.columnDefault("steam_app", "is_vr_supported"))
                 assertEquals("-1", database.columnDefault("owned_copy_sync", "lifecycle_generation"))
+                assertEquals("'[]'", database.columnDefault("steam_app", "eulas"))
+                if (before["steam_app"]?.containsKey("eulas") != true) {
+                    assertEquals("[]", database.singleRow("steam_app")["eulas"])
+                }
                 if (laterV26Ledger) {
                     assertEquals("-1", database.singleRow("owned_copy_sync")["lifecycle_generation"])
                 }

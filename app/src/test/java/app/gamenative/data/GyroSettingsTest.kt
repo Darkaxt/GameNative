@@ -1,5 +1,6 @@
 package app.gamenative.data
 
+import androidx.test.core.app.ApplicationProvider
 import com.winlator.container.Container
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -11,9 +12,42 @@ import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
+@Config(application = android.app.Application::class)
 class GyroSettingsTest {
+    @Test
+    fun unitFixtureDoesNotStartApplicationServices() {
+        val application = ApplicationProvider.getApplicationContext<android.app.Application>()
+        assertEquals(android.app.Application::class.java, application.javaClass)
+    }
+
+    @Test
+    fun conversionStylesRoundTripThroughContainerAndProfileJson() {
+        for (style in GyroSettings.CONVERSION_LOCAL_YAW..GyroSettings.CONVERSION_WORLD_SPACE) {
+            val original = GyroSettings(mode = GyroSettings.MODE_MOUSE, conversionStyle = style).normalized()
+            val container = containerWithExtras(mutableMapOf())
+            original.saveTo(container)
+            assertEquals(original, GyroSettings.fromContainer(container))
+            assertEquals(original, GyroSettings.fromJsonObject(JSONObject(original.toJsonObject().toString())))
+        }
+    }
+
+    @Test
+    fun oldAndInvalidConversionSettingsUseLocalYaw() {
+        for (value in listOf(null, "unknown", "-1", "99")) {
+            val extras = mutableMapOf<String, String>()
+            val json = JSONObject()
+            if (value != null) {
+                extras["gyroConversionStyle"] = value
+                json.put("conversionStyle", value)
+            }
+            assertEquals(GyroSettings.CONVERSION_LOCAL_YAW, GyroSettings.fromContainer(containerWithExtras(extras)).conversionStyle)
+            assertEquals(GyroSettings.CONVERSION_LOCAL_YAW, GyroSettings.fromJsonObject(json).conversionStyle)
+        }
+    }
+
     @Test
     fun missingTiltSettings_useCurrentDefaultsIndependentFromRateSensitivity() {
         val container = containerWithExtras(

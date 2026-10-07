@@ -1,6 +1,7 @@
 package app.gamenative.ui.data
 
 import app.gamenative.PrefManager
+import app.gamenative.data.CommunityCompatibilitySummary
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
@@ -85,6 +86,7 @@ data class LibraryState(
 
     // Compatibility status map: game name -> compatibility status
     val compatibilityMap: Map<String, GameCompatibilityStatus> = emptyMap(),
+    val communityCompatibilityMap: Map<String, CommunityCompatibilitySummary> = emptyMap(),
 
     // Device-specific play stats, grouped by platform then game name
     val deviceGameStats: Map<GameSource, Map<String, DeviceGameStats>> = emptyMap(),
@@ -153,3 +155,5 @@ fun LibraryState.statsFor(copies: List<OwnedCopySummary>): GameCardStats? {
         sessionSec = values.mapNotNull(GameCardStats::sessionSec).maxOrNull(),
     )
 }
+fun LibraryState.communityCompatibilityFor(item: LibraryItem): CommunityCompatibilitySummary? =
+    communityCompatibilityMap[item.name]

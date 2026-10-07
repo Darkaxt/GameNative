@@ -158,12 +158,14 @@ import androidx.compose.ui.unit.dp
 import app.gamenative.NetworkMonitor
 import app.gamenative.PrefManager
 import app.gamenative.R
+import app.gamenative.data.CommunityCompatibilitySummary
 import app.gamenative.data.LibraryItem
 import app.gamenative.data.StoreGameDetails
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.OwnedCopyActionGuard
 import app.gamenative.service.SteamService
+import app.gamenative.ui.component.CommunityCompatibilitySection
 import app.gamenative.ui.component.GamepadAction
 import app.gamenative.ui.component.GamepadActionBar
 import app.gamenative.ui.component.GamepadButton
@@ -876,6 +878,7 @@ fun AppScreen(
     initialOperation: OwnedCopyOperation? = null,
     onInitialOperationConsumed: () -> Unit = {},
     onCanonicalActionUnavailable: (ActionFailureReason) -> Unit = {},
+    sourceDetailsContent: (@Composable (OwnedSourceDetailPresentation) -> Unit)? = null,
 ) {
     // Get the appropriate screen model based on game source
     val screenModel = remember(libraryItem.gameSource) {
@@ -900,6 +903,7 @@ fun AppScreen(
         initialOperation = initialOperation,
         onInitialOperationConsumed = onInitialOperationConsumed,
         onCanonicalActionUnavailable = onCanonicalActionUnavailable,
+        sourceDetailsContent = sourceDetailsContent,
     )
 }
 
@@ -910,6 +914,14 @@ internal data class ImmersiveModeUiState(
     val onChange: (Boolean) -> Unit = {},
     val isVrEnabled: Boolean = false,
     val onVrChange: (Boolean) -> Unit = {},
+)
+
+internal data class CommunityCompatibilityUiState(
+    val summary: CommunityCompatibilitySummary = CommunityCompatibilitySummary.unknown(),
+    val loading: Boolean = false,
+    val loadError: Boolean = false,
+    val onRetry: () -> Unit = {},
+    val onViewReports: () -> Unit = {},
 )
 
 @Composable
@@ -929,6 +941,7 @@ internal fun AppScreenContent(
     optionsMenu: List<AppMenuOption>,
     dialogOpen: Boolean = false,
     immersiveMode: ImmersiveModeUiState = ImmersiveModeUiState(),
+    communityCompatibility: CommunityCompatibilityUiState = CommunityCompatibilityUiState(),
 ) {
     // Unpacked so the body below is unchanged; bundling the params avoids a Compose VerifyError.
     val isInstalled = downloadDisplayDetails.isInstalled
@@ -1583,15 +1596,6 @@ internal fun AppScreenContent(
                     }
                     }
 
-                    // Compatibility status (if applicable)
-                    if (displayInfo.compatibilityMessage != null && displayInfo.compatibilityColor != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = displayInfo.compatibilityMessage,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(displayInfo.compatibilityColor),
-                        )
-                    }
                 }
             }
 
@@ -1653,6 +1657,16 @@ internal fun AppScreenContent(
                     }
                     Spacer(modifier = Modifier.height(16.dp))
                 }
+
+                CommunityCompatibilitySection(
+                    gameKey = displayInfo.appId.toString(),
+                    summary = communityCompatibility.summary,
+                    loading = communityCompatibility.loading,
+                    loadError = communityCompatibility.loadError,
+                    onRetry = communityCompatibility.onRetry,
+                    onViewReports = communityCompatibility.onViewReports,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
 
                 if (displayInfo.storeDetails.hasOverview) {
                     StoreDetailsSection(
@@ -2145,7 +2159,7 @@ private fun AchievementDetailDialog(ach: Achievement, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun AchievementsRow(
+internal fun AchievementsRow(
     achievements: List<Achievement>,
 ) {
     val unlockedCount = achievements.count { it.isUnlocked }

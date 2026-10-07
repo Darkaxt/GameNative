@@ -10,13 +10,28 @@ on:
       - 'media/**'
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
+    inputs:
+      validation_candidate:
+        description: Build only a signed side-by-side validation artifact (fork only)
+        type: boolean
+        default: false
+      expected_commit:
+        description: Full verified commit SHA for the validation candidate
+        type: string
+      expected_version_code:
+        description: Expected validation APK version code
+        type: string
+      expected_version_name:
+        description: Expected validation APK version name
+        type: string
 
 concurrency:
-  group: android-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: android-ci-${{ github.ref }}-${{ inputs.validation_candidate && github.run_id || 'normal' }}
+  cancel-in-progress: ${{ !inputs.validation_candidate }}
 
 jobs:
   build:
+    if: ${{ !inputs.validation_candidate }}
 
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -298,3 +313,94 @@ jobs:
           --arg changes "$CHANGELOG" \
           '{content: "**New Android build**\nRegular Build (Recommended): \($legacy)\nModern Build (Play Store, features stripped): \($modern)\nXR Build (for Quest): \($legacyXr)\n\nChanges:\n\($changes)"}')
         curl -H 'Content-Type: application/json' -d "$payload" "$DISCORD_WEBHOOK_URL"
+
+  validation-candidate:
+    if: ${{ github.repository == 'Darkaxt/GameNative' && github.event_name == 'workflow_dispatch' && inputs.validation_candidate }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      EXPECTED_VERSION_CODE: ${{ inputs.expected_version_code }}
+      EXPECTED_VERSION_NAME: ${{ inputs.expected_version_name }}
+      EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact candidate source
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_VERSION_CODE" =~ ^[0-9]+$ ]]
+          test -n "$EXPECTED_VERSION_NAME"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: gradle/actions/wrapper-validation@v4
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install candidate signing tools
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0" < <(yes)'
+      - name: Build side-by-side Legacy APK
+        run: ./gradlew --max-workers=2 --no-parallel -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process :app:assembleLegacyReleaseDarkaxt
+      - name: Sign validation artifact with persistent fork key
+        env:
+          FORK_KEYSTORE: ${{ secrets.FORK_KEYSTORE }}
+          FORK_KEYSTORE_ALIAS: ${{ secrets.FORK_KEYSTORE_ALIAS }}
+          FORK_KEYSTORE_PASSWORD: ${{ secrets.FORK_KEYSTORE_PASSWORD }}
+          FORK_KEY_PASSWORD: ${{ secrets.FORK_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in FORK_KEYSTORE FORK_KEYSTORE_ALIAS FORK_KEYSTORE_PASSWORD FORK_KEY_PASSWORD; do
+            test -n "${!name}"
+          done
+          key="$(mktemp "$RUNNER_TEMP/gamenative-validation.XXXXXX.jks")"
+          trap 'rm -f "$key"' EXIT
+          umask 077
+          printf '%s' "$FORK_KEYSTORE" | base64 --decode > "$key"
+          mkdir -p validation-artifact
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks "$key" --ks-type JKS --ks-key-alias "$FORK_KEYSTORE_ALIAS" \
+            --ks-pass env:FORK_KEYSTORE_PASSWORD --key-pass env:FORK_KEY_PASSWORD \
+            --out validation-artifact/gamenative-side-by-side.apk \
+            app/build/outputs/apk/legacy/releaseDarkaxt/app-legacy-releaseDarkaxt.apk
+      - name: Verify candidate identity and record public provenance
+        run: |
+          set -euo pipefail
+          apk=validation-artifact/gamenative-side-by-side.apk
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          "$tools/apksigner" verify --verbose --print-certs "$apk" > validation-artifact/signature.txt
+          "$tools/aapt" dump badging "$apk" > validation-artifact/identity.txt
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess, zipfile
+          root = pathlib.Path('validation-artifact')
+          signature = (root / 'signature.txt').read_text()
+          assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in signature
+          digests = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-f]+)', signature)
+          assert digests == [os.environ['EXPECTED_FORK_CERT_SHA256']]
+          identity = (root / 'identity.txt').read_text()
+          assert "package: name='app.gamenative.darkaxt'" in identity
+          assert "versionCode='" + os.environ['EXPECTED_VERSION_CODE'] + "'" in identity
+          assert "versionName='" + os.environ['EXPECTED_VERSION_NAME'] + "'" in identity
+          assert "sdkVersion:'26'" in identity and "targetSdkVersion:'28'" in identity
+          apk = root / 'gamenative-side-by-side.apk'
+          with zipfile.ZipFile(apk) as z:
+              native = {n: hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist() if n.endswith('/libgndownload.so')}
+          assert set(native) == {'lib/arm64-v8a/libgndownload.so', 'lib/armeabi-v7a/libgndownload.so'}
+          for n, digest in native.items():
+              assert digest == hashlib.sha256(pathlib.Path('app/src/main/jniLibs', n.removeprefix('lib/')).read_bytes()).hexdigest()
+          provenance = dict(commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              package='app.gamenative.darkaxt', version_code=int(os.environ['EXPECTED_VERSION_CODE']),
+              version_name=os.environ['EXPECTED_VERSION_NAME'], signer=digests[0],
+              apk_sha256=hashlib.sha256(apk.read_bytes()).hexdigest(), native=native,
+              schema31_sha256=hashlib.sha256(pathlib.Path('app/schemas/app.gamenative.db.PluviaDatabase/31.json').read_bytes()).hexdigest(),
+              run_id=os.environ['GITHUB_RUN_ID'], artifact_only=True)
+          assert provenance['commit'] == os.environ['EXPECTED_COMMIT']
+          (root / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gamenative-side-by-side-validation-${{ github.sha }}
+          path: validation-artifact/
+          retention-days: 14

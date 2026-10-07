@@ -23,22 +23,12 @@ object GameCompatibilityCache {
     private var cacheLoaded = false
     private var cacheGeneration = 0L
     private var pendingClearGeneration: Long? = null
+    internal val json = Json { ignoreUnknownKeys = true }
 
     @Serializable
     data class CachedCompatibilityResponse(
-        val response: GameCompatibilityResponseData,
+        val response: GameCompatibilityService.GameCompatibilityResponse,
         val timestamp: Long
-    )
-
-    @Serializable
-    data class GameCompatibilityResponseData(
-        val gameName: String,
-        val totalPlayableCount: Int,
-        val gpuPlayableCount: Int,
-        val avgRating: Float,
-        val hasBeenTried: Boolean,
-        val isNotWorking: Boolean,
-        val state: String? = null,
     )
 
     private data class CacheCommit(
@@ -46,36 +36,6 @@ object GameCompatibilityCache {
         val timestamps: Map<String, Long>,
         val encoded: String,
     )
-
-    /**
-     * Converts GameCompatibilityService.GameCompatibilityResponse to serializable format
-     */
-    private fun GameCompatibilityService.GameCompatibilityResponse.toData(): GameCompatibilityResponseData {
-        return GameCompatibilityResponseData(
-            gameName = this.gameName,
-            totalPlayableCount = this.totalPlayableCount,
-            gpuPlayableCount = this.gpuPlayableCount,
-            avgRating = this.avgRating,
-            hasBeenTried = this.hasBeenTried,
-            isNotWorking = this.isNotWorking,
-            state = this.state,
-        )
-    }
-
-    /**
-     * Converts serializable format back to GameCompatibilityService.GameCompatibilityResponse
-     */
-    private fun GameCompatibilityResponseData.toResponse(): GameCompatibilityService.GameCompatibilityResponse {
-        return GameCompatibilityService.GameCompatibilityResponse(
-            gameName = this.gameName,
-            totalPlayableCount = this.totalPlayableCount,
-            gpuPlayableCount = this.gpuPlayableCount,
-            avgRating = this.avgRating,
-            hasBeenTried = this.hasBeenTried,
-            isNotWorking = this.isNotWorking,
-            state = this.state,
-        )
-    }
 
     /**
      * Loads cache from persistent storage into memory.
@@ -91,12 +51,13 @@ object GameCompatibilityCache {
                 return
             }
 
-            val cacheMap = Json.decodeFromString<Map<String, CachedCompatibilityResponse>>(cacheJson)
+            val cacheMap = json.decodeFromString<Map<String, CachedCompatibilityResponse>>(cacheJson)
+                .filterValues { it.response.state != null }
 
             // Load all entries into memory (no expiration check here - lazy expiration)
             // Store both response and timestamp for expiration checking
             cacheMap.forEach { (gameName, cached) ->
-                inMemoryCache[gameName] = cached.response.toResponse()
+                inMemoryCache[gameName] = cached.response
                 timestamps[gameName] = cached.timestamp
             }
 
@@ -115,7 +76,7 @@ object GameCompatibilityCache {
         val now = System.currentTimeMillis()
         val cacheMap = responses.mapValues { (gameName, response) ->
             val timestamp = responseTimestamps[gameName] ?: now
-            CachedCompatibilityResponse(response.toData(), timestamp)
+            CachedCompatibilityResponse(response, timestamp)
         }
         return Json.encodeToString(cacheMap)
     }

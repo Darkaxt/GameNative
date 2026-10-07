@@ -1264,6 +1264,11 @@
     <string name="main_downloading_steam">Steam 다운로드 중...</string>
     <string name="steam_update_required_title">업데이트 필요</string>
     <string name="steam_update_required_message">이 게임에 업데이트가 있습니다. 업데이트를 설치할 때까지 Steam 클라이언트가 게임을 시작할 수 없습니다. 지금 업데이트한 다음 다시 실행하세요.</string>
+    <string name="steam_agreement_ssa_title">Steam 가입자 계약</string>
+    <string name="steam_agreement_eula_title">최종 사용자 사용권 계약</string>
+    <string name="steam_agreement_message">플레이하기 전에 Steam에서 이 계약에 동의해야 합니다.</string>
+    <string name="steam_agreement_accept">동의</string>
+    <string name="steam_agreement_decline">거부</string>
     <string name="main_installing_glibc">glibc 구성 요소 설치 중...</string>
     <string name="main_installing_bionic">Bionic 구성 요소 설치 중...</string>
     <string name="main_loading">로딩 중...</string>
@@ -2762,6 +2767,18 @@
     <string name="gyro_section_response">반응</string>
     <string name="gyro_output">출력</string>
     <string name="gyro_output_subtitle">기기 움직임으로 제어할 대상을 선택합니다.</string>
+    <string name="gyro_conversion_style">변환 방식</string>
+    <string name="gyro_conversion_yaw">로컬 공간(요)</string>
+    <string name="gyro_conversion_roll">로컬 공간(롤)</string>
+    <string name="gyro_conversion_yaw_roll">로컬 공간(요 + 롤)</string>
+    <string name="gyro_conversion_player">플레이어 공간</string>
+    <string name="gyro_conversion_world">월드 공간</string>
+    <string name="gyro_conversion_yaw_help">기기를 좌우로 돌리면 수평으로, 위아래로 기울이면 수직으로 조준합니다. 축은 화면 방향을 따릅니다.</string>
+    <string name="gyro_conversion_roll_help">기기를 운전대처럼 돌리면 수평으로 조준합니다. 위아래로 기울이면 수직으로 조준합니다.</string>
+    <string name="gyro_conversion_yaw_roll_help">기기를 좌우로 돌리는 동작과 운전대처럼 돌리는 동작이 모두 수평 조준에 반영됩니다. 위아래로 기울이면 수직으로 조준합니다.</string>
+    <string name="gyro_conversion_player_help">기기를 세우거나 눕혀 잡는 각도에 따라 수평 조준을 조정합니다. 수직 조준은 기기의 위아래 기울기를 따릅니다. 상체를 세워 앉거나 서 있는 자세에 적합합니다.</string>
+    <string name="gyro_conversion_world_help">현실 세계의 위쪽 방향을 기준으로 중력을 사용해 두 축을 조정합니다. 상체를 세워 앉거나 서 있는 자세에 적합합니다.</string>
+    <string name="gyro_conversion_unavailable">이 기기에서는 자세 추적을 사용할 수 없습니다. 로컬 공간(요)을 사용합니다.</string>
     <string name="gyro_tilt_steering">기울기 조향</string>
     <string name="gyro_tilt_steering_subtitle">기기를 기울인 상태로 유지하면 스틱의 수평 입력이 지속됩니다. 자이로가 활성화될 때마다 현재 위치를 중앙으로 설정합니다.</string>
     <string name="gyro_tilt_unavailable">이 기기는 기울기 조향에 필요한 방향 센서를 제공하지 않습니다.</string>
@@ -2831,6 +2848,52 @@
     <string name="control_profile_failed">컨트롤 프로필 작업 실패: %1$s</string>
     <string name="control_profile_delete_title">컨트롤 프로필을 삭제할까요?</string>
     <string name="control_profile_delete_message">라이브러리에서 “%1$s”을(를) 제거할까요? 이미 이 프로필로 설정된 게임의 컨트롤은 유지됩니다.</string>
+    <string name="sort_compatibility">호환성</string>
+    <string name="community_compatibility_details">자세히</string>
+    <string name="community_compatibility_expanded">펼쳐짐</string>
+    <string name="community_compatibility_collapsed">접힘</string>
+    <string name="community_compatibility_short_disclaimer">커뮤니티 결과가 동작을 보장하지는 않습니다.</string>
+    <string name="community_compatibility_unreliable_short">결과가 불안정하며, 정상적인 플레이는 확인되지 않았습니다.</string>
+    <string name="community_compatibility_performance_caution">보고된 성능이 제한적일 수 있습니다.</string>
+    <string name="community_compatibility_checking_short">확인 중…</string>
+    <string name="community_compatibility_unavailable_short">사용 불가</string>
+    <string name="community_compatibility_unavailable">호환성을 불러올 수 없습니다</string>
+    <string name="community_compatibility_missing_tier">응답에 결과를 사용 중인 기기에 적용하는 데 필요한 하드웨어 정보가 없습니다.</string>
+    <string name="community_compatibility_works">잘 실행됨</string>
+    <string name="community_compatibility_should">작동함</string>
+    <string name="community_compatibility_may">작동 가능성 있음</string>
+    <string name="community_compatibility_mixed">불안정</string>
+    <string name="community_compatibility_wont">작동 안 함</string>
+    <string name="community_compatibility_unknown">미확인</string>
+    <string name="community_compatibility_checking">호환성 확인 중…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="other">이 기기 모델의 평가된 공유 구성 %1$d개</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="other">사용 중인 GPU의 평가된 공유 구성 %1$d개</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">사용 중인 하드웨어에 맞는 공유 구성을 찾지 못했습니다</string>
+    <string name="community_compatibility_configs_unavailable">일부 호환성 데이터를 불러오지 못했습니다. 이용 가능한 정보를 표시합니다.</string>
+    <string name="community_compatibility_retry">다시 시도</string>
+    <string name="community_compatibility_fps_median">보고된 중앙값: %1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s — 사용 중인 기기 모델.</string>
+    <string name="community_compatibility_fps_soc">%1$s — 동일한 칩셋.</string>
+    <string name="community_compatibility_fps_gpu">%1$s — 사용 중인 GPU.</string>
+    <string name="community_compatibility_fps_family">%1$s — 호환되는 GPU.</string>
+    <string name="community_compatibility_view_reports">구성 찾아보기</string>
+    <string name="community_config_install_before_apply">커뮤니티 구성을 적용하기 전에 이 게임을 설치하세요.</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="other">사용 중인 기기 모델에서 기록된 세션 %1$d개를 기준으로 합니다.</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="other">동일한 칩셋에서 기록된 세션 %1$d개를 기준으로 합니다.</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="other">사용 중인 GPU에서 기록된 세션 %1$d개를 기준으로 합니다.</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="other">사용 중인 GPU 계열에서 기록된 세션 %1$d개를 기준으로 합니다.</item>
+    </plurals>
     <string name="debug_prerun_instruction">이번 실행에서 할 일: %1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="other">종료하기 전에 게임을 최소 %1$d분 동안 열어 두세요.</item>

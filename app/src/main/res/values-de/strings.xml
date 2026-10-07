@@ -1223,6 +1223,11 @@
     <string name="main_downloading_steam">Steam wird heruntergeladen…</string>
     <string name="steam_update_required_title">Update erforderlich</string>
     <string name="steam_update_required_message">Für dieses Spiel liegt ein Update vor. Der Steam-Client kann es erst starten, wenn das Update installiert ist. Jetzt aktualisieren und dann erneut starten.</string>
+    <string name="steam_agreement_ssa_title">Steam-Nutzungsvertrag</string>
+    <string name="steam_agreement_eula_title">Endbenutzer-Lizenzvertrag</string>
+    <string name="steam_agreement_message">Steam verlangt, dass du diese Vereinbarung akzeptierst, bevor du spielst.</string>
+    <string name="steam_agreement_accept">Akzeptieren</string>
+    <string name="steam_agreement_decline">Ablehnen</string>
     <string name="main_installing_glibc">GLIBC-Komponenten werden installiert…</string>
     <string name="main_installing_bionic">Bionic-Komponenten werden installiert…</string>
     <string name="main_loading">Lädt…</string>
@@ -2709,6 +2714,18 @@
     <string name="gyro_section_response">Reaktion</string>
     <string name="gyro_output">Ausgabe</string>
     <string name="gyro_output_subtitle">Wähle aus, was die Gerätebewegung steuert.</string>
+    <string name="gyro_conversion_style">Umrechnungsmodus</string>
+    <string name="gyro_conversion_yaw">Lokale Koordinaten (Gieren)</string>
+    <string name="gyro_conversion_roll">Lokale Koordinaten (Rollen)</string>
+    <string name="gyro_conversion_yaw_roll">Lokale Koordinaten (Gieren + Rollen)</string>
+    <string name="gyro_conversion_player">Spielerkoordinaten</string>
+    <string name="gyro_conversion_world">Weltkoordinaten</string>
+    <string name="gyro_conversion_yaw_help">Drehe das Gerät seitwärts, um horizontal zu zielen, und kippe es nach oben oder unten, um vertikal zu zielen. Die Achsen folgen dem Bildschirm.</string>
+    <string name="gyro_conversion_roll_help">Drehe das Gerät wie ein Lenkrad, um horizontal zu zielen. Kippe es nach oben oder unten, um vertikal zu zielen.</string>
+    <string name="gyro_conversion_yaw_roll_help">Seitliches Drehen und Lenkradbewegungen tragen beide zum horizontalen Zielen bei. Kippe das Gerät nach oben oder unten, um vertikal zu zielen.</string>
+    <string name="gyro_conversion_player_help">Horizontales Zielen passt sich daran an, wie aufrecht oder flach du das Gerät hältst. Vertikales Zielen folgt seiner Neigung nach oben und unten. Am besten für aufrechtes Sitzen oder Stehen geeignet.</string>
+    <string name="gyro_conversion_world_help">Das Zielen richtet sich nach der realen Aufwärtsrichtung und passt beide Achsen mithilfe der Schwerkraft an. Am besten für aufrechtes Sitzen oder Stehen geeignet.</string>
+    <string name="gyro_conversion_unavailable">Die Ausrichtung kann auf diesem Gerät nicht erfasst werden. Lokale Koordinaten (Gieren) werden verwendet.</string>
     <string name="gyro_tilt_steering">Neigungslenkung</string>
     <string name="gyro_tilt_steering_subtitle">Halte das Gerät geneigt, um eine horizontale Stick-Eingabe beizubehalten. Die aktuelle Position wird bei jeder Gyro-Aktivierung zentriert.</string>
     <string name="gyro_tilt_unavailable">Dieses Gerät bietet nicht den für die Neigungslenkung erforderlichen Orientierungssensor.</string>
@@ -2778,6 +2795,58 @@
     <string name="control_profile_failed">Vorgang mit Steuerungsprofil fehlgeschlagen: %1$s</string>
     <string name="control_profile_delete_title">Steuerungsprofil löschen?</string>
     <string name="control_profile_delete_message">„%1$s“ aus der Bibliothek entfernen? Bereits damit konfigurierte Spiele behalten ihre Steuerung.</string>
+    <string name="sort_compatibility">Kompatibilität</string>
+    <string name="community_compatibility_details">Details</string>
+    <string name="community_compatibility_expanded">Ausgeklappt</string>
+    <string name="community_compatibility_collapsed">Eingeklappt</string>
+    <string name="community_compatibility_short_disclaimer">Community-Ergebnisse sind keine Garantie.</string>
+    <string name="community_compatibility_unreliable_short">Unzuverlässige Ergebnisse; spielbarer Betrieb ist nicht bestätigt.</string>
+    <string name="community_compatibility_performance_caution">Die gemeldete Leistung kann eingeschränkt sein.</string>
+    <string name="community_compatibility_checking_short">Wird geprüft…</string>
+    <string name="community_compatibility_unavailable_short">Nicht verfügbar</string>
+    <string name="community_compatibility_unavailable">Kompatibilität konnte nicht geladen werden</string>
+    <string name="community_compatibility_missing_tier">In der Antwort fehlen die Hardwaredaten, um das Ergebnis auf dein Gerät anzuwenden.</string>
+    <string name="community_compatibility_works">Läuft gut</string>
+    <string name="community_compatibility_should">Läuft</string>
+    <string name="community_compatibility_may">Läuft vielleicht</string>
+    <string name="community_compatibility_mixed">Unzuverlässig</string>
+    <string name="community_compatibility_wont">Läuft nicht</string>
+    <string name="community_compatibility_unknown">Ungetestet</string>
+    <string name="community_compatibility_checking">Kompatibilität wird geprüft…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="one">%1$d bewertete geteilte Konfiguration von diesem Gerätemodell</item>
+        <item quantity="other">%1$d bewertete geteilte Konfigurationen von diesem Gerätemodell</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="one">%1$d bewertete geteilte Konfiguration mit deiner GPU</item>
+        <item quantity="other">%1$d bewertete geteilte Konfigurationen mit deiner GPU</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">Keine geteilten Konfigurationen für deine Hardware gefunden</string>
+    <string name="community_compatibility_configs_unavailable">Einige Kompatibilitätsdaten konnten nicht geladen werden. Verfügbare Daten werden angezeigt.</string>
+    <string name="community_compatibility_retry">Erneut versuchen</string>
+    <string name="community_compatibility_fps_median">Gemeldeter Median: %1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s auf deinem Gerätemodell.</string>
+    <string name="community_compatibility_fps_soc">%1$s mit demselben Chipsatz.</string>
+    <string name="community_compatibility_fps_gpu">%1$s mit deiner GPU.</string>
+    <string name="community_compatibility_fps_family">%1$s mit kompatiblen GPUs.</string>
+    <string name="community_compatibility_view_reports">Konfigurationen</string>
+    <string name="community_config_install_before_apply">Installiere dieses Spiel, bevor du eine Community-Konfiguration anwendest.</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="one">Basierend auf %1$d aufgezeichneter Sitzung auf deinem Gerätemodell.</item>
+        <item quantity="other">Basierend auf %1$d aufgezeichneten Sitzungen auf deinem Gerätemodell.</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="one">Basierend auf %1$d aufgezeichneter Sitzung mit demselben Chipsatz.</item>
+        <item quantity="other">Basierend auf %1$d aufgezeichneten Sitzungen mit demselben Chipsatz.</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="one">Basierend auf %1$d aufgezeichneter Sitzung mit deiner GPU.</item>
+        <item quantity="other">Basierend auf %1$d aufgezeichneten Sitzungen mit deiner GPU.</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="one">Basierend auf %1$d aufgezeichneter Sitzung in deiner GPU-Familie.</item>
+        <item quantity="other">Basierend auf %1$d aufgezeichneten Sitzungen in deiner GPU-Familie.</item>
+    </plurals>
     <string name="debug_prerun_instruction">Das tust du in diesem Lauf: %1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="one">Lass das Spiel mindestens %1$d Minute geöffnet, bevor du es beendest.</item>

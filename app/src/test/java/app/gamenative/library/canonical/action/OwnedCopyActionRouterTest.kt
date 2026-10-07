@@ -93,6 +93,40 @@ class OwnedCopyActionRouterTest {
     }
 
     @Test
+    fun installedOptionsIgnoreUninstalledPreferenceWithoutChangingExplicitSourceDetails() = runTest {
+        val fixture = fixture()
+        val steam = key(GameSource.STEAM, "1")
+        val gog = key(GameSource.GOG, "2")
+        val operation = OwnedCopyOperation.OPEN_SOURCE_DETAILS
+        fixture.available(steam, setOf(operation))
+        fixture.available(gog, setOf(operation))
+        val card = card(listOf(summary(steam, setOf(operation)),
+            summary(gog, setOf(operation), installed = true)), preferredCopy = steam)
+        val result = fixture.router.route(card, operation) as OwnedCopyRouteResult.Ready
+        assertEquals(gog, result.guard.key)
+        assertEquals(0, fixture.adapters.getValue(GameSource.STEAM).resolveCalls)
+        val explicit = fixture.router.route(card, operation, explicitKey = steam) as OwnedCopyRouteResult.Ready
+        assertEquals(steam, explicit.guard.key)
+        assertEquals(ActionSelectionPolicy.EXPLICIT, explicit.policy)
+        assertEquals(steam, card.preferredCopy)
+    }
+
+    @Test
+    fun installedOptionsChooserContainsOnlyInstalledCapableSources() = runTest {
+        val fixture = fixture()
+        val steam = key(GameSource.STEAM, "1")
+        val gog = key(GameSource.GOG, "2")
+        val epic = key(GameSource.EPIC, "epic")
+        val operation = OwnedCopyOperation.OPEN_SOURCE_DETAILS
+        val result = fixture.router.route(card(listOf(
+            summary(steam, setOf(operation)), summary(epic, setOf(operation), installed = true),
+            summary(gog, setOf(operation), installed = true),
+        )), operation)
+        assertEquals(OwnedCopyRouteResult.NeedsChooser(listOf(gog, epic)), result)
+        assertEquals(0, fixture.totalResolveCalls())
+    }
+
+    @Test
     fun validCapablePreferredCopyWinsOverMoreRecentCopy() = runTest {
         val fixture = fixture()
         val steam = key(GameSource.STEAM, "1")

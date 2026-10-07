@@ -1086,6 +1086,11 @@
     <string name="main_downloading_steam">Downloader Steam...</string>
     <string name="steam_update_required_title">Opdatering påkrævet</string>
     <string name="steam_update_required_message">Dette spil har en opdatering. Steam-klienten kan ikke starte det, før opdateringen er installeret. Opdater nu, og start derefter igen.</string>
+    <string name="steam_agreement_ssa_title">Steam-abonnentaftale</string>
+    <string name="steam_agreement_eula_title">Slutbrugerlicensaftale</string>
+    <string name="steam_agreement_message">Steam kræver, at du accepterer denne aftale, før du spiller.</string>
+    <string name="steam_agreement_accept">Accepter</string>
+    <string name="steam_agreement_decline">Afvis</string>
     <string name="main_installing_glibc">Installerer glibc-komponenter...</string>
     <string name="main_installing_bionic">Installerer Bionic-komponenter...</string>
     <string name="main_loading">Indlæser...</string>
@@ -2639,6 +2644,18 @@
     <string name="gyro_section_response">Respons</string>
     <string name="gyro_output">Output</string>
     <string name="gyro_output_subtitle">Vælg, hvad enhedens bevægelse styrer.</string>
+    <string name="gyro_conversion_style">Konverteringstype</string>
+    <string name="gyro_conversion_yaw">Lokalt koordinatsystem (Yaw)</string>
+    <string name="gyro_conversion_roll">Lokalt koordinatsystem (Roll)</string>
+    <string name="gyro_conversion_yaw_roll">Lokalt koordinatsystem (Yaw + Roll)</string>
+    <string name="gyro_conversion_player">Spillerens koordinatsystem</string>
+    <string name="gyro_conversion_world">Verdenskoordinater</string>
+    <string name="gyro_conversion_yaw_help">Drej enheden fra side til side for at sigte vandret, og vip den op eller ned for at sigte lodret. Akserne følger skærmen.</string>
+    <string name="gyro_conversion_roll_help">Drej enheden som et rat for at sigte vandret. Vip den op eller ned for at sigte lodret.</string>
+    <string name="gyro_conversion_yaw_roll_help">Drejning fra side til side og ratbevægelser bidrager begge til vandret sigtning. Vip enheden op eller ned for at sigte lodret.</string>
+    <string name="gyro_conversion_player_help">Vandret sigtning tilpasses efter, hvor opret eller fladt du holder enheden. Lodret sigtning følger dens vip op og ned. Bedst egnet, når du sidder eller står oprejst.</string>
+    <string name="gyro_conversion_world_help">Sigtningen følger den virkelige verdens opadgående retning og bruger tyngdekraften til at justere begge akser. Bedst egnet, når du sidder eller står oprejst.</string>
+    <string name="gyro_conversion_unavailable">Orienteringssporing er ikke tilgængelig på denne enhed. Lokalt koordinatsystem (Yaw) bruges.</string>
     <string name="gyro_tilt_steering">Vippestyring</string>
     <string name="gyro_tilt_steering_subtitle">Hold enheden i en vinkel for at opretholde vandret stick-input. Den aktuelle position centreres, hver gang gyro aktiveres.</string>
     <string name="gyro_tilt_unavailable">Denne enhed leverer ikke den orienteringssensor, som vippestyring kræver.</string>
@@ -2708,6 +2725,58 @@
     <string name="control_profile_failed">Handlingen for styringsprofilen mislykkedes: %1$s</string>
     <string name="control_profile_delete_title">Slet styringsprofil?</string>
     <string name="control_profile_delete_message">Fjern “%1$s” fra biblioteket? Spil, der allerede er konfigureret med profilen, beholder deres styring.</string>
+    <string name="sort_compatibility">Kompatibilitet</string>
+    <string name="community_compatibility_details">Detaljer</string>
+    <string name="community_compatibility_expanded">Udvidet</string>
+    <string name="community_compatibility_collapsed">Sammenfoldet</string>
+    <string name="community_compatibility_short_disclaimer">Fællesskabets resultater er ingen garanti.</string>
+    <string name="community_compatibility_unreliable_short">Upålidelige resultater; det er ikke bekræftet, at spillet kan spilles.</string>
+    <string name="community_compatibility_performance_caution">Den rapporterede ydeevne kan være begrænset.</string>
+    <string name="community_compatibility_checking_short">Tjekker…</string>
+    <string name="community_compatibility_unavailable_short">Utilgængelig</string>
+    <string name="community_compatibility_unavailable">Kompatibilitet kunne ikke indlæses</string>
+    <string name="community_compatibility_missing_tier">Svaret mangler de hardwaredata, der er nødvendige for at anvende resultatet på din enhed.</string>
+    <string name="community_compatibility_works">Kører godt</string>
+    <string name="community_compatibility_should">Virker</string>
+    <string name="community_compatibility_may">Virker måske</string>
+    <string name="community_compatibility_mixed">Upålidelig</string>
+    <string name="community_compatibility_wont">Virker ikke</string>
+    <string name="community_compatibility_unknown">Ikke testet</string>
+    <string name="community_compatibility_checking">Tjekker kompatibilitet…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="one">%1$d bedømt delt konfiguration fra denne enhedsmodel</item>
+        <item quantity="other">%1$d bedømte delte konfigurationer fra denne enhedsmodel</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="one">%1$d bedømt delt konfiguration med din GPU</item>
+        <item quantity="other">%1$d bedømte delte konfigurationer med din GPU</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">Ingen delte konfigurationer fundet til din hardware</string>
+    <string name="community_compatibility_configs_unavailable">Nogle kompatibilitetsdata kunne ikke indlæses. Viser tilgængelige data.</string>
+    <string name="community_compatibility_retry">Prøv igen</string>
+    <string name="community_compatibility_fps_median">Rapporteret median: %1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s på din enhedsmodel.</string>
+    <string name="community_compatibility_fps_soc">%1$s med samme chipsæt.</string>
+    <string name="community_compatibility_fps_gpu">%1$s med din GPU.</string>
+    <string name="community_compatibility_fps_family">%1$s med kompatible GPU’er.</string>
+    <string name="community_compatibility_view_reports">Konfigurationer</string>
+    <string name="community_config_install_before_apply">Installer dette spil, før du anvender en fællesskabskonfiguration.</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="one">Baseret på %1$d registreret session på din enhedsmodel.</item>
+        <item quantity="other">Baseret på %1$d registrerede sessioner på din enhedsmodel.</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="one">Baseret på %1$d registreret session med samme chipsæt.</item>
+        <item quantity="other">Baseret på %1$d registrerede sessioner med samme chipsæt.</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="one">Baseret på %1$d registreret session med din GPU.</item>
+        <item quantity="other">Baseret på %1$d registrerede sessioner med din GPU.</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="one">Baseret på %1$d registreret session i din GPU-familie.</item>
+        <item quantity="other">Baseret på %1$d registrerede sessioner i din GPU-familie.</item>
+    </plurals>
     <string name="debug_prerun_instruction">Det skal du gøre i denne kørsel: %1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="one">Hold spillet åbent i mindst %1$d minut, før du afslutter.</item>

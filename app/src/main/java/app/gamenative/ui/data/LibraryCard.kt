@@ -1,5 +1,6 @@
 package app.gamenative.ui.data
 
+import app.gamenative.data.CommunityCompatibilitySummary
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
@@ -43,6 +44,7 @@ data class LibraryCard(
     val isRecLoading: Boolean = false,
     val favoriteAppIds: Set<String> = emptySet(),
     val artworkFallback: CanonicalCardArtwork? = null,
+    val communityCompatibility: CommunityCompatibilitySummary? = null,
 ) {
     val composeKey: String
         get() = when (val value = identity) {
@@ -70,24 +72,28 @@ data class LibraryCard(
             item: LibraryItem,
             compatibilityStatus: GameCompatibilityStatus? = item.compatibilityStatus,
             gameStats: GameCardStats? = null,
+            communityCompatibility: CommunityCompatibilitySummary? = null,
         ): LibraryCard = fromLibraryItem(
             identity = LibraryCardIdentity.SourceCopy(item),
             item = item,
             iconUrl = item.clientIconUrl,
             compatibilityStatus = compatibilityStatus,
             gameStats = gameStats,
+            communityCompatibility = communityCompatibility,
         )
 
         fun fromPromotion(
             item: LibraryItem,
             compatibilityStatus: GameCompatibilityStatus? = item.compatibilityStatus,
             gameStats: GameCardStats? = null,
+            communityCompatibility: CommunityCompatibilitySummary? = null,
         ): LibraryCard = fromLibraryItem(
             identity = LibraryCardIdentity.Promotion(item.appId),
             item = item,
             iconUrl = item.iconHash,
             compatibilityStatus = compatibilityStatus,
             gameStats = gameStats,
+            communityCompatibility = communityCompatibility,
         )
 
         private fun fromLibraryItem(
@@ -96,6 +102,7 @@ data class LibraryCard(
             iconUrl: String,
             compatibilityStatus: GameCompatibilityStatus?,
             gameStats: GameCardStats?,
+            communityCompatibility: CommunityCompatibilitySummary?,
         ): LibraryCard = LibraryCard(
             identity = identity,
             index = item.index,
@@ -108,6 +115,7 @@ data class LibraryCard(
             ownedSources = setOf(item.gameSource),
             compatibilityStatus = compatibilityStatus,
             gameStats = gameStats,
+            communityCompatibility = communityCompatibility,
             sizeBytes = item.sizeBytes,
             isInstalled = item.isInstalled,
             isShared = item.isShared,
@@ -144,6 +152,7 @@ data class LibraryCard(
             isShared: Boolean = false,
             favoriteAppIds: Set<String> = emptySet(),
             artworkFallback: CanonicalCardArtwork? = null,
+            communityCompatibility: CommunityCompatibilitySummary? = null,
         ): LibraryCard = LibraryCard(
             identity = LibraryCardIdentity.Canonical(key),
             index = index,
@@ -156,6 +165,7 @@ data class LibraryCard(
             ownedSources = ownedSources,
             compatibilityStatus = compatibilityStatus,
             gameStats = gameStats,
+            communityCompatibility = communityCompatibility,
             sizeBytes = sizeBytes,
             isInstalled = isInstalled,
             isShared = isShared,

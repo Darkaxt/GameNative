@@ -1288,6 +1288,11 @@
     <string name="main_downloading_steam">Téléchargement de Steam…</string>
     <string name="steam_update_required_title">Mise à jour requise</string>
     <string name="steam_update_required_message">Une mise à jour est disponible pour ce jeu. Le client Steam ne peut pas le lancer tant qu\'elle n\'est pas installée. Mettez à jour, puis relancez.</string>
+    <string name="steam_agreement_ssa_title">Accord de souscription Steam</string>
+    <string name="steam_agreement_eula_title">Contrat de licence utilisateur final</string>
+    <string name="steam_agreement_message">Steam exige que vous acceptiez cet accord avant de jouer.</string>
+    <string name="steam_agreement_accept">Accepter</string>
+    <string name="steam_agreement_decline">Refuser</string>
     <string name="main_installing_glibc">Installation des composants glibc…</string>
     <string name="main_installing_bionic">Installation des composants Bionic…</string>
     <string name="main_loading">Chargement…</string>
@@ -2769,6 +2774,18 @@
     <string name="gyro_section_response">Réponse</string>
     <string name="gyro_output">Sortie</string>
     <string name="gyro_output_subtitle">Choisissez ce que contrôle le mouvement de l’appareil.</string>
+    <string name="gyro_conversion_style">Mode de conversion</string>
+    <string name="gyro_conversion_yaw">Repère local (lacet)</string>
+    <string name="gyro_conversion_roll">Repère local (roulis)</string>
+    <string name="gyro_conversion_yaw_roll">Repère local (lacet + roulis)</string>
+    <string name="gyro_conversion_player">Repère du joueur</string>
+    <string name="gyro_conversion_world">Repère global</string>
+    <string name="gyro_conversion_yaw_help">Tournez l’appareil vers la gauche ou la droite pour viser horizontalement et inclinez-le vers le haut ou le bas pour viser verticalement. Les axes suivent l’écran.</string>
+    <string name="gyro_conversion_roll_help">Tournez l’appareil comme un volant pour viser horizontalement. Inclinez-le vers le haut ou le bas pour viser verticalement.</string>
+    <string name="gyro_conversion_yaw_roll_help">La rotation latérale et la rotation comme un volant contribuent toutes deux à la visée horizontale. Inclinez l’appareil vers le haut ou le bas pour viser verticalement.</string>
+    <string name="gyro_conversion_player_help">La visée horizontale s’adapte selon que vous tenez l’appareil à plat ou à la verticale. La visée verticale suit son inclinaison vers le haut et le bas. Convient surtout en position assise ou debout, le corps droit.</string>
+    <string name="gyro_conversion_world_help">La visée suit la verticale réelle et utilise la gravité pour ajuster les deux axes. Convient surtout en position assise ou debout, le corps droit.</string>
+    <string name="gyro_conversion_unavailable">Le suivi de l’orientation n’est pas disponible sur cet appareil. Le repère local (lacet) sera utilisé.</string>
     <string name="gyro_tilt_steering">Direction par inclinaison</string>
     <string name="gyro_tilt_steering_subtitle">Maintenez l’appareil incliné pour conserver une entrée horizontale du stick. La position actuelle est recentrée à chaque activation du gyroscope.</string>
     <string name="gyro_tilt_unavailable">Cet appareil ne fournit pas le capteur d’orientation requis pour la direction par inclinaison.</string>
@@ -2838,6 +2855,58 @@
     <string name="control_profile_failed">Échec de l’opération sur le profil de commandes : %1$s</string>
     <string name="control_profile_delete_title">Supprimer le profil de commandes ?</string>
     <string name="control_profile_delete_message">Retirer « %1$s » de la bibliothèque ? Les jeux déjà configurés avec ce profil conserveront leurs commandes.</string>
+    <string name="sort_compatibility">Compatibilité</string>
+    <string name="community_compatibility_details">Détails</string>
+    <string name="community_compatibility_expanded">Développé</string>
+    <string name="community_compatibility_collapsed">Réduit</string>
+    <string name="community_compatibility_short_disclaimer">Les résultats de la communauté ne sont pas une garantie.</string>
+    <string name="community_compatibility_unreliable_short">Résultats peu fiables ; la jouabilité n’est pas confirmée.</string>
+    <string name="community_compatibility_performance_caution">Les performances signalées peuvent être limitées.</string>
+    <string name="community_compatibility_checking_short">Vérification…</string>
+    <string name="community_compatibility_unavailable_short">Indisponible</string>
+    <string name="community_compatibility_unavailable">Impossible de charger la compatibilité</string>
+    <string name="community_compatibility_missing_tier">La réponse ne contient pas les données matérielles nécessaires pour appliquer le résultat à votre appareil.</string>
+    <string name="community_compatibility_works">Fonctionne bien</string>
+    <string name="community_compatibility_should">Fonctionne</string>
+    <string name="community_compatibility_may">Peut fonctionner</string>
+    <string name="community_compatibility_mixed">Peu fiable</string>
+    <string name="community_compatibility_wont">Ne fonctionne pas</string>
+    <string name="community_compatibility_unknown">Non testé</string>
+    <string name="community_compatibility_checking">Vérification de la compatibilité…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="one">%1$d configuration partagée évaluée de ce modèle d’appareil</item>
+        <item quantity="other">%1$d configurations partagées évaluées de ce modèle d’appareil</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="one">%1$d configuration partagée évaluée avec votre GPU</item>
+        <item quantity="other">%1$d configurations partagées évaluées avec votre GPU</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">Aucune configuration partagée trouvée pour votre matériel</string>
+    <string name="community_compatibility_configs_unavailable">Certaines données de compatibilité n’ont pas pu être chargées. Affichage des données disponibles.</string>
+    <string name="community_compatibility_retry">Réessayer</string>
+    <string name="community_compatibility_fps_median">Médiane signalée : %1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s sur votre modèle d’appareil.</string>
+    <string name="community_compatibility_fps_soc">%1$s avec le même chipset.</string>
+    <string name="community_compatibility_fps_gpu">%1$s avec votre GPU.</string>
+    <string name="community_compatibility_fps_family">%1$s avec des GPU compatibles.</string>
+    <string name="community_compatibility_view_reports">Configurations</string>
+    <string name="community_config_install_before_apply">Installez ce jeu avant d’appliquer une configuration de la communauté.</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="one">Selon %1$d session enregistrée sur votre modèle d’appareil.</item>
+        <item quantity="other">Selon %1$d sessions enregistrées sur votre modèle d’appareil.</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="one">Selon %1$d session enregistrée avec le même chipset.</item>
+        <item quantity="other">Selon %1$d sessions enregistrées avec le même chipset.</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="one">Selon %1$d session enregistrée avec votre GPU.</item>
+        <item quantity="other">Selon %1$d sessions enregistrées avec votre GPU.</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="one">Selon %1$d session enregistrée dans votre famille de GPU.</item>
+        <item quantity="other">Selon %1$d sessions enregistrées dans votre famille de GPU.</item>
+    </plurals>
     <string name="debug_prerun_instruction">À faire pendant cette session : %1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="one">Gardez le jeu ouvert au moins %1$d minute avant de quitter.</item>

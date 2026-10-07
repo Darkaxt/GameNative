@@ -33,6 +33,29 @@ class CanonicalDetailMediaPolicyTest {
     }
 
     @Test
+    fun `short overview does not let readability minimum push player controls below viewport`() {
+        val width = constrainedMediaGalleryWidth(
+            availableWidth = 700.dp,
+            availableHeight = 200.dp,
+            hasCarousel = true,
+        )
+
+        assertTrue(width > 0.dp)
+        assertTrue(width * 9f / 16f + 84.dp <= 168.dp)
+    }
+
+    @Test
+    fun `short overview without carousel still fits the full media frame`() {
+        val width = constrainedMediaGalleryWidth(
+            availableWidth = 700.dp,
+            availableHeight = 200.dp,
+            hasCarousel = false,
+        )
+
+        assertTrue(width * 9f / 16f <= 168.dp)
+    }
+
+    @Test
     fun `trailers start muted and unmute without changing system volume`() {
         assertEquals(0f, trailerVolume(muted = true))
         assertEquals(1f, trailerVolume(muted = false))

@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.gamenative.R
 import app.gamenative.data.GameSource
+import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.library.canonical.CanonicalCardKey
@@ -94,7 +95,14 @@ internal fun CanonicalCopiesSheet(
     modifier: Modifier = Modifier,
     feedback: CanonicalCopiesFeedback? = null,
     actionInProgress: Boolean = false,
+    requestedOperation: OwnedCopyOperation? = null,
+    eligibleKeys: Set<OwnedCopyKey>? = null,
 ) {
+    val visibleCopies = card.copies.filter { copy ->
+        (eligibleKeys == null || copy.key in eligibleKeys) &&
+            (requestedOperation == null ||
+                (copy.unavailableReason == null && requestedOperation in copy.capabilities))
+    }
     var pendingSeparation by remember(card.key) { mutableStateOf<OwnedCopySummary?>(null) }
     val sheetFocusRequester = remember(card.key) { FocusRequester() }
     val inputModeManager = LocalInputModeManager.current
@@ -151,7 +159,7 @@ internal fun CanonicalCopiesSheet(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 itemsIndexed(
-                    items = card.copies,
+                    items = visibleCopies,
                     key = { index, copy -> "${copy.source.name}:$index" },
                 ) { _, copy ->
                     CanonicalCopyRow(
@@ -164,6 +172,7 @@ internal fun CanonicalCopiesSheet(
                         onResetDecision = { onResetDecision(copy) },
                         onFixSteamMatch = { onFixSteamMatch(copy) },
                         isSteamMatchScanning = isSteamMatchScanning,
+                        requestedOperation = requestedOperation,
                     )
                 }
             }
@@ -215,6 +224,7 @@ private fun CanonicalCopyRow(
     onResetDecision: () -> Unit,
     onFixSteamMatch: () -> Unit,
     isSteamMatchScanning: Boolean,
+    requestedOperation: OwnedCopyOperation?,
 ) {
     val source = sourceLabel(copy.source)
     val unavailable = copy.unavailableReason != null
@@ -225,9 +235,13 @@ private fun CanonicalCopyRow(
         else -> stringResource(R.string.not_installed)
     }
     var rememberChoice by remember(card.key, copy.key) { mutableStateOf(false) }
-    val sortedOperations = copy.capabilities.sortedBy(::operationRank)
-    val regularOperations = sortedOperations.filterNot(COMPACT_OPERATIONS::contains)
-    val compactOperations = sortedOperations.filter(COMPACT_OPERATIONS::contains)
+    val sortedOperations = if (requestedOperation != null) {
+        listOf(requestedOperation).filter(copy.capabilities::contains)
+    } else {
+        copy.capabilities.sortedBy(::operationRank)
+    }
+    val regularOperations = if (requestedOperation != null) sortedOperations else sortedOperations.filterNot(COMPACT_OPERATIONS::contains)
+    val compactOperations = if (requestedOperation != null) emptyList() else sortedOperations.filter(COMPACT_OPERATIONS::contains)
     val sourceDetailsFocusRequester = remember(copy.key) { FocusRequester() }
 
     Card(

@@ -1086,6 +1086,11 @@
     <string name="main_downloading_steam">Baixando Steam...</string>
     <string name="steam_update_required_title">Atualização necessária</string>
     <string name="steam_update_required_message">Este jogo tem uma atualização. O cliente Steam não consegue iniciá-lo até que a atualização seja instalada. Atualize agora e depois inicie novamente.</string>
+    <string name="steam_agreement_ssa_title">Acordo de Assinatura do Steam</string>
+    <string name="steam_agreement_eula_title">Contrato de Licença de Usuário Final</string>
+    <string name="steam_agreement_message">O Steam exige que você aceite este acordo antes de jogar.</string>
+    <string name="steam_agreement_accept">Aceitar</string>
+    <string name="steam_agreement_decline">Recusar</string>
     <string name="main_installing_glibc">Instalando componentes glibc...</string>
     <string name="main_installing_bionic">Instalando componentes Bionic...</string>
     <string name="main_loading">Carregando...</string>
@@ -2639,6 +2644,18 @@
     <string name="gyro_section_response">Resposta</string>
     <string name="gyro_output">Saída</string>
     <string name="gyro_output_subtitle">Escolha o que o movimento do dispositivo controla.</string>
+    <string name="gyro_conversion_style">Modo de conversão</string>
+    <string name="gyro_conversion_yaw">Espaço local (guinada)</string>
+    <string name="gyro_conversion_roll">Espaço local (rolagem)</string>
+    <string name="gyro_conversion_yaw_roll">Espaço local (guinada + rolagem)</string>
+    <string name="gyro_conversion_player">Espaço do jogador</string>
+    <string name="gyro_conversion_world">Espaço global</string>
+    <string name="gyro_conversion_yaw_help">Gire o dispositivo para os lados para mirar na horizontal e incline-o para cima ou para baixo para mirar na vertical. Os eixos acompanham a tela.</string>
+    <string name="gyro_conversion_roll_help">Gire o dispositivo como um volante para mirar na horizontal. Incline-o para cima ou para baixo para mirar na vertical.</string>
+    <string name="gyro_conversion_yaw_roll_help">Girar para os lados e girar como um volante contribuem para a mira horizontal. Incline o dispositivo para cima ou para baixo para mirar na vertical.</string>
+    <string name="gyro_conversion_player_help">A mira horizontal se adapta ao ângulo em que você segura o dispositivo, na vertical ou deitado. A mira vertical acompanha a inclinação para cima e para baixo. Mais adequado ao jogar sentado ou em pé com o tronco ereto.</string>
+    <string name="gyro_conversion_world_help">A mira segue a direção vertical do mundo real e usa a gravidade para ajustar os dois eixos. Mais adequado ao jogar sentado ou em pé com o tronco ereto.</string>
+    <string name="gyro_conversion_unavailable">O rastreamento de orientação não está disponível neste dispositivo. Será usado o espaço local (guinada).</string>
     <string name="gyro_tilt_steering">Direção por inclinação</string>
     <string name="gyro_tilt_steering_subtitle">Mantenha o dispositivo inclinado para sustentar a entrada horizontal do analógico. A posição atual é centralizada sempre que o giroscópio é ativado.</string>
     <string name="gyro_tilt_unavailable">Este dispositivo não oferece o sensor de orientação necessário para a direção por inclinação.</string>
@@ -2708,6 +2725,58 @@
     <string name="control_profile_failed">Falha na operação do perfil de controle: %1$s</string>
     <string name="control_profile_delete_title">Excluir perfil de controle?</string>
     <string name="control_profile_delete_message">Remover “%1$s” da biblioteca? Os jogos já configurados com ele manterão seus controles.</string>
+    <string name="sort_compatibility">Compatibilidade</string>
+    <string name="community_compatibility_details">Detalhes</string>
+    <string name="community_compatibility_expanded">Expandido</string>
+    <string name="community_compatibility_collapsed">Recolhido</string>
+    <string name="community_compatibility_short_disclaimer">Os resultados da comunidade não são uma garantia.</string>
+    <string name="community_compatibility_unreliable_short">Resultados pouco confiáveis; a jogabilidade não foi confirmada.</string>
+    <string name="community_compatibility_performance_caution">O desempenho relatado pode ser limitado.</string>
+    <string name="community_compatibility_checking_short">Verificando…</string>
+    <string name="community_compatibility_unavailable_short">Indisponível</string>
+    <string name="community_compatibility_unavailable">Não foi possível carregar a compatibilidade</string>
+    <string name="community_compatibility_missing_tier">A resposta não inclui os dados de hardware necessários para aplicar o resultado ao seu dispositivo.</string>
+    <string name="community_compatibility_works">Roda bem</string>
+    <string name="community_compatibility_should">Funciona</string>
+    <string name="community_compatibility_may">Pode funcionar</string>
+    <string name="community_compatibility_mixed">Pouco confiável</string>
+    <string name="community_compatibility_wont">Não funciona</string>
+    <string name="community_compatibility_unknown">Não testado</string>
+    <string name="community_compatibility_checking">Verificando compatibilidade…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="one">%1$d configuração compartilhada avaliada deste modelo de dispositivo</item>
+        <item quantity="other">%1$d configurações compartilhadas avaliadas deste modelo de dispositivo</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="one">%1$d configuração compartilhada avaliada com sua GPU</item>
+        <item quantity="other">%1$d configurações compartilhadas avaliadas com sua GPU</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">Nenhuma configuração compartilhada encontrada para seu hardware</string>
+    <string name="community_compatibility_configs_unavailable">Não foi possível carregar alguns dados de compatibilidade. Exibindo os dados disponíveis.</string>
+    <string name="community_compatibility_retry">Tentar novamente</string>
+    <string name="community_compatibility_fps_median">Mediana relatada: %1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s no seu modelo de dispositivo.</string>
+    <string name="community_compatibility_fps_soc">%1$s com o mesmo chipset.</string>
+    <string name="community_compatibility_fps_gpu">%1$s com sua GPU.</string>
+    <string name="community_compatibility_fps_family">%1$s com GPUs compatíveis.</string>
+    <string name="community_compatibility_view_reports">Ver configurações</string>
+    <string name="community_config_install_before_apply">Instale este jogo antes de aplicar uma configuração da comunidade.</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="one">Com base em %1$d sessão registrada no seu modelo de dispositivo.</item>
+        <item quantity="other">Com base em %1$d sessões registradas no seu modelo de dispositivo.</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="one">Com base em %1$d sessão registrada com o mesmo chipset.</item>
+        <item quantity="other">Com base em %1$d sessões registradas com o mesmo chipset.</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="one">Com base em %1$d sessão registrada com sua GPU.</item>
+        <item quantity="other">Com base em %1$d sessões registradas com sua GPU.</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="one">Com base em %1$d sessão registrada na sua família de GPU.</item>
+        <item quantity="other">Com base em %1$d sessões registradas na sua família de GPU.</item>
+    </plurals>
     <string name="debug_prerun_instruction">O que fazer nesta execução: %1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="one">Mantenha o jogo aberto por pelo menos %1$d minuto antes de sair.</item>

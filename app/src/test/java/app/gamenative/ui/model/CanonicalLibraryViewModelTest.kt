@@ -307,6 +307,44 @@ class CanonicalLibraryViewModelTest {
         }
     }
 
+    @Test
+    fun `legacy compatibility sort uses the cache verdict shown on each card`() {
+        val works = GameCompatibilityService.GameCompatibilityResponse(
+            gameName = "Z Works", state = "Great", tier = "family",
+            tiers = mapOf("family" to GameCompatibilityService.CompatibilityTierMetrics(
+                key = "Adreno", sessions = 1, playable = 1,
+            )),
+        )
+        every { GameCompatibilityCache.getCached(any()) } answers {
+            works.takeIf { firstArg<String>() == works.gameName }
+        }
+        PrefManager.librarySortOption = SortOption.COMPATIBILITY
+        awaitPreference { PrefManager.librarySortOption == SortOption.COMPATIBILITY }
+        withLegacyLibrary(gogGames = listOf(
+            GOGGame(id = "10", title = "A Unknown"),
+            GOGGame(id = "20", title = works.gameName),
+        )) { vm ->
+            assertEquals(SortOption.COMPATIBILITY, vm.state.value.currentSortOption)
+            assertEquals(listOf("Z Works", "A Unknown"), vm.state.value.cards.map { it.name })
+            assertEquals(app.gamenative.data.CommunityCompatibilityVerdict.WORKS,
+                vm.state.value.cards.first().communityCompatibility?.verdict)
+        }
+    }
+
+    @Test
+    fun `legacy compatibility sort keeps the native installed copy first`() {
+        PrefManager.librarySortOption = SortOption.COMPATIBILITY
+        awaitPreference { PrefManager.librarySortOption == SortOption.COMPATIBILITY }
+        withLegacyLibrary(gogGames = listOf(
+            GOGGame(id = "10", title = "A Uninstalled"),
+            GOGGame(id = "20", title = "Z Installed", isInstalled = true),
+        )) { vm ->
+            assertEquals(SortOption.COMPATIBILITY, vm.state.value.currentSortOption)
+            assertEquals(listOf("Z Installed", "A Uninstalled"), vm.state.value.cards.map { it.name })
+            assertTrue(vm.state.value.cards.first().isInstalled)
+        }
+    }
+
     private fun legacySteam(id: Int) = SteamApp(id = id, name = "Steam $id", type = app.gamenative.enums.AppType.game)
 
     private fun withLegacyLibrary(
@@ -1439,6 +1477,59 @@ class CanonicalLibraryViewModelTest {
         assertEquals(listOf("Collected"), page.cards.map { it.name })
         assertEquals(mapOf("favorites" to 1), page.steamCollectionCounts)
     }
+
+    @Test
+    fun communitySummaryProjectionPrefersCanonicalDisplayName() {
+        val works = communityResponse("Canonical", "Great")
+        val broken = communityResponse("A alias", "Broken")
+        val state = canonicalState().copy(communityCompatibilityMap = mapOf(
+            "Canonical" to app.gamenative.data.CommunityCompatibilityClassifier.fromCompatibilityResponse(works),
+            "A alias" to app.gamenative.data.CommunityCompatibilityClassifier.fromCompatibilityResponse(broken),
+        ))
+        val page = project(listOf(card(name = "Canonical", aliases = setOf("A alias"))), state)
+        assertEquals(state.communityCompatibilityMap["Canonical"], communitySummary(page.cards.single()))
+    }
+
+    @Test
+    fun communitySummaryProjectionUsesDeterministicAliasAndSortVerdict() {
+        val works = app.gamenative.data.CommunityCompatibilityClassifier.fromCompatibilityResponse(communityResponse("A alias", "Great"))
+        val broken = app.gamenative.data.CommunityCompatibilityClassifier.fromCompatibilityResponse(communityResponse("z alias", "Broken"))
+        val state = canonicalState().copy(currentSortOption = SortOption.COMPATIBILITY,
+            communityCompatibilityMap = mapOf("A alias" to works, "z alias" to broken, "Other" to broken))
+        val page = project(listOf(
+            card(name = "Canonical", aliases = linkedSetOf("z alias", "A alias")),
+            card(canonicalId = canonicalId(2), name = "Other"),
+        ), state)
+        assertEquals(listOf("Canonical", "Other"), page.cards.map { it.name })
+        assertEquals(works, communitySummary(page.cards.first()))
+        assertEquals(broken, communitySummary(page.cards.last()))
+    }
+
+    @Test
+    fun communitySummaryCachedResponseIsHoistedIntoPublishedCard() = runTest(dispatcher) {
+        val response = communityResponse("Cached Canonical", "Great")
+        every { GameCompatibilityCache.getCached("Cached Canonical") } returns response
+        val repository = mockk<CanonicalLibraryRepository>()
+        every { repository.observeCards() } returns MutableStateFlow(listOf(card(name = "Cached Canonical")))
+        val vm = viewModel(repository = repository, gateEnabled = true,
+            readiness = CanonicalProjectionReadiness().apply { markSucceeded() })
+        try {
+            runCurrent()
+            assertEquals(app.gamenative.data.CommunityCompatibilityClassifier.fromCompatibilityResponse(response),
+                communitySummary(vm.state.value.cards.single()))
+        } finally {
+            viewModelStore.clear()
+        }
+    }
+
+    private fun communityResponse(name: String, state: String) = GameCompatibilityService.GameCompatibilityResponse(
+        gameName = name, state = state, tier = "family",
+        tiers = mapOf("family" to GameCompatibilityService.CompatibilityTierMetrics(
+            key = "Adreno", sessions = 3, playable = if (state == "Great") 3 else 0,
+        )),
+    )
+
+    private fun communitySummary(card: app.gamenative.ui.data.LibraryCard) = card.communityCompatibility
 
     @Test
     fun `compatibility resolves display name first then deterministic cached aliases and requests display names only`() {
@@ -2718,11 +2809,11 @@ class CanonicalLibraryViewModelTest {
         val refetchQueued = AtomicBoolean(false)
         val cachedCompatibility = GameCompatibilityService.GameCompatibilityResponse(
             gameName = "Recovery Compatible",
-            totalPlayableCount = 1,
-            gpuPlayableCount = 0,
-            avgRating = 5f,
-            hasBeenTried = true,
-            isNotWorking = false,
+            state = "Great",
+            tier = "family",
+            tiers = mapOf("family" to GameCompatibilityService.CompatibilityTierMetrics(
+                key = "Adreno", sessions = 1, playable = 1,
+            )),
         )
         coEvery { GameCompatibilityCache.clear() } coAnswers {
             compatibilityCleared.set(true)
@@ -2751,7 +2842,8 @@ class CanonicalLibraryViewModelTest {
             vm.onFilterChanged(AppFilter.COMPATIBLE)
             awaitState { state ->
                 state.appInfoSortType.contains(AppFilter.COMPATIBLE) &&
-                    state.cards.singleOrNull()?.compatibilityStatus == GameCompatibilityStatus.COMPATIBLE &&
+                    state.cards.singleOrNull()?.compatibilityStatus == GameCompatibilityStatus.GPU_COMPATIBLE &&
+                    state.cards.singleOrNull()?.communityCompatibility?.verdict == app.gamenative.data.CommunityCompatibilityVerdict.WORKS &&
                     !state.isLoading
             }
             coEvery { SteamService.refreshOwnedGamesFromServer() } throws IllegalStateException("private source failure")
@@ -2767,6 +2859,8 @@ class CanonicalLibraryViewModelTest {
                         !state.isLoading &&
                         state.cards.map { it.name } == listOf("Recovery Compatible") &&
                         state.cards.single().compatibilityStatus == null &&
+                        state.cards.single().communityCompatibility == null &&
+                        state.communityCompatibilityMap.isEmpty() &&
                         refetchQueued.get()
                 },
             )
@@ -2787,11 +2881,11 @@ class CanonicalLibraryViewModelTest {
         val gameName = "Compatibility Generation Race"
         val staleCompatibility = GameCompatibilityService.GameCompatibilityResponse(
             gameName = gameName,
-            totalPlayableCount = 0,
-            gpuPlayableCount = 0,
-            avgRating = 1f,
-            hasBeenTried = true,
-            isNotWorking = true,
+            state = "Broken",
+            tier = "family",
+            tiers = mapOf("family" to GameCompatibilityService.CompatibilityTierMetrics(
+                key = "Adreno", sessions = 1, playable = 0,
+            )),
         )
         every { GameCompatibilityCache.getCached(any()) } answers {
             committedCompatibility[firstArg()]

@@ -102,7 +102,7 @@ const val DATABASE_NAME = "pluvia.db"
         SteamCatalogResolutionAttemptEntity::class,
         RejectedSteamCandidateEntity::class,
     ],
-    version = 30,
+    version = 31,
     // For db migration, visit https://developer.android.com/training/data-storage/room/migrating-db-versions for more information
     exportSchema = true, // It is better to handle db changes carefully, as GN is getting much more users.
     autoMigrations = [

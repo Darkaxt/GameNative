@@ -14,11 +14,11 @@ import app.gamenative.diagnostics.DiagnosticOutcome
 import app.gamenative.diagnostics.FeatureDiagnostics
 import timber.log.Timber
 
-private const val TARGET_DATABASE_VERSION = "30"
+private const val TARGET_DATABASE_VERSION = "31"
 private const val V25_TO_V26_MIGRATION = "25_to_26"
 private const val V26_TO_V27_MIGRATION = "26_to_27"
 private const val DESTRUCTIVE_RECOVERY_MIGRATION = "7_to_16_to_$TARGET_DATABASE_VERSION"
-private val LEGACY_DESTRUCTIVE_RECOVERY_MIGRATIONS = listOf("7_to_16_to_27", "7_to_16_to_29")
+private val LEGACY_DESTRUCTIVE_RECOVERY_MIGRATIONS = listOf("7_to_16_to_27", "7_to_16_to_29", "7_to_16_to_30")
 private const val DESTRUCTIVE_RECOVERY_REASON = "destructive_recovery"
 private const val V25_TO_V26_PENDING_SUCCESS_ID = -26
 private const val V25_TO_V26_PENDING_SUCCESS_HASH = "pluvia_pending_25_to_26"

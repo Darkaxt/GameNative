@@ -111,6 +111,7 @@ import app.gamenative.ui.components.BootingSplash
 import app.gamenative.ui.enums.AppOptionMenuType
 import app.gamenative.ui.enums.ConnectionState
 import app.gamenative.launch.LaunchReadiness
+import app.gamenative.launch.SteamAgreementGate
 import app.gamenative.ui.enums.DialogType
 import app.gamenative.ui.enums.Orientation
 import app.gamenative.ui.model.MainViewModel
@@ -183,8 +184,8 @@ private var workshopUpdateDeferred: CompletableDeferred<Boolean>? = null
 /** Used to suspend preLaunchApp while the user decides on a pending update for a real-Steam launch. */
 private var steamUpdateDeferred: CompletableDeferred<Boolean>? = null
 
-/** Valve Windows client tree (build 2026-01-29) + headless steam.exe for Real Steam mode; see extractSteamFiles. */
-const val REAL_STEAM_CLIENT_ARCHIVE = "steamhost-20260925.5.tzst"
+/** Valve Windows client tree (build 1788652215, 2026-09-03) + headless steam.exe for Real Steam mode; see extractSteamFiles. */
+const val REAL_STEAM_CLIENT_ARCHIVE = "steamhost-20261005.tzst"
 
 private fun NavHostController.navigateFromLoginIfNeeded(
     targetRoute: String,
@@ -350,8 +351,6 @@ private fun consumePendingSteamLoginError(context: Context) {
     MainActivity.consumePendingLaunchRequest()
     SnackbarManager.show(context.getString(R.string.intent_launch_steam_login_failed))
 }
-
-private const val LAUNCH_PITCH_COOLDOWN_MS = 5 * 24 * 60 * 60 * 1000L
 
 private fun trackMembershipPrompt(event: String, trigger: String) {
     if (PrefManager.usageAnalyticsEnabled) {
@@ -1552,6 +1551,8 @@ fun PluviaMain(
                 message = msgDialogState.message,
             )
 
+            SteamAgreementGate.Prompt()
+
             val scope = rememberCoroutineScope()
             var containerConfigForDialog by remember(openContainerConfigForAppId) { mutableStateOf<ContainerData?>(null) }
             LaunchedEffect(openContainerConfigForAppId) {
@@ -2014,11 +2015,10 @@ fun PluviaMain(
                 ) { backStackEntry ->
                     val isOffline = backStackEntry.arguments?.getBoolean("offline") ?: false
 
-                    // Show update/crash/support dialogs when Home is first displayed
+                    // Show update/crash dialogs when Home is first displayed
                     // Skip when offline with Steam credentials (avoid flash when Steam reconnects)
                     LaunchedEffect(Unit) {
                         val shouldShowDialogs = !isOffline || !SteamUtils.hasStoredCredentials()
-                        val supportPromptNowMillis = System.currentTimeMillis()
 
                         if (shouldShowDialogs && !state.annoyingDialogShown && PluviaApp.xEnvironment == null && !SteamService.keepAlive && !MainActivity.wasLaunchedViaExternalIntent) {
                             val currentUpdateInfo = updateInfo
@@ -2044,29 +2044,6 @@ fun PluviaMain(
                                     title = context.getString(R.string.main_recent_crash_title),
                                     message = context.getString(R.string.main_recent_crash_message),
                                     confirmBtnText = context.getString(R.string.ok),
-                                )
-                            } else if (
-                                !(PrefManager.tipped || BuildConfig.GOLD) &&
-                                PrefManager.hasAttemptedGameLaunch &&
-                                !MainViewModel.gamePlayedThisSession &&
-                                supportPromptNowMillis - PrefManager.lastLaunchPitchTime >= LAUNCH_PITCH_COOLDOWN_MS &&
-                                claimSupportPrompt(
-                                    lastShownAtMillis = PrefManager.supportPromptLastShownAt,
-                                    nowMillis = supportPromptNowMillis,
-                                    persistShownAt = PrefManager::persistSupportPromptShownAt,
-                                )
-                            ) {
-                                viewModel.setAnnoyingDialogShown(true)
-                                PrefManager.lastLaunchPitchTime = System.currentTimeMillis()
-                                membershipPitchTrigger = "launch"
-                                trackMembershipPrompt("membership_prompt_shown", "launch")
-                                msgDialogState = MessageDialogState(
-                                    visible = true,
-                                    type = DialogType.SUPPORT,
-                                    title = context.getString(R.string.main_thank_you_title),
-                                    message = context.getString(R.string.main_thank_you_message),
-                                    confirmBtnText = context.getString(R.string.main_join_kofi),
-                                    dismissBtnText = context.getString(R.string.close),
                                 )
                             }
                         }
@@ -2339,6 +2316,13 @@ fun preLaunchApp(
             return@launch
         }
 
+        if (!bootToContainer && ContainerUtils.extractGameSourceFromContainerId(appId) == GameSource.STEAM &&
+            !SteamAgreementGate.confirm(context, gameId, isOffline, setLoadingDialogVisible)
+        ) {
+            setLoadingDialogVisible(false)
+            return@launch
+        }
+
         // create container if it does not already exist
         // TODO: combine somehow with container creation in HomeLibraryAppScreen
         val containerManager = ContainerManager(context)
@@ -2560,6 +2544,7 @@ fun preLaunchApp(
                     )
                     return@launch
                 }
+                app.gamenative.service.ea.EaSteamLinkGate.offerSteamLink(context)
             }
             /*
              * Rockstar titles sign in through Social Club, and the Windows stub needs the
@@ -2574,7 +2559,7 @@ fun preLaunchApp(
                 val rockstarGameDir = File(SteamService.getAppDirPath(gameId))
                 setLoadingMessage(context.getString(R.string.rockstar_preparing))
                 RockstarHelperArchive.downloadAndExtract(context) { setLoadingProgress(it) }
-                val signIn = RockstarLoginGate.ensureSignedIn(context, "launcher")
+                val signIn = RockstarLoginGate.ensureSignedIn(context, "launcher", gameId)
                 if (signIn.isFailure && RockstarLaunchSupport.hasUsableToken(File(SteamService.getAppDirPath(gameId)))) {
                     /* A token is already in place, so carry on rather than block a launch that works. */
                     Timber.tag("preLaunchApp").w("Rockstar sign-in did not complete; using the token already in the game directory")

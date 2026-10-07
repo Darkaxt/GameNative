@@ -22,9 +22,18 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
+@Config(application = android.app.Application::class)
 class GameCompatibilityCacheTest {
+
+    @Test
+    fun unitFixtureDoesNotStartApplicationServices() {
+        val application = ApplicationProvider.getApplicationContext<android.app.Application>()
+        assertEquals(android.app.Application::class.java, application.javaClass)
+    }
+
 
     @Before
     fun setUp() = runBlocking {
@@ -86,11 +95,11 @@ class GameCompatibilityCacheTest {
 
     private fun compatibility(name: String) = GameCompatibilityService.GameCompatibilityResponse(
         gameName = name,
-        totalPlayableCount = 1,
-        gpuPlayableCount = 0,
-        avgRating = 5f,
-        hasBeenTried = true,
-        isNotWorking = false,
+        state = "Great",
+        tier = "family",
+        tiers = mapOf("family" to GameCompatibilityService.CompatibilityTierMetrics(
+            key = "Adreno", sessions = 1, playable = 1,
+        )),
     )
 
     private fun awaitCondition(condition: () -> Boolean): Boolean {

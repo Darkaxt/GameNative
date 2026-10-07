@@ -500,8 +500,11 @@ internal fun LibraryScreenContent(
     var showCanonicalDetail by remember { mutableStateOf(false) }
     var activeActionGuard by remember { mutableStateOf<OwnedCopyActionGuard?>(null) }
     var pendingInitialOperation by remember { mutableStateOf<OwnedCopyOperation?>(null) }
+    var sourceOptionsRequestId by remember { mutableStateOf<Long?>(null) }
     var selectedFocusRestoreIdentity by remember { mutableStateOf<LibraryCardIdentity?>(null) }
     var copiesSheetCardKey by remember { mutableStateOf<CanonicalCardKey?>(null) }
+    var copiesRequestedOperation by remember { mutableStateOf<OwnedCopyOperation?>(null) }
+    var copiesEligibleKeys by remember { mutableStateOf<Set<OwnedCopyKey>?>(null) }
     var copiesSheetFeedback by remember { mutableStateOf<CanonicalCopiesFeedback?>(null) }
     var copiesActionInProgress by remember { mutableStateOf(false) }
     var copiesOriginIdentity by remember { mutableStateOf<LibraryCardIdentity?>(null) }
@@ -678,6 +681,7 @@ internal fun LibraryScreenContent(
         showCanonicalDetail = false
         activeActionGuard = null
         pendingInitialOperation = null
+        sourceOptionsRequestId = null
     }
 
     fun dismissCopiesSheet(
@@ -686,6 +690,8 @@ internal fun LibraryScreenContent(
     ) {
         if (supersedeRoute) supersedeRouteRequests()
         copiesSheetCardKey = null
+        copiesRequestedOperation = null
+        copiesEligibleKeys = null
         copiesSheetFeedback = null
         copiesActionInProgress = false
         if (restoreCardFocus && selectedCardIdentity == null) {
@@ -697,6 +703,8 @@ internal fun LibraryScreenContent(
         key: CanonicalCardKey,
         originatingIdentity: LibraryCardIdentity,
         supersedeRoute: Boolean = true,
+        requestedOperation: OwnedCopyOperation? = null,
+        eligibleKeys: Set<OwnedCopyKey>? = null,
     ) {
         if (supersedeRoute) supersedeRouteRequests()
         if (canonicalCard(key) == null) {
@@ -705,6 +713,8 @@ internal fun LibraryScreenContent(
             return
         }
         copiesOriginIdentity = originatingIdentity
+        copiesRequestedOperation = requestedOperation
+        copiesEligibleKeys = eligibleKeys
         copiesSheetFeedback = null
         copiesActionInProgress = false
         pendingGridFocusRequest = false
@@ -718,6 +728,7 @@ internal fun LibraryScreenContent(
                 supersedeRouteRequests()
                 activeActionGuard = null
                 pendingInitialOperation = null
+                sourceOptionsRequestId = null
                 selectedFocusRestoreIdentity = null
                 selectedPresentationCard = card
                 selectedSourceItem = identity.item
@@ -728,6 +739,7 @@ internal fun LibraryScreenContent(
                 supersedeRouteRequests()
                 activeActionGuard = null
                 pendingInitialOperation = null
+                sourceOptionsRequestId = null
                 selectedFocusRestoreIdentity = null
                 selectedPresentationCard = card
                 selectedSourceItem = null
@@ -744,6 +756,7 @@ internal fun LibraryScreenContent(
                 }
                 activeActionGuard = null
                 pendingInitialOperation = null
+                sourceOptionsRequestId = null
                 selectedFocusRestoreIdentity = identity
                 selectedPresentationCard = card
                 selectedSourceItem = null
@@ -780,7 +793,8 @@ internal fun LibraryScreenContent(
                     selectedFocusRestoreIdentity = identity
                     selectedPresentationCard = card
                     selectedSourceItem = result.guard.initialLibraryItem
-                    showCanonicalDetail = false
+                    sourceOptionsRequestId = requestEpoch.takeIf { operation == OwnedCopyOperation.OPEN_SOURCE_DETAILS }
+                    showCanonicalDetail = true
                     selectedCardIdentity = identity
                 }
                 is OwnedCopyRouteResult.NeedsChooser -> {
@@ -790,6 +804,8 @@ internal fun LibraryScreenContent(
                         key = identity.key,
                         originatingIdentity = identity,
                         supersedeRoute = false,
+                        requestedOperation = operation,
+                        eligibleKeys = result.capableKeys.toSet(),
                     )
                 }
                 is OwnedCopyRouteResult.Unavailable -> {
@@ -840,7 +856,8 @@ internal fun LibraryScreenContent(
                         (candidate.identity as? LibraryCardIdentity.Canonical)?.key == cardKey
                     }
                     selectedSourceItem = result.guard.initialLibraryItem
-                    showCanonicalDetail = false
+                    sourceOptionsRequestId = requestEpoch.takeIf { operation == OwnedCopyOperation.OPEN_SOURCE_DETAILS }
+                    showCanonicalDetail = true
                     selectedCardIdentity = LibraryCardIdentity.Canonical(cardKey)
                     dismissCopiesSheet(restoreCardFocus = false, supersedeRoute = false)
                 }
@@ -1676,62 +1693,87 @@ internal fun LibraryScreenContent(
                 DisposableEffect(Unit) {
                     onDispose { clearCanonicalDetail() }
                 }
-                CanonicalGameDetailScreen(
-                    state = gameDetailState,
-                    reviewSummaryState = reviewSummaryState,
-                    cachedReviewCount = selectedCanonicalCard.steamReviewCount,
-                    onLoadReviewSummary = { selectedCanonicalCard.steamAppId?.let(onLoadReviewSummary) },
-                    onRetryReviewSummary = { selectedCanonicalCard.steamAppId?.let(onRetryReviewSummary) },
-                    fallbackTitle = selectedCanonicalCard.displayName,
-                    fallbackImageUrl = selectedCanonicalCard.headerImageUrl,
-                    steamAppId = selectedCanonicalCard.steamAppId,
-                    ownedSources = selectedCanonicalCard.ownedSources,
-                    compatibilityStatus = presentationCard.compatibilityStatus,
-                    hltbStats = HltbCache.get(selectedCanonicalCard.displayName),
-                    isOffline = isOffline,
-                    reviewState = reviewState,
-                    reviewQuery = reviewQuery,
-                    onLoadReviews = {
-                        selectedCanonicalCard.steamAppId?.let(onLoadReviews)
+                CanonicalSourceDetailHost(
+                    libraryItem = selectedSourceItem,
+                    actionGuard = activeActionGuard,
+                    initialOperation = pendingInitialOperation,
+                    onInitialOperationConsumed = { pendingInitialOperation = null },
+                    onCanonicalActionUnavailable = {
+                        activeActionGuard = null
+                        selectedSourceItem = null
+                        pendingInitialOperation = null
+                        sourceOptionsRequestId = null
+                        SnackbarManager.show(context.getString(R.string.canonical_copy_state_changed))
+                        onRefresh()
                     },
-                    onReviewQueryChange = onReviewQueryChange,
-                    onRefreshReviews = onRefreshReviews,
-                    onLoadMoreReviews = onLoadMoreReviews,
-                    discussionState = discussionState,
-                    onLoadDiscussions = {
-                        selectedCanonicalCard.steamAppId?.let(onLoadDiscussions)
-                    },
-                    onOpenDiscussion = onOpenDiscussion,
-                    onRefreshDiscussions = onRefreshDiscussions,
-                    onLoadMoreDiscussions = onLoadMoreDiscussions,
-                    onCloseDiscussionThread = onCloseDiscussionThread,
-                    steamMatchStatus = detailSteamMatchStatus,
-                    onFixSteamMatch = mutableSteamMatchCopies.takeIf { it.isNotEmpty() }?.let { copies ->
-                        {
-                            if (copies.size == 1) {
-                                onOpenSteamMatch(copies.single().key)
-                            } else {
-                                openCopiesSheet(selectedCanonicalIdentity.key, selectedCanonicalIdentity)
-                            }
-                        }
-                    },
+                    onClickPlay = { currentItem, confirm -> onClickPlay(currentItem.appId, confirm) },
+                    onTestGraphics = { currentItem -> onTestGraphics(currentItem.appId) },
+                    onPlayWithDiagnostics = { currentItem -> onPlayWithDiagnostics(currentItem.appId) },
+                    onAiDebugRun = { currentItem -> onAiDebugRun(currentItem.appId) },
                     onBack = ::clearSelectedSource,
-                    onCopies = {
-                        openCopiesSheet(selectedCanonicalIdentity.key, selectedCanonicalIdentity)
-                    },
-                    onSourceDetails = {
-                        routeCanonicalDetailAction(
-                            selectedCanonicalIdentity, presentationCard, OwnedCopyOperation.OPEN_SOURCE_DETAILS,
-                        )
-                    },
-                    copies = selectedCanonicalCard.copies,
-                    onOperation = { operation ->
-                        routeCanonicalDetailAction(selectedCanonicalIdentity, presentationCard, operation)
-                    },
-                    actionInProgress = routeRequestIdentity != null,
-                    onRetry = onRetryCanonicalDetail,
-                    backEnabled = !isSteamMatchPickerOpen && copiesSheetCardKey == null,
-                )
+                ) { sourceDetails ->
+                    CanonicalGameDetailScreen(
+                        state = gameDetailState,
+                        sourceDetails = sourceDetails,
+                        sourceOptionsRequestId = sourceOptionsRequestId,
+                        reviewSummaryState = reviewSummaryState,
+                        cachedReviewCount = selectedCanonicalCard.steamReviewCount,
+                        onLoadReviewSummary = { selectedCanonicalCard.steamAppId?.let(onLoadReviewSummary) },
+                        onRetryReviewSummary = { selectedCanonicalCard.steamAppId?.let(onRetryReviewSummary) },
+                        fallbackTitle = selectedCanonicalCard.displayName,
+                        fallbackImageUrl = selectedCanonicalCard.headerImageUrl,
+                        steamAppId = selectedCanonicalCard.steamAppId,
+                        ownedSources = selectedCanonicalCard.ownedSources,
+                        compatibilityStatus = presentationCard.compatibilityStatus,
+                        hltbStats = HltbCache.get(selectedCanonicalCard.displayName),
+                        isOffline = isOffline,
+                        reviewState = reviewState,
+                        reviewQuery = reviewQuery,
+                        onLoadReviews = {
+                            selectedCanonicalCard.steamAppId?.let(onLoadReviews)
+                        },
+                        onReviewQueryChange = onReviewQueryChange,
+                        onRefreshReviews = onRefreshReviews,
+                        onLoadMoreReviews = onLoadMoreReviews,
+                        discussionState = discussionState,
+                        onLoadDiscussions = {
+                            selectedCanonicalCard.steamAppId?.let(onLoadDiscussions)
+                        },
+                        onOpenDiscussion = onOpenDiscussion,
+                        onRefreshDiscussions = onRefreshDiscussions,
+                        onLoadMoreDiscussions = onLoadMoreDiscussions,
+                        onCloseDiscussionThread = onCloseDiscussionThread,
+                        steamMatchStatus = detailSteamMatchStatus,
+                        onFixSteamMatch = mutableSteamMatchCopies.takeIf { it.isNotEmpty() }?.let { copies ->
+                            {
+                                if (copies.size == 1) {
+                                    onOpenSteamMatch(copies.single().key)
+                                } else {
+                                    openCopiesSheet(selectedCanonicalIdentity.key, selectedCanonicalIdentity)
+                                }
+                            }
+                        },
+                        onBack = ::clearSelectedSource,
+                        onCopies = {
+                            openCopiesSheet(
+                                selectedCanonicalIdentity.key, selectedCanonicalIdentity,
+                                requestedOperation = OwnedCopyOperation.INSTALL,
+                            )
+                        },
+                        onSourceDetails = {
+                            routeCanonicalDetailAction(
+                                selectedCanonicalIdentity, presentationCard, OwnedCopyOperation.OPEN_SOURCE_DETAILS,
+                            )
+                        },
+                        copies = selectedCanonicalCard.copies,
+                        onOperation = { operation ->
+                            routeCanonicalDetailAction(selectedCanonicalIdentity, presentationCard, operation)
+                        },
+                        actionInProgress = routeRequestIdentity != null,
+                        onRetry = onRetryCanonicalDetail,
+                        backEnabled = !isSteamMatchPickerOpen && copiesSheetCardKey == null,
+                    )
+                }
             } else {
                 LibraryDetailPane(
                     card = selectedPresentationCard,
@@ -1948,6 +1990,8 @@ internal fun LibraryScreenContent(
         if (currentCopiesCard != null) {
             CanonicalCopiesSheet(
                 card = currentCopiesCard,
+                requestedOperation = copiesRequestedOperation,
+                eligibleKeys = copiesEligibleKeys,
                 sheetState = sheetState,
                 onDismissRequest = { dismissCopiesSheet() },
                 onOperation = { copy, operation, rememberChoice ->

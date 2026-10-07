@@ -1250,6 +1250,11 @@
     <string name="main_downloading_steam">正在下載 Steam...</string>
     <string name="steam_update_required_title">需要更新</string>
     <string name="steam_update_required_message">此遊戲有可用的更新。在安裝更新之前，Steam 用戶端無法啟動它。請立即更新，然後重新啟動。</string>
+    <string name="steam_agreement_ssa_title">Steam 訂戶協議</string>
+    <string name="steam_agreement_eula_title">終端使用者授權合約</string>
+    <string name="steam_agreement_message">Steam 要求你在遊玩前接受此協議。</string>
+    <string name="steam_agreement_accept">接受</string>
+    <string name="steam_agreement_decline">拒絕</string>
     <string name="main_installing_glibc">安裝 glibc 組件...</string>
     <string name="main_installing_bionic">安裝Bionic元件中...</string>
     <string name="main_loading">載入中...</string>
@@ -2773,6 +2778,18 @@
     <string name="gyro_section_response">反應</string>
     <string name="gyro_output">輸出</string>
     <string name="gyro_output_subtitle">選擇裝置動作所控制的輸出。</string>
+    <string name="gyro_conversion_style">轉換方式</string>
+    <string name="gyro_conversion_yaw">局部空間（偏航）</string>
+    <string name="gyro_conversion_roll">局部空間（橫滾）</string>
+    <string name="gyro_conversion_yaw_roll">局部空間（偏航 + 橫滾）</string>
+    <string name="gyro_conversion_player">玩家空間</string>
+    <string name="gyro_conversion_world">世界空間</string>
+    <string name="gyro_conversion_yaw_help">將裝置轉向左右可水平瞄準，向上或向下傾斜可垂直瞄準。軸向隨螢幕方向變化。</string>
+    <string name="gyro_conversion_roll_help">像轉動方向盤一樣旋轉裝置可水平瞄準。向上或向下傾斜可垂直瞄準。</string>
+    <string name="gyro_conversion_yaw_roll_help">左右轉向和方向盤式旋轉都會影響水平瞄準。將裝置向上或向下傾斜可垂直瞄準。</string>
+    <string name="gyro_conversion_player_help">水平瞄準會根據裝置直立或平放的握持角度調整。垂直瞄準跟隨裝置的上下俯仰。較適合上半身直立地坐著或站著使用。</string>
+    <string name="gyro_conversion_world_help">瞄準以現實世界的向上方向為基準，利用重力調整兩個軸向。較適合上半身直立地坐著或站著使用。</string>
+    <string name="gyro_conversion_unavailable">此裝置不支援姿態追蹤。將使用局部空間（偏航）。</string>
     <string name="gyro_tilt_steering">傾斜轉向</string>
     <string name="gyro_tilt_steering_subtitle">保持裝置傾斜可持續產生搖桿水平輸入。每次啟用陀螺儀時，目前位置都會設為中心。</string>
     <string name="gyro_tilt_unavailable">此裝置未提供傾斜轉向所需的方向感測器。</string>
@@ -2842,6 +2859,52 @@
     <string name="control_profile_failed">控制設定檔操作失敗：%1$s</string>
     <string name="control_profile_delete_title">刪除控制設定檔？</string>
     <string name="control_profile_delete_message">要從媒體庫移除「%1$s」嗎？已使用此設定檔的遊戲將保留其控制設定。</string>
+    <string name="sort_compatibility">相容性</string>
+    <string name="community_compatibility_details">詳細資訊</string>
+    <string name="community_compatibility_expanded">已展開</string>
+    <string name="community_compatibility_collapsed">已收合</string>
+    <string name="community_compatibility_short_disclaimer">社群結果並不保證實際表現。</string>
+    <string name="community_compatibility_unreliable_short">結果不穩定；尚未確認能正常遊玩。</string>
+    <string name="community_compatibility_performance_caution">回報的效能可能有限。</string>
+    <string name="community_compatibility_checking_short">檢查中…</string>
+    <string name="community_compatibility_unavailable_short">無法使用</string>
+    <string name="community_compatibility_unavailable">無法載入相容性資訊</string>
+    <string name="community_compatibility_missing_tier">回應缺少必要的硬體資料，無法將結果套用至您的裝置。</string>
+    <string name="community_compatibility_works">運行良好</string>
+    <string name="community_compatibility_should">可執行</string>
+    <string name="community_compatibility_may">可能可執行</string>
+    <string name="community_compatibility_mixed">不穩定</string>
+    <string name="community_compatibility_wont">無法執行</string>
+    <string name="community_compatibility_unknown">未測試</string>
+    <string name="community_compatibility_checking">正在檢查相容性…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="other">來自此裝置型號的 %1$d 個已評分共享設定</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="other">使用您的 GPU 的 %1$d 個已評分共享設定</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">找不到適用於您硬體的共享設定</string>
+    <string name="community_compatibility_configs_unavailable">部分相容性資料無法載入，正在顯示可用資訊。</string>
+    <string name="community_compatibility_retry">重試</string>
+    <string name="community_compatibility_fps_median">回報的影格率中位數：%1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s（您的裝置型號）。</string>
+    <string name="community_compatibility_fps_soc">%1$s（相同晶片組）。</string>
+    <string name="community_compatibility_fps_gpu">%1$s（您的 GPU）。</string>
+    <string name="community_compatibility_fps_family">%1$s（相容的 GPU）。</string>
+    <string name="community_compatibility_view_reports">瀏覽設定</string>
+    <string name="community_config_install_before_apply">請先安裝此遊戲，再套用社群設定。</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="other">根據在您的裝置型號上記錄的 %1$d 次工作階段。</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="other">根據使用相同晶片組記錄的 %1$d 次工作階段。</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="other">根據使用您的 GPU 記錄的 %1$d 次工作階段。</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="other">根據您的 GPU 系列中記錄的 %1$d 次工作階段。</item>
+    </plurals>
     <string name="debug_prerun_instruction">本次執行要做的事：%1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="other">結束前請讓遊戲至少執行 %1$d 分鐘。</item>

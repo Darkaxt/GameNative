@@ -15,6 +15,8 @@ import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.FavoritesManager
 import app.gamenative.data.FavoritesUtils
+import app.gamenative.data.CommunityCompatibilityClassifier
+import app.gamenative.data.CommunityCompatibilitySummary
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.data.HiddenGameFilter
@@ -224,10 +226,10 @@ internal fun canonicalUnsupportedFailure(state: LibraryState): CanonicalPublicFa
     }
 
 internal object CanonicalCompatibilityLookup {
-    fun resolve(
+    fun <T : Any> resolve(
         card: CanonicalLibraryCard,
-        cachedStatus: (String) -> GameCompatibilityStatus?,
-    ): GameCompatibilityStatus? {
+        cachedStatus: (String) -> T?,
+    ): T? {
         cachedStatus(card.displayName)?.let { return it }
         return card.aliases.asSequence()
             .filter(String::isNotBlank)
@@ -246,6 +248,9 @@ internal object CanonicalLibraryFilter {
         promotion: LibraryItem?,
         showRecommendations: Boolean,
         favoriteAppIds: Set<String> = emptySet(),
+        communityCompatibility: (CanonicalLibraryCard) -> CommunityCompatibilitySummary? = { card ->
+            CanonicalCompatibilityLookup.resolve(card, state.communityCompatibilityMap::get)
+        },
         compatibility: (CanonicalLibraryCard) -> GameCompatibilityStatus?,
     ): CanonicalLibraryPage {
         require(pageSize > 0)
@@ -292,6 +297,7 @@ internal object CanonicalLibraryFilter {
                 CanonicalEntry(
                     card = card,
                     compatibility = compatibility(card),
+                    communityCompatibility = communityCompatibility(card),
                     stats = state.statsFor(card.copies),
                     sizeBytes = sizeBytes(card),
                 )
@@ -357,7 +363,7 @@ internal object CanonicalLibraryFilter {
         val favoriteEligibleAppIdGroups = afterPopularity.map { entry -> entry.card.favoriteAppIds() }
         val favoritesCount = favoriteEligibleAppIdGroups.count { ids -> ids.any(favoriteAppIds::contains) }
         val admitted = afterPopularity.filter { entry -> admitted(entry.card, state, favoriteAppIds) }
-        val sorted = admitted.sortedWith(comparator(state.currentSortOption))
+        val sorted = admitted.sortedWith(comparator(state.currentSortOption, state))
         val totalCount = sorted.size
         val lastPage = if (totalCount == 0) 0 else (totalCount - 1) / pageSize
         val safePage = paginationPage.coerceIn(0, lastPage)
@@ -380,6 +386,7 @@ internal object CanonicalLibraryFilter {
                 artworkFallback = card.artworkFallback,
                 ownedSources = card.ownedSources,
                 compatibilityStatus = entry.compatibility,
+                communityCompatibility = entry.communityCompatibility,
                 gameStats = entry.stats,
                 sizeBytes = entry.sizeBytes ?: 0L,
                 isInstalled = card.copies.any(OwnedCopySummary::isInstalled),
@@ -505,7 +512,7 @@ internal object CanonicalLibraryFilter {
         LibraryTab.RECOMMENDED -> false
     }
 
-    private fun comparator(sort: SortOption): Comparator<CanonicalEntry> {
+    private fun comparator(sort: SortOption, state: LibraryState): Comparator<CanonicalEntry> {
         val name = compareBy<CanonicalEntry> { it.card.displayName.lowercase() }
             .thenBy { it.card.displayName }
             .thenBy { it.card.key.stableComposeKey() }
@@ -531,6 +538,11 @@ internal object CanonicalLibraryFilter {
             SortOption.RUNS_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.runsGpu ?: -1 }.then(name)
             SortOption.REVIEWS_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.reviewsDevice ?: -1 }.then(name)
             SortOption.REVIEWS_GPU_HIGH -> compareByDescending<CanonicalEntry> { it.stats?.reviewsGpu ?: -1 }.then(name)
+            SortOption.COMPATIBILITY -> LibrarySortUtils.compatibilityComparator<CanonicalEntry>(
+                name = { it.card.displayName },
+                isInstalled = { it.card.copies.any(OwnedCopySummary::isInstalled) },
+                summary = CanonicalEntry::communityCompatibility,
+            ).then(name)
             SortOption.STEAM_REVIEW_COUNT -> compareBy<CanonicalEntry> {
                 it.card.steamReviewCount == null
             }.thenByDescending { it.card.steamReviewCount ?: Int.MIN_VALUE }
@@ -552,6 +564,7 @@ internal object CanonicalLibraryFilter {
     private data class CanonicalEntry(
         val card: CanonicalLibraryCard,
         val compatibility: GameCompatibilityStatus?,
+        val communityCompatibility: CommunityCompatibilitySummary?,
         val stats: GameCardStats?,
         val sizeBytes: Long?,
     )
@@ -1786,6 +1799,7 @@ class LibraryViewModel @Inject constructor(
             transformState = { current ->
                 current.copy(
                     compatibilityMap = if (compatibilityCleared) emptyMap() else current.compatibilityMap,
+                    communityCompatibilityMap = if (compatibilityCleared) emptyMap() else current.communityCompatibilityMap,
                     deviceGameStats = if (deviceStatsCleared) emptyMap() else current.deviceGameStats,
                     gpuGameStats = if (gpuStatsCleared) emptyMap() else current.gpuGameStats,
                 )
@@ -2373,6 +2387,7 @@ class LibraryViewModel @Inject constructor(
                             skippedDynamicCollections = false,
                             steamCollectionCounts = emptyMap(),
                             compatibilityMap = emptyMap(),
+                            communityCompatibilityMap = emptyMap(),
                             deviceGameStats = emptyMap(),
                             gpuGameStats = emptyMap(),
                             isLoading = false,
@@ -2836,6 +2851,11 @@ class LibraryViewModel @Inject constructor(
             promotion = canonicalPromotionItem(),
             showRecommendations = PrefManager.showRecommendations,
             favoriteAppIds = FavoritesManager.favorites.value,
+            communityCompatibility = { card ->
+                CanonicalCompatibilityLookup.resolve(card) { name ->
+                    GameCompatibilityCache.getCached(name)?.let(CommunityCompatibilityClassifier::fromCompatibilityResponse)
+                }
+            },
             compatibility = { card ->
                 CanonicalCompatibilityLookup.resolve(
                     card = card,
@@ -3338,6 +3358,15 @@ class LibraryViewModel @Inject constructor(
             currentTab.showAmazon
         }) && AmazonService.hasStoredCredentials(context)
 
+        val communityByName = sequenceOf(steamEntries, customEntries, gogEntries, epicEntries, amazonEntries)
+            .flatten()
+            .map { it.item.name }
+            .distinct()
+            .associateWith { name ->
+                GameCompatibilityCache.getCached(name)
+                    ?.let(CommunityCompatibilityClassifier::fromCompatibilityResponse)
+            }
+
         // Combine both lists and apply sort option
         val sortComparator: Comparator<LibraryEntry> = when (currentState.currentSortOption) {
             SortOption.INSTALLED_FIRST -> compareBy<LibraryEntry> { entry ->
@@ -3376,6 +3405,11 @@ class LibraryViewModel @Inject constructor(
                 currentState.statsFor(it.item)?.reviewsGpu ?: -1
             }.thenBy { it.item.name.lowercase() }
 
+            SortOption.COMPATIBILITY -> LibrarySortUtils.compatibilityComparator<LibraryEntry>(
+                name = { it.item.name },
+                isInstalled = { it.isInstalled },
+                summary = { communityByName[it.item.name] },
+            )
             SortOption.STEAM_REVIEW_COUNT -> compareBy { it.item.name.lowercase() }
         }
 
@@ -3461,11 +3495,17 @@ class LibraryViewModel @Inject constructor(
 
         val cards = pagedList.map { item ->
             val compatibility = currentState.compatibilityMap[item.name]
+            val community = if (item.isRecommended || item.isFeatured) {
+                GameCompatibilityCache.getCached(item.name)
+                    ?.let(CommunityCompatibilityClassifier::fromCompatibilityResponse)
+            } else {
+                communityByName[item.name]
+            }
             val stats = currentState.statsFor(item)
             if (item.isRecommended || item.isFeatured) {
-                LibraryCard.fromPromotion(item, compatibility, stats)
+                LibraryCard.fromPromotion(item, compatibility, stats, community)
             } else {
-                LibraryCard.fromSource(item, compatibility, stats)
+                LibraryCard.fromSource(item, compatibility, stats, community)
             }
         }
         val favoriteEligibleIds = buildList {
@@ -3601,7 +3641,7 @@ class LibraryViewModel @Inject constructor(
                 }
 
                 // Fetch uncached games in batches of 25
-                val batchSize = 25
+                val batchSize = 100
                 val fetchedResults = mutableMapOf<String, GameCompatibilityService.GameCompatibilityResponse>()
 
                 for (i in uncachedGames.indices step batchSize) {
@@ -3625,7 +3665,10 @@ class LibraryViewModel @Inject constructor(
                 if (fetchedResults.isNotEmpty()) {
                     updateCompatibilityState(fetchedResults, token)
                     // Re-apply list filtering once new compatibility data is available.
-                    if (token.state.appInfoSortType.contains(AppFilter.COMPATIBLE)) {
+                    if (
+                        token.state.appInfoSortType.contains(AppFilter.COMPATIBLE) ||
+                        token.state.currentSortOption == SortOption.COMPATIBILITY
+                    ) {
                         supersedeRenderForPublishedToken(token)?.let(::onFilterApps)
                     }
                 }
@@ -3648,20 +3691,29 @@ class LibraryViewModel @Inject constructor(
         val compatibilityMap = results.mapValues { (gameName, response) ->
             compatibilityStatusFor(response)
         }
+        val communityMap = results.mapValues { (_, response) ->
+            CommunityCompatibilityClassifier.fromCompatibilityResponse(response)
+        }
 
         // Update state with compatibility map (merge with existing)
         guardedPublishedStateUpdate(token) { currentState ->
-            val mergedMap = currentState.compatibilityMap.toMutableMap()
-            mergedMap.putAll(compatibilityMap)
+            val mergedMap = currentState.compatibilityMap + compatibilityMap
+            val mergedCommunity = currentState.communityCompatibilityMap + communityMap
+            val canonicalByKey = latestCanonicalCards.orEmpty().associateBy(CanonicalLibraryCard::key)
             val updatedCards = currentState.cards.map { card ->
+                val canonical = (card.identity as? LibraryCardIdentity.Canonical)?.key?.let(canonicalByKey::get)
                 card.copy(
-                    compatibilityStatus = mergedMap[card.name] ?: card.compatibilityStatus,
+                    compatibilityStatus = canonical?.let { CanonicalCompatibilityLookup.resolve(it, mergedMap::get) }
+                        ?: mergedMap[card.name] ?: card.compatibilityStatus,
+                    communityCompatibility = canonical?.let { CanonicalCompatibilityLookup.resolve(it, mergedCommunity::get) }
+                        ?: mergedCommunity[card.name] ?: card.communityCompatibility,
                 )
             }
             Timber.tag("LibraryViewModel").d("Updated state with ${compatibilityMap.size} compatibility entries, total: ${mergedMap.size}")
             currentState.copy(
                 cards = updatedCards,
                 compatibilityMap = mergedMap,
+                communityCompatibilityMap = mergedCommunity,
             )
         }
     }

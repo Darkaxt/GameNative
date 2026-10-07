@@ -4,13 +4,13 @@ import androidx.room.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 
-// Official and fork versions 26/27 have different published shapes. Inspect columns rather
+// Official and fork versions have different published shapes. Inspect columns rather
 // than treating a version number as proof that either history's additions are present.
-internal class MergedRoomMigration(startVersion: Int) : Migration(startVersion, 29) {
+internal class MergedRoomMigration(startVersion: Int, targetVersion: Int = 29) : Migration(startVersion, targetVersion) {
     private val diagnostics = PendingRoomMigrationDiagnostics(
-        migration = "${startVersion}_to_29",
-        pendingSuccessId = -2900 - startVersion,
-        pendingSuccessHash = "pluvia_pending_${startVersion}_to_29",
+        migration = "${startVersion}_to_$targetVersion",
+        pendingSuccessId = -targetVersion * 100 - startVersion,
+        pendingSuccessHash = "pluvia_pending_${startVersion}_to_$targetVersion",
     )
 
     override fun migrate(connection: SQLiteConnection) {
@@ -32,6 +32,12 @@ internal class MergedRoomMigration(startVersion: Int) : Migration(startVersion, 
             if (!connection.hasColumn("mod_placement_recipe", "target_file_name")) {
                 addModTargetFileName(connection)
             }
+            if (endVersion >= 31) {
+                // Official 29 already has EULAs but lacks fork canonical/history storage.
+                // Fork 29/30 retain their rows and gain only missing columns/tables.
+                ROOM_MIGRATION_V29_to_V30.migrate(connection)
+                connection.addMissingColumn("steam_app", "eulas", "TEXT NOT NULL DEFAULT '[]'")
+            }
             diagnostics.markPendingSuccess(connection)
         } catch (error: Exception) {
             diagnostics.recordBodyFailed(error.javaClass.simpleName)
@@ -42,7 +48,8 @@ internal class MergedRoomMigration(startVersion: Int) : Migration(startVersion, 
     fun completePendingSuccess(connection: SQLiteConnection) = diagnostics.completePendingSuccess(connection)
 }
 
-internal val MERGED_ROOM_MIGRATIONS = listOf(26, 27, 28).map(::MergedRoomMigration)
+internal val MERGED_ROOM_MIGRATIONS = listOf(26, 27, 28).map { MergedRoomMigration(it) } +
+    listOf(29, 30).map { MergedRoomMigration(it, 31) }
 
 private fun SQLiteConnection.hasColumn(table: String, column: String): Boolean =
     prepare("PRAGMA table_info(`$table`)").use { statement ->

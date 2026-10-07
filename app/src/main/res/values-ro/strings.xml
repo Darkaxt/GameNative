@@ -2764,6 +2764,18 @@
     <string name="gyro_section_response">Răspuns</string>
     <string name="gyro_output">Ieșire</string>
     <string name="gyro_output_subtitle">Alege ce controlează mișcarea dispozitivului.</string>
+    <string name="gyro_conversion_style">Mod de conversie</string>
+    <string name="gyro_conversion_yaw">Spațiu local (girație)</string>
+    <string name="gyro_conversion_roll">Spațiu local (ruliu)</string>
+    <string name="gyro_conversion_yaw_roll">Spațiu local (girație + ruliu)</string>
+    <string name="gyro_conversion_player">Spațiul jucătorului</string>
+    <string name="gyro_conversion_world">Spațiu global</string>
+    <string name="gyro_conversion_yaw_help">Rotește dispozitivul spre stânga sau dreapta pentru a ținti pe orizontală și înclină-l în sus sau în jos pentru a ținti pe verticală. Axele urmează ecranul.</string>
+    <string name="gyro_conversion_roll_help">Rotește dispozitivul ca pe un volan pentru a ținti pe orizontală. Înclină-l în sus sau în jos pentru a ținti pe verticală.</string>
+    <string name="gyro_conversion_yaw_roll_help">Rotirea laterală și rotirea ca a unui volan contribuie ambele la țintirea pe orizontală. Înclină dispozitivul în sus sau în jos pentru a ținti pe verticală.</string>
+    <string name="gyro_conversion_player_help">Țintirea pe orizontală se adaptează la cât de vertical sau orizontal ții dispozitivul. Țintirea pe verticală urmează înclinarea sa în sus și în jos. Potrivit mai ales când stai așezat sau în picioare cu trunchiul drept.</string>
+    <string name="gyro_conversion_world_help">Țintirea urmează direcția verticală reală și folosește gravitația pentru a ajusta ambele axe. Potrivit mai ales când stai așezat sau în picioare cu trunchiul drept.</string>
+    <string name="gyro_conversion_unavailable">Urmărirea orientării nu este disponibilă pe acest dispozitiv. Se va folosi spațiul local (girație).</string>
     <string name="gyro_tilt_steering">Direcție prin înclinare</string>
     <string name="gyro_tilt_steering_subtitle">Ține dispozitivul înclinat pentru a menține intrarea orizontală a stickului. Poziția curentă este centrată la fiecare activare a giroscopului.</string>
     <string name="gyro_tilt_unavailable">Acest dispozitiv nu oferă senzorul de orientare necesar pentru direcția prin înclinare.</string>
@@ -2801,6 +2813,11 @@
     <string name="nexus_fomod_defaults_replaced">%1$d fișier(e) implicit(e) înlocuit(e) de opțiunile FOMOD</string>
     <string name="steam_update_required_title">Actualizare necesară</string>
     <string name="steam_update_required_message">Acest joc are o actualizare. Clientul Steam nu îl poate porni până când actualizarea nu este instalată. Actualizează acum, apoi pornește din nou.</string>
+    <string name="steam_agreement_ssa_title">Acordul de abonat Steam</string>
+    <string name="steam_agreement_eula_title">Acord de licență pentru utilizatorul final</string>
+    <string name="steam_agreement_message">Steam îți cere să accepți acest acord înainte să joci.</string>
+    <string name="steam_agreement_accept">Acceptă</string>
+    <string name="steam_agreement_decline">Refuză</string>
     <string name="rockstar_login_required_title">Autentificare Rockstar necesară</string>
     <string name="rockstar_login_failed">Autentificarea Rockstar a eșuat: %1$s</string>
     <string name="ea_login_required_title">Autentificare EA necesară</string>
@@ -2844,6 +2861,64 @@
     <string name="control_profile_failed">Operațiunea profilului de control a eșuat: %1$s</string>
     <string name="control_profile_delete_title">Ștergi profilul de control?</string>
     <string name="control_profile_delete_message">Elimini „%1$s” din bibliotecă? Jocurile deja configurate cu acest profil își vor păstra controalele.</string>
+    <string name="sort_compatibility">Compatibilitate</string>
+    <string name="community_compatibility_details">Detalii</string>
+    <string name="community_compatibility_expanded">Extins</string>
+    <string name="community_compatibility_collapsed">Restrâns</string>
+    <string name="community_compatibility_short_disclaimer">Rezultatele comunității nu sunt o garanție.</string>
+    <string name="community_compatibility_unreliable_short">Rezultate nesigure; nu este confirmat că jocul poate fi jucat.</string>
+    <string name="community_compatibility_performance_caution">Performanța raportată poate fi limitată.</string>
+    <string name="community_compatibility_checking_short">Se verifică…</string>
+    <string name="community_compatibility_unavailable_short">Indisponibil</string>
+    <string name="community_compatibility_unavailable">Compatibilitatea nu a putut fi încărcată</string>
+    <string name="community_compatibility_missing_tier">Răspunsul nu include datele hardware necesare pentru a aplica rezultatul dispozitivului tău.</string>
+    <string name="community_compatibility_works">Rulează bine</string>
+    <string name="community_compatibility_should">Funcționează</string>
+    <string name="community_compatibility_may">Poate funcționa</string>
+    <string name="community_compatibility_mixed">Nesigur</string>
+    <string name="community_compatibility_wont">Nu funcționează</string>
+    <string name="community_compatibility_unknown">Netestat</string>
+    <string name="community_compatibility_checking">Se verifică compatibilitatea…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="one">%1$d configurație partajată evaluată de pe acest model de dispozitiv</item>
+        <item quantity="few">%1$d configurații partajate evaluate de pe acest model de dispozitiv</item>
+        <item quantity="other">%1$d de configurații partajate evaluate de pe acest model de dispozitiv</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="one">%1$d configurație partajată evaluată cu GPU-ul tău</item>
+        <item quantity="few">%1$d configurații partajate evaluate cu GPU-ul tău</item>
+        <item quantity="other">%1$d de configurații partajate evaluate cu GPU-ul tău</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">Nu s-au găsit configurații partajate pentru hardware-ul tău</string>
+    <string name="community_compatibility_configs_unavailable">Unele date de compatibilitate nu au putut fi încărcate. Se afișează datele disponibile.</string>
+    <string name="community_compatibility_retry">Reîncearcă</string>
+    <string name="community_compatibility_fps_median">Mediană raportată: %1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s pe modelul tău de dispozitiv.</string>
+    <string name="community_compatibility_fps_soc">%1$s cu același chipset.</string>
+    <string name="community_compatibility_fps_gpu">%1$s cu GPU-ul tău.</string>
+    <string name="community_compatibility_fps_family">%1$s cu GPU-uri compatibile.</string>
+    <string name="community_compatibility_view_reports">Vezi configurațiile</string>
+    <string name="community_config_install_before_apply">Instalează acest joc înainte de a aplica o configurație a comunității.</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="one">Pe baza a %1$d sesiune înregistrată pe modelul tău de dispozitiv.</item>
+        <item quantity="few">Pe baza a %1$d sesiuni înregistrate pe modelul tău de dispozitiv.</item>
+        <item quantity="other">Pe baza a %1$d de sesiuni înregistrate pe modelul tău de dispozitiv.</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="one">Pe baza a %1$d sesiune înregistrată cu același chipset.</item>
+        <item quantity="few">Pe baza a %1$d sesiuni înregistrate cu același chipset.</item>
+        <item quantity="other">Pe baza a %1$d de sesiuni înregistrate cu același chipset.</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="one">Pe baza a %1$d sesiune înregistrată cu GPU-ul tău.</item>
+        <item quantity="few">Pe baza a %1$d sesiuni înregistrate cu GPU-ul tău.</item>
+        <item quantity="other">Pe baza a %1$d de sesiuni înregistrate cu GPU-ul tău.</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="one">Pe baza a %1$d sesiune înregistrată în familia ta de GPU.</item>
+        <item quantity="few">Pe baza a %1$d sesiuni înregistrate în familia ta de GPU.</item>
+        <item quantity="other">Pe baza a %1$d de sesiuni înregistrate în familia ta de GPU.</item>
+    </plurals>
     <string name="debug_prerun_instruction">Ce trebuie să faci în această rulare: %1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="one">Ține jocul deschis cel puțin %1$d minut înainte să ieși.</item>

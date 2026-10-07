@@ -1296,6 +1296,11 @@
     <string name="main_downloading_steam">Steam をダウンロード中...</string>
     <string name="steam_update_required_title">アップデートが必要です</string>
     <string name="steam_update_required_message">このゲームにはアップデートがあります。アップデートをインストールするまで Steam クライアントは起動できません。今すぐ更新してから、もう一度起動してください。</string>
+    <string name="steam_agreement_ssa_title">Steam 利用規約</string>
+    <string name="steam_agreement_eula_title">エンドユーザー使用許諾契約</string>
+    <string name="steam_agreement_message">プレイする前に、この契約に同意する必要があります。</string>
+    <string name="steam_agreement_accept">同意する</string>
+    <string name="steam_agreement_decline">同意しない</string>
 
     <string name="main_installing_glibc">glibc コンポーネントをインストールしています...</string>
     <string name="main_installing_bionic">Bionic コンポーネントをインストールしています...</string>
@@ -2729,6 +2734,18 @@
     <string name="gyro_section_response">応答</string>
     <string name="gyro_output">出力</string>
     <string name="gyro_output_subtitle">端末の動きで操作する対象を選択します。</string>
+    <string name="gyro_conversion_style">変換方式</string>
+    <string name="gyro_conversion_yaw">ローカル空間（ヨー）</string>
+    <string name="gyro_conversion_roll">ローカル空間（ロール）</string>
+    <string name="gyro_conversion_yaw_roll">ローカル空間（ヨー＋ロール）</string>
+    <string name="gyro_conversion_player">プレイヤー空間</string>
+    <string name="gyro_conversion_world">ワールド空間</string>
+    <string name="gyro_conversion_yaw_help">端末を左右に向けると水平方向に、上下に傾けると垂直方向に照準が動きます。軸は画面の向きに従います。</string>
+    <string name="gyro_conversion_roll_help">端末をハンドルのように回すと水平方向に照準が動きます。上下に傾けると垂直方向に動きます。</string>
+    <string name="gyro_conversion_yaw_roll_help">左右に向ける動きとハンドルのように回す動きの両方で、水平方向に照準が動きます。上下に傾けると垂直方向に動きます。</string>
+    <string name="gyro_conversion_player_help">端末を立てて持つか、寝かせて持つかに応じて水平方向の照準を調整します。垂直方向は端末の上下の傾きに従います。上体を起こして座るか、立った姿勢に適しています。</string>
+    <string name="gyro_conversion_world_help">現実世界の上方向を基準に、重力を使って両軸の照準を調整します。上体を起こして座るか、立った姿勢に適しています。</string>
+    <string name="gyro_conversion_unavailable">この端末では姿勢の追跡を利用できません。ローカル空間（ヨー）を使用します。</string>
     <string name="gyro_tilt_steering">傾きステアリング</string>
     <string name="gyro_tilt_steering_subtitle">端末を傾けたままにすると、スティックの左右入力が維持されます。ジャイロが有効になるたびに現在の位置が中央として設定されます。</string>
     <string name="gyro_tilt_unavailable">傾きステアリングに必要な方向センサーがこの端末にありません。</string>
@@ -2798,6 +2815,52 @@
     <string name="control_profile_failed">コントロールプロファイルの操作に失敗しました: %1$s</string>
     <string name="control_profile_delete_title">コントロールプロファイルを削除しますか？</string>
     <string name="control_profile_delete_message">ライブラリから「%1$s」を削除しますか？すでにこのプロファイルで設定されたゲームのコントロールは維持されます。</string>
+    <string name="sort_compatibility">互換性</string>
+    <string name="community_compatibility_details">詳細</string>
+    <string name="community_compatibility_expanded">展開済み</string>
+    <string name="community_compatibility_collapsed">折りたたみ済み</string>
+    <string name="community_compatibility_short_disclaimer">コミュニティの結果は動作を保証するものではありません。</string>
+    <string name="community_compatibility_unreliable_short">結果が不安定で、プレイできることは確認されていません。</string>
+    <string name="community_compatibility_performance_caution">報告されたパフォーマンスは限定的な可能性があります。</string>
+    <string name="community_compatibility_checking_short">確認中…</string>
+    <string name="community_compatibility_unavailable_short">利用不可</string>
+    <string name="community_compatibility_unavailable">互換性を読み込めませんでした</string>
+    <string name="community_compatibility_missing_tier">応答には、結果をお使いのデバイスに適用するためのハードウェア情報が含まれていません。</string>
+    <string name="community_compatibility_works">快適に動作</string>
+    <string name="community_compatibility_should">動作</string>
+    <string name="community_compatibility_may">動作の可能性あり</string>
+    <string name="community_compatibility_mixed">不安定</string>
+    <string name="community_compatibility_wont">動作不可</string>
+    <string name="community_compatibility_unknown">未検証</string>
+    <string name="community_compatibility_checking">互換性を確認中…</string>
+    <plurals name="community_compatibility_device_evidence">
+        <item quantity="other">このデバイスモデルの評価済み共有設定: %1$d 件</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_evidence">
+        <item quantity="other">お使いの GPU の評価済み共有設定: %1$d 件</item>
+    </plurals>
+    <string name="community_compatibility_no_reports">お使いのハードウェア向けの共有設定が見つかりません</string>
+    <string name="community_compatibility_configs_unavailable">一部の互換性データを読み込めませんでした。利用可能な情報を表示しています。</string>
+    <string name="community_compatibility_retry">再試行</string>
+    <string name="community_compatibility_fps_median">報告された中央値: %1$d FPS</string>
+    <string name="community_compatibility_fps_device">%1$s（お使いのデバイスモデル）。</string>
+    <string name="community_compatibility_fps_soc">%1$s（同じチップセット）。</string>
+    <string name="community_compatibility_fps_gpu">%1$s（お使いの GPU）。</string>
+    <string name="community_compatibility_fps_family">%1$s（互換性のある GPU）。</string>
+    <string name="community_compatibility_view_reports">設定を参照</string>
+    <string name="community_config_install_before_apply">コミュニティ設定を適用する前に、このゲームをインストールしてください。</string>
+    <plurals name="community_compatibility_model_sessions">
+        <item quantity="other">お使いのデバイスモデルで記録された %1$d 回のセッションに基づきます。</item>
+    </plurals>
+    <plurals name="community_compatibility_soc_sessions">
+        <item quantity="other">同じチップセットで記録された %1$d 回のセッションに基づきます。</item>
+    </plurals>
+    <plurals name="community_compatibility_gpu_sessions">
+        <item quantity="other">お使いの GPU で記録された %1$d 回のセッションに基づきます。</item>
+    </plurals>
+    <plurals name="community_compatibility_family_sessions">
+        <item quantity="other">お使いの GPU ファミリーで記録された %1$d 回のセッションに基づきます。</item>
+    </plurals>
     <string name="debug_prerun_instruction">この実行で行うこと: %1$s</string>
     <plurals name="debug_prerun_min_minutes">
         <item quantity="other">終了する前に、少なくとも%1$d分間ゲームを開いたままにしてください。</item>

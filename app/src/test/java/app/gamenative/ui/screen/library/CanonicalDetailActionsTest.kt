@@ -16,6 +16,8 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
@@ -76,17 +78,72 @@ class CanonicalDetailActionsTest {
     }
 
     @Test
-    fun sourceDetailsControlUsesExistingAutomaticGuardedRoute() {
+    fun installedOptionsReplaceSeparateCopiesAndSourceDetailsButtons() {
         val card = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS))
         val operations = mutableListOf<OwnedCopyOperation>()
         screen(card, operations)
 
         composeRule.onNodeWithTag("canonical-card").performClick()
-        composeRule.onNodeWithTag("canonical-detail-source-details").performClick()
+        composeRule.onNodeWithTag("canonical-detail-copies").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-source-details").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-options").assertIsDisplayed().performClick()
 
         composeRule.runOnIdle {
             assertEquals(listOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS), operations)
         }
+    }
+
+    @Test
+    fun readySourceOptionsKeepCanonicalPageTabAndDetailOwner() {
+        app.gamenative.service.gog.GOGConstants.init(ApplicationProvider.getApplicationContext())
+        val card = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS))
+        val item = app.gamenative.data.LibraryItem(
+            appId = "GOG_42", name = "Synthetic GOG game", gameSource = GameSource.GOG,
+        )
+        val guard = io.mockk.mockk<app.gamenative.library.canonical.action.OwnedCopyActionGuard>()
+        io.mockk.every { guard.initialLibraryItem } returns item
+        var clears = 0
+        screen(card, mutableListOf(), onClearDetail = { clears++ }) {
+            OwnedCopyRouteResult.Ready(guard, app.gamenative.library.canonical.action.ActionSelectionPolicy.SOLE_COPY)
+        }
+
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+        composeRule.onNodeWithTag("canonical-detail-options").performClick()
+
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").assertIsSelected()
+        composeRule.runOnIdle { assertEquals(0, clears) }
+        composeRule.onNodeWithTag("canonical-detail-options-panel").assertIsDisplayed()
+        composeRule.onRoot().performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("canonical-detail-options-panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+        composeRule.onNodeWithTag("canonical-detail-source-information").assertExists()
+        composeRule.onNodeWithText("Synthetic GOG game").assertExists()
+        composeRule.runOnIdle { assertEquals(0, clears) }
+    }
+
+    @Test
+    fun keyboardOptionsBackRestoresTheShopWrenchFocus() {
+        app.gamenative.service.gog.GOGConstants.init(ApplicationProvider.getApplicationContext())
+        val card = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS))
+        val item = app.gamenative.data.LibraryItem(
+            appId = "GOG_42", name = "Synthetic GOG game", gameSource = GameSource.GOG,
+        )
+        val guard = io.mockk.mockk<app.gamenative.library.canonical.action.OwnedCopyActionGuard>()
+        io.mockk.every { guard.initialLibraryItem } returns item
+        screen(card, mutableListOf()) {
+            OwnedCopyRouteResult.Ready(guard, app.gamenative.library.canonical.action.ActionSelectionPolicy.SOLE_COPY)
+        }
+        composeRule.onNodeWithTag("canonical-card").onChild()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithTag("canonical-detail-options")
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithTag("canonical-detail-options-panel").assertIsDisplayed()
+        composeRule.onRoot().performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("canonical-detail-options-panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-options").assertIsFocused()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
     }
 
     @Test
@@ -102,16 +159,59 @@ class CanonicalDetailActionsTest {
     }
 
     @Test
-    fun uninstalledNonSteamCopyCanInvokeInstallFromCanonicalDetail() {
+    fun installAlwaysChoosesOwnedSourceFirstAndCancelPreservesDetail() {
         val card = card(setOf(OwnedCopyOperation.INSTALL, OwnedCopyOperation.OPEN_SOURCE_DETAILS), installed = false)
         val operations = mutableListOf<OwnedCopyOperation>()
         screen(card, operations)
 
         composeRule.onNodeWithTag("canonical-card").performClick()
         composeRule.onNodeWithTag("canonical-detail-operation:INSTALL").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("copies-sheet").assertIsDisplayed()
         composeRule.onNodeWithTag("canonical-detail-operation:PLAY").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(emptyList<OwnedCopyOperation>(), operations) }
 
+        composeRule.onNodeWithTag("copies-sheet").performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+        composeRule.runOnIdle { assertEquals(emptyList<OwnedCopyOperation>(), operations) }
+    }
+
+    @Test
+    fun installChoiceOnlyShowsCapableSourcesAndKeepsExplicitInstallIntent() {
+        val initial = card(setOf(OwnedCopyOperation.INSTALL, OwnedCopyOperation.OPEN_SOURCE_DETAILS), installed = false)
+        val installed = initial.copies.single().copy(
+            key = OwnedCopyKey(AccountScope("a".repeat(64)), GameSource.AMAZON, "amzn1.adg.product.22222222-2222-2222-2222-222222222222"),
+            source = GameSource.AMAZON, isInstalled = true,
+            capabilities = setOf(OwnedCopyOperation.PLAY, OwnedCopyOperation.OPEN_SOURCE_DETAILS),
+        )
+        val card = initial.copy(copies = initial.copies + installed, ownedSources = setOf(GameSource.GOG, GameSource.AMAZON))
+        val operations = mutableListOf<OwnedCopyOperation>()
+        screen(card, operations, expectedExplicitKey = initial.copies.single().key)
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-operation:INSTALL").performClick()
+        composeRule.onNodeWithTag("copy-row:AMAZON").assertDoesNotExist()
+        composeRule.onNodeWithTag("copy-operation:GOG:OPEN_SOURCE_DETAILS").assertDoesNotExist()
+        // Modal pointer injection is not reliable in this host runner; signed-device
+        // acceptance owns touch. This owner checks the enabled action's exact intent.
+        composeRule.onNodeWithTag("copy-operation:GOG:INSTALL")
+            .assertIsDisplayed().assertIsEnabled()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
         composeRule.runOnIdle { assertEquals(listOf(OwnedCopyOperation.INSTALL), operations) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+    }
+
+    @Test
+    fun installChoiceRoutesItsEnabledAccessibilityActionToExactCopy() {
+        val card = card(setOf(OwnedCopyOperation.INSTALL, OwnedCopyOperation.OPEN_SOURCE_DETAILS), installed = false)
+        val operations = mutableListOf<OwnedCopyOperation>()
+        screen(card, operations, expectedExplicitKey = card.copies.single().key)
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-operation:INSTALL").performClick()
+        composeRule.onNodeWithTag("copy-operation:GOG:INSTALL")
+            .assertIsDisplayed().assertIsEnabled()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle { assertEquals(listOf(OwnedCopyOperation.INSTALL), operations) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
     }
 
     @Test
@@ -137,8 +237,9 @@ class CanonicalDetailActionsTest {
     }
 
     @Test
-    fun actionBarRoutesEverySupportedOperationWithoutChoosingACopyFromPresentation() {
-        val supported = OwnedCopyOperation.entries.filter { it != OwnedCopyOperation.OPEN_SOURCE_DETAILS }
+    fun actionBarRoutesImmediateOperationsWithoutChoosingACopyFromPresentation() {
+        val supported = listOf(OwnedCopyOperation.PLAY, OwnedCopyOperation.UPDATE,
+            OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD, OwnedCopyOperation.CANCEL_DOWNLOAD)
         val card = card(supported.toSet())
         val operations = mutableListOf<OwnedCopyOperation>()
         screen(card, operations)
@@ -349,6 +450,7 @@ class CanonicalDetailActionsTest {
         liveDiscussionState: State<DiscussionSectionState>? = null,
         reviewSummaryState: ReviewSummaryState = ReviewSummaryState.Idle,
         onCloseThread: () -> Boolean = { false },
+        expectedExplicitKey: OwnedCopyKey? = null,
         routeResult: (OwnedCopyOperation) -> OwnedCopyRouteResult = {
             OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
         },
@@ -396,7 +498,7 @@ class CanonicalDetailActionsTest {
                     canonicalCard = { card.takeIf { candidate -> candidate.key == it } },
                     onRouteCanonicalAction = { key, operation, explicitKey, rememberChoice ->
                         assertEquals(card.key, key)
-                        assertEquals(null, explicitKey)
+                        assertEquals(expectedExplicitKey, explicitKey)
                         assertEquals(false, rememberChoice)
                         operations += operation
                         routeResult(operation)

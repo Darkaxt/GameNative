@@ -45,12 +45,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.gamenative.R
-import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
 import app.gamenative.ui.data.LibraryCard
 import app.gamenative.ui.data.LibraryCardIdentity
 import app.gamenative.service.SteamService
-import app.gamenative.ui.component.CompatibilityBadge
 import app.gamenative.ui.component.GameStatsRow
 import app.gamenative.ui.component.focusRing
 import app.gamenative.ui.util.ListItemImage
@@ -267,17 +265,7 @@ internal fun ListViewCard(
                     )
                 }
 
-                val badgeStatus = if (card.isRecommended) {
-                    GameCompatibilityStatus.RECOMMENDED
-                } else {
-                    card.compatibilityStatus
-                }
-                badgeStatus?.let { status ->
-                    CompatibilityBadge(
-                        status = status,
-                        showLabel = true,
-                    )
-                }
+                LibraryCompatibilityBadge(card)
             }
         }
     }

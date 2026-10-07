@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +40,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -80,6 +82,7 @@ import app.gamenative.ui.model.ReviewSummaryState
 import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.screen.library.components.GameMediaItem
 import app.gamenative.ui.screen.library.components.GameMediaPager
+import app.gamenative.ui.screen.library.components.GameOptionsPanel
 import app.gamenative.ui.screen.library.components.OwnedSourceBadges
 import app.gamenative.ui.screen.library.components.SteamDiscussionsTab
 import app.gamenative.ui.screen.library.components.SteamMediaGallery
@@ -131,6 +134,8 @@ internal fun CanonicalGameDetailScreen(
     onLoadReviewSummary: () -> Unit = {},
     onRetryReviewSummary: () -> Unit = {},
     backEnabled: Boolean = true,
+    sourceDetails: OwnedSourceDetailPresentation? = null,
+    sourceOptionsRequestId: Long? = null,
 ) {
     val metadata = when (state) {
         is GameDetailState.Content -> state.metadata
@@ -144,6 +149,29 @@ internal fun CanonicalGameDetailScreen(
     val uriHandler = LocalUriHandler.current
     var selectedTab by remember { mutableIntStateOf(0) }
     val validSteamAppId = steamAppId?.takeIf { it > 0 }
+    var optionsMenuVisible by remember { mutableStateOf(false) }
+    var restoreOptionsFocus by remember { mutableStateOf(false) }
+    val optionsFocusRequester = remember { FocusRequester() }
+    val inputMode = LocalInputModeManager.current.inputMode
+    val dismissOptions = {
+        optionsMenuVisible = false
+        restoreOptionsFocus = true
+    }
+    LaunchedEffect(restoreOptionsFocus, sourceDetails?.dialogOpen) {
+        if (restoreOptionsFocus && sourceDetails?.dialogOpen != true) {
+            restoreOptionsFocus = false
+            if (inputMode == InputMode.Keyboard && copies.any { copy ->
+                copy.isInstalled && copy.unavailableReason == null &&
+                    OwnedCopyOperation.OPEN_SOURCE_DETAILS in copy.capabilities
+            }) {
+                optionsFocusRequester.requestFocus()
+            }
+        }
+    }
+    LaunchedEffect(sourceDetails?.displayInfo?.appId) { optionsMenuVisible = false }
+    LaunchedEffect(sourceOptionsRequestId, sourceDetails?.displayInfo?.appId) {
+        if (sourceOptionsRequestId != null && sourceDetails != null) optionsMenuVisible = true
+    }
 
     LaunchedEffect(validSteamAppId, isOffline) {
         if (validSteamAppId != null) onLoadReviewSummary()
@@ -159,16 +187,20 @@ internal fun CanonicalGameDetailScreen(
     val detailBack = {
         val visibleThread = tabs[selectedTab] == CanonicalDetailTab.DISCUSSIONS &&
             discussionState is DiscussionSectionState.Thread
-        if (!visibleThread || !onCloseDiscussionThread()) onBack()
+        when {
+            optionsMenuVisible -> dismissOptions()
+            sourceDetails?.dialogOpen == true -> Unit
+            !visibleThread || !onCloseDiscussionThread() -> onBack()
+        }
     }
-    BackHandler(enabled = backEnabled, onBack = detailBack)
+    BackHandler(enabled = backEnabled && sourceDetails?.dialogOpen != true, onBack = detailBack)
 
     Surface(
         modifier = Modifier
             .fillMaxSize()
             .testTag("canonical-detail-screen")
             .onPreviewKeyEvent { event ->
-                if (backEnabled && event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
+                if (backEnabled && sourceDetails?.dialogOpen != true && event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
                     event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
                     detailBack()
                     true
@@ -203,6 +235,7 @@ internal fun CanonicalGameDetailScreen(
                         actionInProgress = actionInProgress,
                         onCopies = onCopies,
                         onSourceDetails = onSourceDetails,
+                        optionsFocusRequester = optionsFocusRequester,
                     )
                     if (isOffline) {
                         DetailStatusBanner(stringResource(R.string.canonical_detail_offline))
@@ -245,6 +278,7 @@ internal fun CanonicalGameDetailScreen(
                             hasSteamIdentity = validSteamAppId != null,
                             onRetryReviewSummary = onRetryReviewSummary,
                             onRetry = onRetry,
+                            sourceDetails = sourceDetails,
                         )
                         CanonicalDetailTab.REVIEWS -> SteamReviewsTab(
                             state = if (validSteamAppId == null) {
@@ -284,10 +318,19 @@ internal fun CanonicalGameDetailScreen(
                             onFixSteamMatch = onFixSteamMatch,
                             links = remember(steamAppId) { steamResourceLinks(steamAppId) },
                             onOpen = uriHandler::openUri,
+                            sourceDetails = sourceDetails,
                         )
                     }
                 }
             }
+            GameOptionsPanel(
+                isOpen = optionsMenuVisible,
+                onDismiss = dismissOptions,
+                options = sourceDetails?.options.orEmpty(),
+                modifier = Modifier.align(Alignment.CenterEnd).then(
+                    if (optionsMenuVisible) Modifier.testTag("canonical-detail-options-panel") else Modifier,
+                ),
+            )
         }
     }
 }
@@ -377,6 +420,7 @@ private fun DetailActions(
     actionInProgress: Boolean,
     onCopies: () -> Unit,
     onSourceDetails: () -> Unit,
+    optionsFocusRequester: FocusRequester,
 ) {
     val operations = listOf(
         OwnedCopyOperation.PLAY,
@@ -384,9 +428,6 @@ private fun DetailActions(
         OwnedCopyOperation.UPDATE,
         OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
         OwnedCopyOperation.CANCEL_DOWNLOAD,
-        OwnedCopyOperation.UNINSTALL,
-        OwnedCopyOperation.EXPORT_SAVES,
-        OwnedCopyOperation.IMPORT_SAVES,
     ).filter { operation ->
         copies.any { copy -> copy.unavailableReason == null && operation in copy.capabilities }
     }
@@ -396,41 +437,35 @@ private fun DetailActions(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (operations.isNotEmpty()) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.testTag("canonical-detail-actions"),
-            ) {
-                operations.forEach { operation ->
-                    Button(
-                        onClick = { onOperation(operation) },
-                        enabled = !actionInProgress,
-                        modifier = Modifier.testTag("canonical-detail-operation:${operation.name}"),
-                    ) {
-                        Text(detailOperationLabel(operation))
-                    }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.testTag("canonical-detail-actions"),
+        ) {
+            operations.forEach { operation ->
+                Button(
+                    onClick = {
+                        if (operation == OwnedCopyOperation.INSTALL) onCopies() else onOperation(operation)
+                    },
+                    enabled = !actionInProgress,
+                    modifier = Modifier.testTag("canonical-detail-operation:${operation.name}"),
+                ) {
+                    Text(detailOperationLabel(operation))
                 }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = onCopies,
-                enabled = !actionInProgress,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("canonical-detail-copies"),
-            ) {
-                Text(stringResource(R.string.canonical_copies_action))
-            }
-            OutlinedButton(
-                onClick = onSourceDetails,
-                enabled = !actionInProgress,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("canonical-detail-source-details"),
-            ) {
-                Text(stringResource(R.string.canonical_open_source_details))
+            if (copies.any { copy ->
+                copy.isInstalled && copy.unavailableReason == null &&
+                    OwnedCopyOperation.OPEN_SOURCE_DETAILS in copy.capabilities
+            }) {
+                IconButton(
+                    onClick = onSourceDetails,
+                    enabled = !actionInProgress,
+                    modifier = Modifier
+                        .focusRequester(optionsFocusRequester)
+                        .testTag("canonical-detail-options"),
+                ) {
+                    Icon(Icons.Filled.Build, contentDescription = stringResource(R.string.game_options_title))
+                }
             }
         }
     }
@@ -467,6 +502,7 @@ private fun DetailOverview(
     hasSteamIdentity: Boolean,
     onRetryReviewSummary: () -> Unit,
     onRetry: () -> Unit,
+    sourceDetails: OwnedSourceDetailPresentation?,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val galleryWidth = constrainedMediaGalleryWidth(
@@ -574,6 +610,7 @@ private fun DetailOverview(
         if (metadata == null && hasSteamIdentity) {
             DetailReviewSummary(reviewSummaryState, cachedReviewCount, onRetryReviewSummary)
         }
+        sourceDetails?.let { CanonicalSourceInformation(it) }
         }
     }
 }
@@ -649,6 +686,7 @@ private fun DetailFields(
     onFixSteamMatch: (() -> Unit)?,
     links: List<SteamResourceLink>,
     onOpen: (String) -> Unit,
+    sourceDetails: OwnedSourceDetailPresentation?,
 ) {
     Column(
         modifier = Modifier
@@ -658,6 +696,7 @@ private fun DetailFields(
             .widthIn(max = READING_MAX_WIDTH),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        sourceDetails?.let { CanonicalSourceInformation(it) }
         if (metadata == null) {
             Text(stringResource(R.string.canonical_detail_unavailable))
         } else {
@@ -959,18 +998,13 @@ internal fun constrainedMediaGalleryWidth(
     val carouselHeight = if (hasCarousel) MEDIA_CAROUSEL_HEIGHT else 0.dp
     val heightBoundWidth = (
         availableHeight - OVERVIEW_PADDING * 2 - carouselHeight
-    ).coerceAtLeast(MEDIA_MIN_VIEWPORT_HEIGHT) * MEDIA_ASPECT_RATIO
-    val minimumReadableWidth = contentWidth.coerceAtMost(MEDIA_MIN_VIEWPORT_WIDTH)
-    return heightBoundWidth
-        .coerceAtLeast(minimumReadableWidth)
-        .coerceAtMost(contentWidth)
+    ).coerceAtLeast(0.dp) * MEDIA_ASPECT_RATIO
+    return heightBoundWidth.coerceAtMost(contentWidth)
 }
 
 private val TABLET_BREAKPOINT = 840.dp
 private val DETAIL_MAX_WIDTH = 1180.dp
 private val MEDIA_MAX_WIDTH = 960.dp
-private val MEDIA_MIN_VIEWPORT_WIDTH = 320.dp
-private val MEDIA_MIN_VIEWPORT_HEIGHT = 180.dp
 private val MEDIA_CAROUSEL_HEIGHT = 84.dp
 private val OVERVIEW_PADDING = 16.dp
 private const val MEDIA_ASPECT_RATIO = 16f / 9f

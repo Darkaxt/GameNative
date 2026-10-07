@@ -136,6 +136,17 @@ class CanonicalActionExecutionTest {
     }
 
     @Test
+    fun canonicalSourcePresentationReusesExactOperationDispatcherAndRetainsSourceDialogs() {
+        val source = File(
+            repositoryRoot(),
+            "app/src/main/java/app/gamenative/ui/screen/library/appscreen/BaseAppScreen.kt",
+        ).readText()
+        assertTrue("Source state must expose a presentation slot", source.contains("sourceDetailsContent"))
+        assertTrue("Source operations must retain the exact guarded dispatcher", source.contains("onOperation = ::executeOwnedCopyOperation"))
+        assertTrue("Source dialogs must remain owned by BaseAppScreen", source.substringAfter("sourceDetailsContent").contains("AdditionalDialogs("))
+    }
+
+    @Test
     fun specialLaunchCallbackPreservesLegacyItemExactlyOnce() = runTest {
         val original = libraryItem("Original")
         val received = mutableListOf<LibraryItem>()

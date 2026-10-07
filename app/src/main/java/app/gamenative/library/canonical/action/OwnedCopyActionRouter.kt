@@ -65,7 +65,12 @@ class OwnedCopyActionRouter @Inject constructor(
             return unavailable(null, operation, ActionFailureReason.PUBLIC_FEATURE_DISABLED)
         }
 
-        val capableCopies = card.copies.filter { operation in it.capabilities }
+        val operationCopies = card.copies.filter { operation in it.capabilities }
+        val capableCopies = if (explicitKey == null && operation == OwnedCopyOperation.OPEN_SOURCE_DETAILS) {
+            operationCopies.filter(OwnedCopySummary::isInstalled).ifEmpty { operationCopies }
+        } else {
+            operationCopies
+        }
         val selection = if (explicitKey != null) {
             val explicitCopy = card.copies.firstOrNull { it.key == explicitKey }
                 ?: return unavailable(
