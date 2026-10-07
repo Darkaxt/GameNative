@@ -32,6 +32,8 @@ class SupportApiBoundaryTest {
 
     @Before
     fun setUp() {
+        app.gamenative.PrefManager.init(androidx.test.core.app.ApplicationProvider.getApplicationContext())
+        app.gamenative.PrefManager.discordMergePending = false
         mockkObject(AccountApi)
         Timber.plant(tree)
     }
@@ -49,6 +51,31 @@ class SupportApiBoundaryTest {
         }
         assertEquals(ApiResult.HttpError(503, "SYNTHETIC_PRIVATE_PAYLOAD"), SupportApi.listConversations())
         assertFalse(messages.joinToString().contains("SYNTHETIC_PRIVATE_PAYLOAD"))
+    }
+
+    @Test
+    fun fixRequestFailureDoesNotLogServerReasonPayload() = runTest {
+        coEvery { AccountApi.sendAuthorized<Any>(any(), any()) } coAnswers {
+            secondArg<(Response) -> Any>().invoke(response(503, """{"error":"SYNTHETIC_PRIVATE_FIX_PAYLOAD"}"""))
+        }
+        assertEquals(SupportApi.FixRequestResult.Failed("SYNTHETIC_PRIVATE_FIX_PAYLOAD"), SupportApi.fixRequest("synthetic"))
+        assertFalse(messages.joinToString().contains("SYNTHETIC_PRIVATE_FIX_PAYLOAD"))
+    }
+
+    @Test
+    fun anonymousLinkFailureDoesNotLogServerReasonPayload() = runTest {
+        val client = io.mockk.mockk<okhttp3.OkHttpClient>()
+        val call = io.mockk.mockk<okhttp3.Call>()
+        mockkObject(GameNativeApi)
+        try {
+            io.mockk.every { GameNativeApi.httpClient } returns client
+            io.mockk.every { client.newCall(any()) } returns call
+            io.mockk.every { call.execute() } returns response(503, """{"error":"SYNTHETIC_PRIVATE_LINK_PAYLOAD"}""")
+            assertEquals(ApiResult.HttpError(503, "SYNTHETIC_PRIVATE_LINK_PAYLOAD"), SupportApi.createDiscordLinkCode("synthetic", false))
+            assertFalse(messages.joinToString().contains("SYNTHETIC_PRIVATE_LINK_PAYLOAD"))
+        } finally {
+            unmockkObject(GameNativeApi)
+        }
     }
 
     @Test

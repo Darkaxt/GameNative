@@ -34,9 +34,11 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
+@Config(application = android.app.Application::class)
 class CanonicalProjectionEngineTest {
 
     private lateinit var db: PluviaDatabase
@@ -61,6 +63,12 @@ class CanonicalProjectionEngineTest {
     @After
     fun tearDown() {
         db.close()
+    }
+
+    @Test
+    fun unitFixtureDoesNotStartApplicationServices() {
+        val application = ApplicationProvider.getApplicationContext<android.app.Application>()
+        assertEquals(android.app.Application::class.java, application.javaClass)
     }
 
     @Test

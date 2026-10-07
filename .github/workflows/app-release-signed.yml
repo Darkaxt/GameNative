@@ -390,10 +390,14 @@ jobs:
           assert set(native) == {'lib/arm64-v8a/libgndownload.so', 'lib/armeabi-v7a/libgndownload.so'}
           for n, digest in native.items():
               assert digest == hashlib.sha256(pathlib.Path('app/src/main/jniLibs', n.removeprefix('lib/')).read_bytes()).hexdigest()
+          mapping = root / 'mapping.txt'
+          mapping.write_bytes(pathlib.Path('app/build/outputs/mapping/legacyReleaseDarkaxt/mapping.txt').read_bytes())
+          assert mapping.stat().st_size > 0
           provenance = dict(commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               package='app.gamenative.darkaxt', version_code=int(os.environ['EXPECTED_VERSION_CODE']),
               version_name=os.environ['EXPECTED_VERSION_NAME'], signer=digests[0],
               apk_sha256=hashlib.sha256(apk.read_bytes()).hexdigest(), native=native,
+              mapping_sha256=hashlib.sha256(mapping.read_bytes()).hexdigest(),
               schema31_sha256=hashlib.sha256(pathlib.Path('app/schemas/app.gamenative.db.PluviaDatabase/31.json').read_bytes()).hexdigest(),
               run_id=os.environ['GITHUB_RUN_ID'], artifact_only=True)
           assert provenance['commit'] == os.environ['EXPECTED_COMMIT']
