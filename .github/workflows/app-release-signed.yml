@@ -342,6 +342,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Install candidate signing tools
         run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "build-tools;35.0.0" < <(yes)'
+      - name: Configure candidate properties
+        run: ': > local.properties'
       - name: Build side-by-side Legacy APK
         run: ./gradlew --max-workers=2 --no-parallel -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process :app:assembleLegacyReleaseDarkaxt
       - name: Sign validation artifact with persistent fork key

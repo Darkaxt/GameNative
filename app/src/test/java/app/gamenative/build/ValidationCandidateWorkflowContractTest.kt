@@ -34,6 +34,15 @@ class ValidationCandidateWorkflowContractTest {
     }
 
     @Test
+    fun freshCandidateCheckoutCreatesRequiredPropertiesBeforeGradle() {
+        val job = workflow().substringAfter("  validation-candidate:")
+        val configure = job.indexOf(": > local.properties")
+        val build = job.indexOf(":app:assembleLegacyReleaseDarkaxt")
+        assertTrue("Fresh checkouts need the secrets plugin's properties file", configure >= 0)
+        assertTrue("Properties must exist before Gradle configures the project", configure < build)
+    }
+
+    @Test
     fun minifiedCandidateRetainsHashedMappingForClassProvenance() {
         val job = workflow().substringAfter("  validation-candidate:")
         assertTrue(job.contains("app/build/outputs/mapping/legacyReleaseDarkaxt/mapping.txt"))
