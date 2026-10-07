@@ -345,7 +345,8 @@ jobs:
       - name: Configure candidate properties
         run: ': > local.properties'
       - name: Build side-by-side Legacy APK
-        run: ./gradlew --max-workers=2 --no-parallel -Dorg.gradle.jvmargs=-Xmx3g -Pkotlin.compiler.execution.strategy=in-process :app:assembleLegacyReleaseDarkaxt
+        # R8 exhausted the confirmed 3 GiB shared heap in artifact-only run 37699848087.
+        run: ./gradlew --max-workers=2 --no-parallel -Dorg.gradle.jvmargs=-Xmx5g -Pkotlin.compiler.execution.strategy=in-process :app:assembleLegacyReleaseDarkaxt
       - name: Sign validation artifact with persistent fork key
         env:
           FORK_KEYSTORE: ${{ secrets.FORK_KEYSTORE }}

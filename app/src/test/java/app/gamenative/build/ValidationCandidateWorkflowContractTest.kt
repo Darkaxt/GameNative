@@ -43,6 +43,16 @@ class ValidationCandidateWorkflowContractTest {
     }
 
     @Test
+    fun candidateR8BudgetUsesOnlyTheDiagnosedSharedHeapIncrease() {
+        val job = workflow().substringAfter("  validation-candidate:")
+        assertTrue(job.contains("-Dorg.gradle.jvmargs=-Xmx5g"))
+        assertTrue(job.contains("--max-workers=2 --no-parallel"))
+        assertTrue(job.contains("-Pkotlin.compiler.execution.strategy=in-process"))
+        assertFalse(job.contains("-Pkotlin.daemon.jvmargs"))
+        assertFalse(job.contains("-Pandroid.enableR8=false"))
+    }
+
+    @Test
     fun minifiedCandidateRetainsHashedMappingForClassProvenance() {
         val job = workflow().substringAfter("  validation-candidate:")
         assertTrue(job.contains("app/build/outputs/mapping/legacyReleaseDarkaxt/mapping.txt"))
