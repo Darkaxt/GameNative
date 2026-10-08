@@ -242,6 +242,8 @@ android {
             excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
         jniLibs {
+            // Preserve the official download prebuilt bytes; another LLVM strip rewrites the ELF.
+            keepDebugSymbols += "**/libgndownload.so"
             // 'extractNativeLibs' was not enough to keep the jniLibs and
             // the libs went missing after adding on-demand feature delivery
             useLegacyPackaging = true
