@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_copy_family_separate_action">單獨顯示此版本</string>
+    <string name="canonical_copy_family_separate_title">將此版本分開顯示？</string>
+    <string name="canonical_copy_family_separate_message">將此版本保留為單獨的遊戲庫項目。其 Steam 配對和已安裝的副本將保持不變。</string>
+    <string name="canonical_copy_family_separate_confirm">單獨顯示此版本</string>
+    <string name="canonical_copy_family_reset_grouping">重新允許版本分組</string>
+</resources>

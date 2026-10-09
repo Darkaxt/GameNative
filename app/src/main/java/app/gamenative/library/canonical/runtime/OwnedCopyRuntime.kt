@@ -39,6 +39,7 @@ data class OwnedCopyRuntime(
     val isHidden: Boolean = false,
     val isVrOnly: Boolean = false,
     val isVrSupported: Boolean = false,
+    val originalArtworkUrl: String? = null,
 )
 
 sealed interface OwnedCopyRuntimeResult {

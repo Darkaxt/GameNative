@@ -70,6 +70,7 @@ import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CopyUnavailableReason
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
+import app.gamenative.library.canonical.hasValidFamilyBindings
 import app.gamenative.ui.model.SteamMatchStatus
 import app.gamenative.ui.model.steamMatchStatus
 
@@ -79,6 +80,8 @@ internal enum class CanonicalCopiesFeedback {
     PREFERENCE_CLEAR_FAILED,
     MUTATION_FAILED,
 }
+
+private data class PendingCopySeparation(val card: CanonicalLibraryCard, val copy: OwnedCopySummary)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,14 +100,17 @@ internal fun CanonicalCopiesSheet(
     actionInProgress: Boolean = false,
     requestedOperation: OwnedCopyOperation? = null,
     eligibleKeys: Set<OwnedCopyKey>? = null,
+    onChangeFamilyGrouping: (CanonicalLibraryCard, OwnedCopyKey, Boolean) -> Unit = { _, _, _ -> },
 ) {
     val visibleCopies = card.copies.filter { copy ->
         (eligibleKeys == null || copy.key in eligibleKeys) &&
             (requestedOperation == null ||
-                (copy.unavailableReason == null && requestedOperation in copy.capabilities))
+                (copy.unavailableReason == null && requestedOperation in copy.capabilities && copy.isEligibleFor(requestedOperation)))
     }
-    var pendingSeparation by remember(card.key) { mutableStateOf<OwnedCopySummary?>(null) }
+    var pendingSeparation by remember(card.key) { mutableStateOf<PendingCopySeparation?>(null) }
+    var localFeedback by remember(card.key) { mutableStateOf<CanonicalCopiesFeedback?>(null) }
     val sheetFocusRequester = remember(card.key) { FocusRequester() }
+    val confirmationFocusRequester = remember(card.key) { FocusRequester() }
     val inputModeManager = LocalInputModeManager.current
 
     ModalBottomSheet(
@@ -115,15 +121,15 @@ internal fun CanonicalCopiesSheet(
             .onPreviewKeyEvent { event ->
                 if (event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
                     event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
-                    onDismissRequest()
+                    if (pendingSeparation != null) pendingSeparation = null else onDismissRequest()
                     true
                 } else false
             }
             .focusRequester(sheetFocusRequester)
             .focusable(),
     ) {
-        LaunchedEffect(sheetFocusRequester, inputModeManager.inputMode) {
-            if (inputModeManager.inputMode == InputMode.Keyboard) sheetFocusRequester.requestFocus()
+        LaunchedEffect(sheetFocusRequester, inputModeManager.inputMode, pendingSeparation == null) {
+            if (inputModeManager.inputMode == InputMode.Keyboard && pendingSeparation == null) sheetFocusRequester.requestFocus()
         }
         Column(
             modifier = Modifier
@@ -144,7 +150,7 @@ internal fun CanonicalCopiesSheet(
                 overflow = TextOverflow.Ellipsis,
             )
 
-            feedback?.let { value ->
+            (feedback ?: localFeedback)?.let { value ->
                 Text(
                     text = stringResource(value.messageResource()),
                     color = MaterialTheme.colorScheme.error,
@@ -168,7 +174,11 @@ internal fun CanonicalCopiesSheet(
                         isPreferred = card.preferredCopy == copy.key,
                         actionInProgress = actionInProgress,
                         onOperation = onOperation,
-                        onSeparate = { pendingSeparation = copy },
+                        onSeparate = {
+                            localFeedback = null
+                            pendingSeparation = PendingCopySeparation(card, copy)
+                        },
+                        onResetFamilyGrouping = { onChangeFamilyGrouping(card, copy.key, false) },
                         onResetDecision = { onResetDecision(copy) },
                         onFixSteamMatch = { onFixSteamMatch(copy) },
                         isSteamMatchScanning = isSteamMatchScanning,
@@ -177,11 +187,12 @@ internal fun CanonicalCopiesSheet(
                 }
             }
 
-            if (card.preferredCopy != null) {
+            if (card.preferredCopy != null || (card.isPresentationFamily &&
+                    card.memberPreferences.values.any { it?.preferredCopyKeyOrNull() != null })) {
                 OutlinedButton(
                     onClick = onUseAutomaticSelection,
                     enabled = !actionInProgress,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("use-automatic-copy-selection"),
                 ) {
                     Text(stringResource(R.string.canonical_use_automatic_selection))
                 }
@@ -189,23 +200,50 @@ internal fun CanonicalCopiesSheet(
         }
     }
 
-    pendingSeparation?.let { copy ->
+    pendingSeparation?.let { pending ->
+        val family = pending.card.isPresentationFamily
         AlertDialog(
             onDismissRequest = { pendingSeparation = null },
-            title = { Text(stringResource(R.string.canonical_separate_copy_title)) },
-            text = { Text(stringResource(R.string.canonical_separate_copy_message)) },
+            modifier = Modifier.testTag("copy-separation-confirmation").onPreviewKeyEvent { event ->
+                if (event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN &&
+                    event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+                    pendingSeparation = null
+                    true
+                } else false
+            },
+            title = { Text(stringResource(if (family) R.string.canonical_copy_family_separate_title else R.string.canonical_separate_copy_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(pending.copy.nativeTitle, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(if (family) R.string.canonical_copy_family_separate_message else R.string.canonical_separate_copy_message))
+                }
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
                         pendingSeparation = null
-                        onSeparateCopy(copy)
+                        if (card != pending.card) {
+                            localFeedback = CanonicalCopiesFeedback.COPY_STATE_CHANGED
+                        } else if (family) {
+                            onChangeFamilyGrouping(pending.card, pending.copy.key, true)
+                        } else {
+                            onSeparateCopy(pending.copy)
+                        }
                     },
+                    enabled = !actionInProgress,
+                    modifier = Modifier.testTag("confirm-copy-separation"),
                 ) {
-                    Text(stringResource(R.string.canonical_separate_copy_confirm))
+                    Text(stringResource(if (family) R.string.canonical_copy_family_separate_confirm else R.string.canonical_separate_copy_confirm))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingSeparation = null }) {
+                LaunchedEffect(confirmationFocusRequester, inputModeManager.inputMode) {
+                    if (inputModeManager.inputMode == InputMode.Keyboard) confirmationFocusRequester.requestFocus()
+                }
+                TextButton(
+                    onClick = { pendingSeparation = null },
+                    modifier = Modifier.focusRequester(confirmationFocusRequester),
+                ) {
                     Text(stringResource(R.string.cancel))
                 }
             },
@@ -221,6 +259,7 @@ private fun CanonicalCopyRow(
     actionInProgress: Boolean,
     onOperation: (OwnedCopySummary, OwnedCopyOperation, Boolean) -> Unit,
     onSeparate: () -> Unit,
+    onResetFamilyGrouping: () -> Unit,
     onResetDecision: () -> Unit,
     onFixSteamMatch: () -> Unit,
     isSteamMatchScanning: Boolean,
@@ -235,10 +274,11 @@ private fun CanonicalCopyRow(
         else -> stringResource(R.string.not_installed)
     }
     var rememberChoice by remember(card.key, copy.key) { mutableStateOf(false) }
+    val eligibleOperations = copy.capabilities.filter(copy::isEligibleFor)
     val sortedOperations = if (requestedOperation != null) {
-        listOf(requestedOperation).filter(copy.capabilities::contains)
+        listOf(requestedOperation).filter(eligibleOperations::contains)
     } else {
-        copy.capabilities.sortedBy(::operationRank)
+        eligibleOperations.sortedBy(::operationRank)
     }
     val regularOperations = if (requestedOperation != null) sortedOperations else sortedOperations.filterNot(COMPACT_OPERATIONS::contains)
     val compactOperations = if (requestedOperation != null) emptyList() else sortedOperations.filter(COMPACT_OPERATIONS::contains)
@@ -249,7 +289,7 @@ private fun CanonicalCopyRow(
             .fillMaxWidth()
             .testTag("copy-row:${copy.source.name}")
             .semantics {
-                contentDescription = "$source. $stateLabel"
+                contentDescription = "${copy.nativeTitle}. $source. $stateLabel"
             },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
@@ -392,21 +432,32 @@ private fun CanonicalCopyRow(
                 }
             }
 
-            val canSeparate = card.key is CanonicalCardKey.Grouped &&
+            val familySeparation = card.hasValidFamilyBindings() && !unavailable
+            val canSeparate = familySeparation || (!card.isPresentationFamily && card.key is CanonicalCardKey.Grouped &&
                 card.copies.size >= 2 &&
                 copy.source != GameSource.STEAM &&
                 copy.canSeparateMatch &&
                 (
                     copy.unavailableReason == null ||
                         copy.unavailableReason == CopyUnavailableReason.LEGACY_BRIDGE_UNSUPPORTED
-                )
+                ))
             if (canSeparate) {
                 TextButton(
                     onClick = onSeparate,
                     enabled = !actionInProgress,
-                    modifier = Modifier.testTag("separate-copy"),
+                    modifier = Modifier.testTag(if (familySeparation) "separate-family-edition" else "separate-copy"),
                 ) {
-                    Text(stringResource(R.string.canonical_separate_copy_action))
+                    Text(stringResource(if (familySeparation) R.string.canonical_copy_family_separate_action else R.string.canonical_separate_copy_action))
+                }
+            }
+
+            if (!card.isPresentationFamily && card.familyGroupingSuppressed) {
+                TextButton(
+                    onClick = onResetFamilyGrouping,
+                    enabled = !actionInProgress && !unavailable,
+                    modifier = Modifier.testTag("reset-family-grouping"),
+                ) {
+                    Text(stringResource(R.string.canonical_copy_family_reset_grouping))
                 }
             }
 
@@ -492,6 +543,9 @@ private fun operationLabel(
         OwnedCopyOperation.OPEN_SOURCE_DETAILS -> R.string.canonical_open_source_details
     },
 )
+
+private fun OwnedCopySummary.isEligibleFor(operation: OwnedCopyOperation): Boolean =
+    operation != OwnedCopyOperation.PLAY || isInstalled || source == GameSource.CUSTOM_GAME
 
 private val COMPACT_OPERATIONS = setOf(
     OwnedCopyOperation.INSTALL,

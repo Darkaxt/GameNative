@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_copy_family_separate_action">이 에디션을 별도로 표시</string>
+    <string name="canonical_copy_family_separate_title">에디션을 분리할까요?</string>
+    <string name="canonical_copy_family_separate_message">이 에디션을 라이브러리의 별도 항목으로 유지합니다. Steam 연결과 설치된 사본은 변경되지 않습니다.</string>
+    <string name="canonical_copy_family_separate_confirm">이 에디션을 별도로 표시</string>
+    <string name="canonical_copy_family_reset_grouping">에디션 그룹화를 다시 허용</string>
+</resources>

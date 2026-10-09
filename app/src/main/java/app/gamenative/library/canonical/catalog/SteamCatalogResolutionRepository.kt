@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import app.gamenative.db.PluviaDatabase
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalAppType
+import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -17,6 +18,7 @@ import app.gamenative.library.canonical.CanonicalGuardedMutationResult
 import app.gamenative.library.canonical.EpicCatalogFallbackWriter
 import app.gamenative.library.canonical.ExpectedMatchState
 import app.gamenative.library.canonical.SteamCatalogDecisionWriter
+import app.gamenative.library.canonical.artwork.ArtworkUrlPolicy
 import app.gamenative.library.metadata.EpicCmsCatalogException
 import app.gamenative.library.metadata.EpicCmsCatalogRequest
 import app.gamenative.library.metadata.EpicCmsCatalogSource
@@ -86,6 +88,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val clock: MetadataClock,
     private val db: PluviaDatabase,
     private val resumeScheduler: SteamCatalogResumeScheduler,
+    private val artworkCorroborator: SteamCatalogArtworkCorroborator? = null,
 ) {
     private val resolutionDao = db.steamCatalogResolutionDao()
     private val scanMutex = Mutex()
@@ -285,7 +288,8 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 errorType = requireNotNull(fetched.incompleteReason),
             )
         }
-        return when (val decision = candidatePolicy.evaluate(evidence, candidates)) {
+        val artworkAppIds = artworkCorroborator?.corroborate(expected.key, evidence, candidates).orEmpty()
+        return when (val decision = candidatePolicy.evaluate(evidence, candidates, artworkAppIds)) {
             is CatalogDecision.AutoAccept -> {
                 val selected = candidates.first { it.steamAppId == decision.steamAppId }
                 val mutation = publishAttempt(attempt, SteamCatalogResolutionStatus.AUTO_ACCEPTED, candidates) {
@@ -433,14 +437,29 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         evidenceHash == hash && resolverVersion == CURRENT_RESOLVER_VERSION &&
             status != SteamCatalogResolutionStatus.PENDING && status != SteamCatalogResolutionStatus.FAILED
 
-    private fun evidenceHash(match: StoreMatchEntity, locale: MetadataLocale): String {
+    private suspend fun evidenceHash(match: StoreMatchEntity, locale: MetadataLocale): String {
         val publicEvidence = listOf(
             match.source.name, match.evidenceDisplayName, match.evidenceDeveloperKey,
             match.evidenceReleaseYear?.toString().orEmpty(), match.evidenceAppType.name,
-            locale.normalizedLocale, locale.normalizedCountry,
+            locale.normalizedLocale, locale.normalizedCountry, originalArtworkUrl(match).orEmpty(),
         ).joinToString("") { "${it.length}:$it" }
         return MessageDigest.getInstance("SHA-256").digest(publicEvidence.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
+    }
+
+    private suspend fun originalArtworkUrl(match: StoreMatchEntity): String? {
+        // Local public source fields only: no runtime resolution, network or image I/O in a lease transaction.
+        val raw = when (match.source) {
+            GameSource.GOG -> db.gogGameDao().getById(match.stableSourceId)?.verticalCoverUrl
+            GameSource.EPIC -> {
+                val identity = runCatching { EpicStableSourceId.decode(match.stableSourceId) }.getOrNull()
+                    ?: return null
+                db.epicGameDao().getByProviderIdentity(identity.first, identity.second)?.artCover
+            }
+            GameSource.AMAZON -> db.amazonGameDao().getByProductId(match.stableSourceId)?.artUrl
+            GameSource.STEAM, GameSource.CUSTOM_GAME -> null
+        } ?: return null
+        return ArtworkUrlPolicy.Default.originalUrl(match.source, raw, null)?.toString()
     }
 
     private data class ResolutionAttempt(
@@ -526,7 +545,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         }
         val incompleteReason = when {
             !searchResult.complete -> SEARCH_INCOMPLETE
-            failedFetches > 0 -> CANDIDATE_DETAILS_INCOMPLETE
+            failedFetches > 0 || searchResult.hits.size > MAX_VALIDATED_HITS -> CANDIDATE_DETAILS_INCOMPLETE
             else -> null
         }
         return CandidateFetchResult(
@@ -564,10 +583,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         if (successfulQueries == 0) {
             throw firstFailure ?: SteamCatalogSearchException()
         }
-        return SteamCatalogSearchResult(
-            hits = hitsById.values.take(MAX_VALIDATED_HITS),
-            complete = !partial,
-        )
+        return selectSteamCatalogHits(query, hitsById.values.toList(), complete = !partial)
     }
 
     private suspend fun fetchDirectCandidate(
@@ -741,7 +757,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
 
     private companion object {
         const val MAX_QUERY_FAN_OUT = 3
-        const val MAX_VALIDATED_HITS = 15
+        const val MAX_VALIDATED_HITS = 5
         const val MAX_VISIBLE_CANDIDATES = 5
         const val AUTOMATIC_ITEM_INTERVAL_MS = 350L
         const val STORE_SEARCH_UNAVAILABLE = "STORE_SEARCH_UNAVAILABLE"

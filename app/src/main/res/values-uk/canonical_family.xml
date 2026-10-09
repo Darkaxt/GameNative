@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_copy_family_separate_action">Показувати видання окремо</string>
+    <string name="canonical_copy_family_separate_title">Відокремити видання?</string>
+    <string name="canonical_copy_family_separate_message">Залишити це видання окремим записом у бібліотеці. Його відповідність у Steam і встановлені копії залишаться без змін.</string>
+    <string name="canonical_copy_family_separate_confirm">Показувати видання окремо</string>
+    <string name="canonical_copy_family_reset_grouping">Знову дозволити групування видань</string>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_copy_family_separate_action">Mantener edición separada</string>
+    <string name="canonical_copy_family_separate_title">¿Separar edición?</string>
+    <string name="canonical_copy_family_separate_message">Mantén esta edición como una entrada independiente de la biblioteca. Su correspondencia con Steam y sus copias instaladas no cambiarán.</string>
+    <string name="canonical_copy_family_separate_confirm">Mantener edición separada</string>
+    <string name="canonical_copy_family_reset_grouping">Permitir agrupar ediciones de nuevo</string>
+</resources>

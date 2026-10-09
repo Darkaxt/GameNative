@@ -81,26 +81,26 @@ class MergedRoomMigrationTest {
 
     @Test
     fun publishedFork29PreservesRowsAndAddsDurableResolverHistory() =
-        migrateFixture("fork-29", targetVersion = 31, assertResolverHistory = true)
+        migrateFixture("fork-29", targetVersion = 32, assertResolverHistory = true)
 
     @Test
-    fun officialEula29PreservesAgreementsThroughRegisteredFork31Upgrade() =
-        migrateFixture("official-eula-29", targetVersion = 31, fixtureResource = "schemas/official-eula-29.json")
+    fun officialEula29PreservesAgreementsThroughRegisteredFork32Upgrade() =
+        migrateFixture("official-eula-29", targetVersion = 32, fixtureResource = "schemas/official-eula-29.json")
 
     @Test
-    fun publishedFork30PreservesHistoryThroughRegisteredEula31Upgrade() =
-        migrateFixture("fork-30", targetVersion = 31)
+    fun publishedFork30PreservesHistoryThroughRegisteredEulaAndFamily32Upgrade() =
+        migrateFixture("fork-30", targetVersion = 32)
 
     @Test
-    fun publishedFork29PreservesCanonicalRowsThroughRegisteredEula31Upgrade() =
-        migrateFixture("fork-29", targetVersion = 31)
+    fun publishedFork29PreservesCanonicalRowsThroughRegisteredEulaAndFamily32Upgrade() =
+        migrateFixture("fork-29", targetVersion = 32)
 
     private fun migrateFixture(
         name: String,
         emptyRecipeTable: Boolean = false,
         laterV26Ledger: Boolean = false,
         emptyOverwriteManifest: Boolean = false,
-        targetVersion: Int = 31,
+        targetVersion: Int = 32,
         assertResolverHistory: Boolean = true,
         fixtureResource: String = "db/upstream-merge-2026-10-03/$name.json",
     ) {

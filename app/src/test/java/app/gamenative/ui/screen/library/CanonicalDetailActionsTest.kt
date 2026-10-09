@@ -21,6 +21,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -421,6 +422,118 @@ class CanonicalDetailActionsTest {
         composeRule.onNodeWithText("90% positive").assertExists()
     }
 
+    @Test
+    fun mergingAnOpenNonAnchorEditionReloadsTheFamilyOwnerWithoutLosingItsTab() {
+        val deluxe = card(setOf(OwnedCopyOperation.PLAY)).copy(displayName = "Fixture Game Deluxe", steamAppId = 43)
+        val family = transitionedFamily(deluxe)
+        val live = mutableStateOf(listOf(deluxe))
+        val opened = mutableListOf<CanonicalGameId>()
+        val operations = mutableListOf<OwnedCopyOperation>()
+        var clears = 0
+        screen(deluxe, operations, liveCanonicalCards = live, onOpenDetail = { opened += it }, onClearDetail = { clears++ })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+        composeRule.runOnIdle { live.value = listOf(family) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").assertIsSelected()
+        composeRule.runOnIdle {
+            assertEquals(listOf(deluxe.canonicalId, family.canonicalId), opened)
+            assertEquals(0, clears)
+            assertEquals(emptyList<OwnedCopyOperation>(), operations)
+        }
+    }
+
+    @Test
+    fun dissolvingAnOpenFamilyReloadsTheExactOriginalEditionAndBackClearsOnce() {
+        val deluxe = card(setOf(OwnedCopyOperation.PLAY)).copy(displayName = "Fixture Game Deluxe", steamAppId = 43)
+        val family = transitionedFamily(deluxe)
+        val live = mutableStateOf(listOf(deluxe))
+        val opened = mutableListOf<CanonicalGameId>()
+        var clears = 0
+        screen(deluxe, mutableListOf(), liveCanonicalCards = live, onOpenDetail = { opened += it }, onClearDetail = { clears++ })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+        composeRule.runOnIdle { live.value = listOf(family) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+        composeRule.runOnIdle { live.value = listOf(deluxe) }
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").assertIsSelected()
+        composeRule.runOnIdle { assertEquals(listOf(deluxe.canonicalId, family.canonicalId, deluxe.canonicalId), opened) }
+        composeRule.onRoot().performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(1, clears) }
+    }
+
+    @Test
+    fun familySeparationFromInstallChooserUsesCapturedMemberCallbackAndKeepsDetailTab() {
+        val deluxe = card(setOf(OwnedCopyOperation.INSTALL), installed = false).copy(steamAppId = 43)
+        val family = transitionedFamily(deluxe)
+        val calls = mutableListOf<Triple<CanonicalLibraryCard, OwnedCopyKey, Boolean>>()
+        var legacyCalls = 0
+        screen(family, mutableListOf(), onSeparateLegacy = { _, _ -> legacyCalls++; CanonicalCopyChangeResult.SUCCESS },
+            onFamilyGrouping = { captured, key, suppressed ->
+                calls += Triple(captured, key, suppressed)
+                CanonicalCopyChangeResult.SUCCESS
+            })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+        composeRule.onNodeWithTag("canonical-detail-operation:INSTALL").performClick()
+        composeRule.onAllNodesWithTag("separate-family-edition")[1].performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithTag("confirm-copy-separation").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle {
+            assertEquals(listOf(Triple(family, deluxe.copies.single().key, true)), calls)
+            assertEquals(0, legacyCalls)
+        }
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").assertIsSelected()
+    }
+
+    @Test
+    fun changedFamilyConfirmationInActualLibraryScreenCallsNeitherMutationBoundary() {
+        val family = transitionedFamily(card(setOf(OwnedCopyOperation.INSTALL), installed = false).copy(steamAppId = 43))
+        val live = mutableStateOf(listOf(family))
+        var calls = 0
+        screen(family, mutableListOf(), liveCanonicalCards = live,
+            onSeparateLegacy = { _, _ -> calls++; CanonicalCopyChangeResult.SUCCESS },
+            onFamilyGrouping = { _, _, _ -> calls++; CanonicalCopyChangeResult.SUCCESS })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-operation:INSTALL").performClick()
+        composeRule.onAllNodesWithTag("separate-family-edition")[0].performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle { live.value = listOf(family.copy(copies = family.copies.take(1),
+            copyCanonicalIds = mapOf(family.copies.first().key to family.canonicalId),
+            memberSteamAppIds = mapOf(family.canonicalId to 42), memberPreferences = mapOf(family.canonicalId to null))) }
+        composeRule.onNodeWithTag("confirm-copy-separation").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle { assertEquals(0, calls) }
+        composeRule.onNodeWithTag("copies-sheet").assertExists()
+        composeRule.onNodeWithText(ApplicationProvider.getApplicationContext<Application>().getString(app.gamenative.R.string.canonical_copy_state_changed)).assertExists()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+    }
+
+    @Test
+    fun rawEditionGroupingResetInActualLibraryScreenNeverResetsSteamMatch() {
+        val family = transitionedFamily(card(setOf(OwnedCopyOperation.INSTALL), installed = false).copy(steamAppId = 43))
+        val raw = family.copy(copies = family.copies.take(1), copyCanonicalIds = mapOf(family.copies.first().key to family.canonicalId),
+            memberSteamAppIds = mapOf(family.canonicalId to 42), memberPreferences = mapOf(family.canonicalId to null), familyGroupingSuppressed = true)
+        val calls = mutableListOf<Triple<CanonicalLibraryCard, OwnedCopyKey, Boolean>>()
+        var matchResets = 0
+        screen(raw, mutableListOf(), onResetLegacy = { _, _ -> matchResets++; CanonicalCopyChangeResult.SUCCESS },
+            onFamilyGrouping = { captured, key, suppressed -> calls += Triple(captured, key, suppressed); CanonicalCopyChangeResult.SUCCESS })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-operation:INSTALL").performClick()
+        composeRule.onNodeWithTag("reset-family-grouping").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle { assertEquals(listOf(Triple(raw, raw.copies.single().key, false)), calls); assertEquals(0, matchResets) }
+        composeRule.onNodeWithTag("copies-sheet").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+    }
+
+    private fun transitionedFamily(deluxe: CanonicalLibraryCard): CanonicalLibraryCard {
+        val id = CanonicalGameId.parse("22222222-2222-2222-2222-222222222222")
+        val copy = deluxe.copies.single().copy(key = deluxe.copies.single().key.copy(stableSourceId = "43"), nativeTitle = "Fixture Game")
+        return deluxe.copy(key = CanonicalCardKey.Grouped(id), canonicalId = id, displayName = "Fixture Game", steamAppId = 42,
+            copies = listOf(copy, deluxe.copies.single()),
+            copyCanonicalIds = mapOf(copy.key to id, deluxe.copies.single().key to deluxe.canonicalId),
+            memberSteamAppIds = mapOf(id to 42, deluxe.canonicalId to 43))
+    }
+
     private fun detailState(): GameDetailState.Content {
         val metadata = Json { ignoreUnknownKeys = true }.decodeFromString<CanonicalGameMetadata>("""
             {
@@ -451,6 +564,14 @@ class CanonicalDetailActionsTest {
         reviewSummaryState: ReviewSummaryState = ReviewSummaryState.Idle,
         onCloseThread: () -> Boolean = { false },
         expectedExplicitKey: OwnedCopyKey? = null,
+        liveCanonicalCards: State<List<CanonicalLibraryCard>>? = null,
+        onOpenDetail: (CanonicalGameId) -> Unit = {},
+        onFamilyGrouping: suspend (CanonicalLibraryCard, OwnedCopyKey, Boolean) -> CanonicalCopyChangeResult =
+            { _, _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+        onSeparateLegacy: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult =
+            { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+        onResetLegacy: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult =
+            { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
         routeResult: (OwnedCopyOperation) -> OwnedCopyRouteResult = {
             OwnedCopyRouteResult.Unavailable(ActionFailureReason.COPY_UNAVAILABLE)
         },
@@ -460,12 +581,18 @@ class CanonicalDetailActionsTest {
         )
         val state = LibraryState(cards = listOf(presentation), canonicalSnapshotRevision = 1L)
         composeRule.setContent {
+            val currentCards = liveCanonicalCards?.value ?: listOf(card)
+            val currentState = if (liveCanonicalCards == null) state else state.copy(
+                cards = currentCards.mapIndexed { index, current -> LibraryCard.canonical(
+                    key = current.key, index = index, name = current.displayName, ownedSources = current.ownedSources) },
+                canonicalSnapshotRevision = if (currentCards == listOf(card)) 1L else 2L,
+            )
             val inputModeManager = LocalInputModeManager.current
             LaunchedEffect(Unit) { inputModeManager.requestInputMode(InputMode.Keyboard) }
             if (mounted?.value == false) return@setContent
             PluviaTheme {
                 LibraryScreenContent(
-                    state = state,
+                    state = currentState,
                     listState = rememberLazyGridState(),
                     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
                     onFilterChanged = {},
@@ -495,7 +622,10 @@ class CanonicalDetailActionsTest {
                     discussionState = liveDiscussionState?.value ?: discussionState,
                     reviewSummaryState = reviewSummaryState,
                     onCloseDiscussionThread = onCloseThread,
-                    canonicalCard = { card.takeIf { candidate -> candidate.key == it } },
+                    onOpenCanonicalDetail = onOpenDetail,
+                    canonicalCard = { requested -> currentCards.singleOrNull { candidate ->
+                        candidate.key == requested || (requested is CanonicalCardKey.Grouped && requested.canonicalId in candidate.memberSteamAppIds)
+                    } },
                     onRouteCanonicalAction = { key, operation, explicitKey, rememberChoice ->
                         assertEquals(card.key, key)
                         assertEquals(expectedExplicitKey, explicitKey)
@@ -504,8 +634,9 @@ class CanonicalDetailActionsTest {
                         routeResult(operation)
                     },
                     onUseAutomaticCopySelection = { CanonicalCopyChangeResult.INVALID_REQUEST },
-                    onSeparateCanonicalCopy = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
-                    onResetCanonicalDecision = { _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
+                    onSeparateCanonicalCopy = onSeparateLegacy,
+                    onResetCanonicalDecision = onResetLegacy,
+                    onChangeFamilyGrouping = onFamilyGrouping,
                 )
             }
         }

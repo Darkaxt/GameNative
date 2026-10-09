@@ -3,6 +3,7 @@ package app.gamenative.library.canonical
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -113,7 +114,12 @@ data class CanonicalLibraryCard(
     val genreLabels: Map<String, String> = emptyMap(),
     val tagIds: Set<Int> = emptySet(),
     val artworkFallback: CanonicalCardArtwork? = null,
+    val copyCanonicalIds: Map<OwnedCopyKey, CanonicalGameId> = emptyMap(),
+    val memberSteamAppIds: Map<CanonicalGameId, Int?> = emptyMap(),
+    val memberPreferences: Map<CanonicalGameId, CanonicalGamePreferenceEntity?> = emptyMap(),
+    val familyGroupingSuppressed: Boolean = false,
 ) {
+    val isPresentationFamily: Boolean get() = memberSteamAppIds.size > 1
     val isInstalled: Boolean get() = copies.any(OwnedCopySummary::isInstalled)
     val lastPlayedEpochMs: Long? get() = copies.mapNotNull { it.lastPlayedEpochMs }.maxOrNull()
 }

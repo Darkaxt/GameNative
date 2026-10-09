@@ -29,8 +29,8 @@ class CanonicalGameResolverTest {
     private val accountScope = AccountScope.parse("a".repeat(64))
 
     @Test
-    fun resolverVersionAdvancesForAutomaticAdjacentYearReconsideration() {
-        assertEquals(6, CURRENT_RESOLVER_VERSION)
+    fun resolverVersionAdvancesForAutomaticArtworkAwareReconsideration() {
+        assertEquals(7, CURRENT_RESOLVER_VERSION)
     }
 
     @Test

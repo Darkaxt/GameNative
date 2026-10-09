@@ -374,6 +374,7 @@ class GogOwnedCopyRuntimeAdapter @Inject constructor(
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, item != null, sourceState),
                 isHidden = game.hidden,
+                originalArtworkUrl = game.verticalCoverUrl.takeIf(String::isNotBlank),
             ),
         )
     }

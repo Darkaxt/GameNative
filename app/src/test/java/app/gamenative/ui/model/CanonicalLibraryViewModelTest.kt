@@ -21,6 +21,7 @@ import app.gamenative.steam.curated.CuratedListRepository
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.CanonicalGamePreferenceEntity
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
@@ -89,6 +90,7 @@ import io.mockk.clearAllMocks
 import io.mockk.clearMocks
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.confirmVerified
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -134,15 +136,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.junit.rules.TimeoutRule
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(application = android.app.Application::class)
 class CanonicalLibraryViewModelTest {
+    @get:Rule val timeout = TimeoutRule.seconds(30)
 
     private lateinit var context: Context
     private lateinit var scheduler: TestCoroutineScheduler
@@ -4146,6 +4151,218 @@ class CanonicalLibraryViewModelTest {
         showRecommendations = showRecommendations,
         compatibility = compatibility,
     )
+
+    @Test
+    fun familyAutomaticSelectionClearsCapturedMemberPreferencesNotOnlyTheAnchor() = runTest(dispatcher) {
+        val family = familyCard().copy(preferredCopy = epicKey)
+        val preferences = mockk<PreferredCopyRepository>()
+        coEvery { preferences.clearFamilyPreferredCopy(family, 321L) } just runs
+        val vm = familyViewModel(family, preferences = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.SUCCESS, vm.useAutomaticCopySelection(family.key))
+        coVerify(exactly = 1) { preferences.clearFamilyPreferredCopy(family, 321L) }
+        confirmVerified(preferences)
+    }
+
+    @Test
+    fun familyCannotBeReinterpretedAsLegacySteamMatchUnmerge() = runTest(dispatcher) {
+        val family = familyCard()
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(runtime(epicKey))
+        val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
+        coEvery { mutations.guardedUnmergeCopy(any(), any(), any(), any()) } returns CanonicalGuardedMutationResult.APPLIED
+        val vm = familyViewModel(family, registry = registry, mutations = mutations)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.INVALID_REQUEST, vm.separateCanonicalCopy(family.key, epicKey))
+        coVerify(exactly = 0) { mutations.guardedUnmergeCopy(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun familySeparationUsesCapturedEditionPreferenceRatherThanCatalogMutation() = runTest(dispatcher) {
+        val family = familyCard()
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val mutations = mockk<CanonicalMutationRepository>(relaxed = true)
+        val vm = familyViewModel(family, preferences = preferences, mutations = mutations)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.SUCCESS, changeFamilyGrouping(vm, family, epicKey, true))
+        coVerify(exactly = 1) { preferences.setFamilyGroupingSuppressed(family, epicKey, true, 321L) }
+        coVerify(exactly = 0) { mutations.guardedUnmergeCopy(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { mutations.guardedResetDecision(any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun familyNativeSteamEditionCanSeparatePresentationWithoutDetachingItsIdentity() = runTest(dispatcher) {
+        val family = familyCard(steamKey)
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = familyViewModel(family, preferences = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.SUCCESS, changeFamilyGrouping(vm, family, steamKey, true))
+        coVerify(exactly = 1) { preferences.setFamilyGroupingSuppressed(family, steamKey, true, 321L) }
+        assertEquals(steamKey.stableSourceId.toInt(), vm.canonicalCard(family.key)!!.memberSteamAppIds[family.canonicalId])
+    }
+
+    @Test
+    fun familySuppressedRawEditionResetsOnlyPresentationPreference() = runTest(dispatcher) {
+        val family = familyCard()
+        val member = canonicalId(2)
+        val raw = family.copy(key = CanonicalCardKey.Grouped(member), canonicalId = member, steamAppId = 43,
+            copies = family.copies.filter { it.key == epicKey }, ownedSources = setOf(GameSource.EPIC),
+            copyCanonicalIds = mapOf(epicKey to member), memberSteamAppIds = mapOf(member to 43),
+            memberPreferences = mapOf(member to null), familyGroupingSuppressed = true)
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = familyViewModel(raw, preferences = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.SUCCESS, changeFamilyGrouping(vm, raw, epicKey, false))
+        coVerify(exactly = 1) { preferences.setFamilyGroupingSuppressed(raw, epicKey, false, 321L) }
+    }
+
+    @Test
+    fun familyChangedWhileConfirmationWasOpenCannotSubmitOldSeparationIntent() = runTest(dispatcher) {
+        val family = familyCard()
+        val cards = MutableStateFlow(listOf(family))
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = viewModel(repository(cards), true, CanonicalProjectionReadiness().apply { markSucceeded() },
+            preferredCopyRepository = preferences)
+        runCurrent()
+        cards.value = listOf(family.copy(copies = family.copies.take(1), ownedSources = setOf(GameSource.GOG),
+            copyCanonicalIds = mapOf(gogKey to family.canonicalId), memberSteamAppIds = mapOf(family.canonicalId to 42)))
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.COPY_STATE_CHANGED, changeFamilyGrouping(vm, family, epicKey, true))
+        coVerify(exactly = 0) { preferences.setFamilyGroupingSuppressed(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun familyChangedRuntimeKeyPreventsPreferenceWrite() = runTest(dispatcher) {
+        val family = familyCard()
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } returns OwnedCopyRuntimeResult.Available(runtime(gogKey))
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = familyViewModel(family, registry = registry, preferences = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.COPY_STATE_CHANGED, changeFamilyGrouping(vm, family, epicKey, true))
+        coVerify(exactly = 0) { preferences.setFamilyGroupingSuppressed(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun familyGateChangeDuringRuntimeLookupPreventsPreferenceWrite() = runTest(dispatcher) {
+        val family = familyCard()
+        val enabled = AtomicBoolean(true)
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } answers {
+            enabled.set(false)
+            OwnedCopyRuntimeResult.Available(runtime(epicKey))
+        }
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = viewModel(repository(MutableStateFlow(listOf(family))), true,
+            CanonicalProjectionReadiness().apply { markSucceeded() }, runtimeRegistry = registry,
+            gate = CanonicalPublicLibraryGate { enabled.get() }, preferredCopyRepository = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED, changeFamilyGrouping(vm, family, epicKey, true))
+        coVerify(exactly = 0) { preferences.setFamilyGroupingSuppressed(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun familyStalePreferenceGuardMapsToFixedStateChangedFeedback() = runTest(dispatcher) {
+        val family = familyCard()
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        coEvery { preferences.setFamilyGroupingSuppressed(any(), any(), any(), any()) } throws IllegalArgumentException("synthetic stale capture")
+        val vm = familyViewModel(family, preferences = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.COPY_STATE_CHANGED, changeFamilyGrouping(vm, family, epicKey, true))
+    }
+
+    @Test
+    fun familyPreferenceCancellationPropagatesInsteadOfBecomingMutationFailure() = runTest(dispatcher) {
+        val family = familyCard()
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        coEvery { preferences.setFamilyGroupingSuppressed(any(), any(), any(), any()) } throws CancellationException("synthetic cancellation")
+        val vm = familyViewModel(family, preferences = preferences)
+        runCurrent()
+        val failure = runCatching { changeFamilyGrouping(vm, family, epicKey, true) }.exceptionOrNull()
+        assertTrue(failure is CancellationException)
+    }
+
+    @Test
+    fun familyConflictingPreferencesCanAllBeClearedWithoutAnAnchorPreference() = runTest(dispatcher) {
+        val initial = familyCard()
+        val family = initial.copy(memberPreferences = initial.copyCanonicalIds.map { (key, member) ->
+            member to CanonicalGamePreferenceEntity(member.value, key.accountScope.value, key.source,
+                key.stableSourceId, null, null, 100L)
+        }.toMap())
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = familyViewModel(family, preferences = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.SUCCESS, vm.useAutomaticCopySelection(family.key))
+        coVerify(exactly = 1) { preferences.clearFamilyPreferredCopy(family, 321L) }
+        confirmVerified(preferences)
+    }
+
+    @Test
+    fun familyRawResetIntentCannotBecomeASeparationAfterRegrouping() = runTest(dispatcher) {
+        val family = familyCard()
+        val raw = family.copy(copies = family.copies.take(1), ownedSources = setOf(GameSource.GOG),
+            copyCanonicalIds = mapOf(gogKey to family.canonicalId), memberSteamAppIds = mapOf(family.canonicalId to 42),
+            memberPreferences = mapOf(family.canonicalId to null), familyGroupingSuppressed = true)
+        val cards = MutableStateFlow(listOf(raw))
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = viewModel(repository(cards), true, CanonicalProjectionReadiness().apply { markSucceeded() },
+            preferredCopyRepository = preferences)
+        runCurrent()
+        cards.value = listOf(family)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.COPY_STATE_CHANGED, changeFamilyGrouping(vm, raw, gogKey, false))
+        coVerify(exactly = 0) { preferences.setFamilyGroupingSuppressed(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun familySnapshotChangeDuringRuntimeLookupPreventsPreferenceWrite() = runTest(dispatcher) {
+        val family = familyCard()
+        val cards = MutableStateFlow(listOf(family))
+        val registry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true)
+        coEvery { registry.resolve(epicKey) } coAnswers {
+            cards.value = listOf(family.copy(displayName = "Changed family snapshot"))
+            runCurrent()
+            OwnedCopyRuntimeResult.Available(runtime(epicKey))
+        }
+        val preferences = mockk<PreferredCopyRepository>(relaxed = true)
+        val vm = viewModel(repository(cards), true, CanonicalProjectionReadiness().apply { markSucceeded() },
+            runtimeRegistry = registry, preferredCopyRepository = preferences)
+        runCurrent()
+        assertEquals(CanonicalCopyChangeResult.COPY_STATE_CHANGED, changeFamilyGrouping(vm, family, epicKey, true))
+        coVerify(exactly = 0) { preferences.setFamilyGroupingSuppressed(any(), any(), any(), any()) }
+    }
+
+    private fun familyCard(firstKey: OwnedCopyKey = gogKey): CanonicalLibraryCard {
+        val first = canonicalId(1)
+        val second = canonicalId(2)
+        val steamAppId = if (firstKey.source == GameSource.STEAM) firstKey.stableSourceId.toInt() else 42
+        return card(canonicalId = first, name = "Fixture Game", copyKeys = listOf(firstKey, epicKey), steamAppId = steamAppId)
+            .copy(copyCanonicalIds = mapOf(firstKey to first, epicKey to second),
+                memberSteamAppIds = mapOf(first to steamAppId, second to 43), memberPreferences = mapOf(first to null, second to null))
+    }
+
+    private fun familyViewModel(
+        card: CanonicalLibraryCard,
+        preferences: PreferredCopyRepository = mockk(relaxed = true),
+        mutations: CanonicalMutationRepository = mockk(relaxed = true),
+        registry: OwnedCopyRuntimeRegistry = mockk<OwnedCopyRuntimeRegistry>(relaxed = true).also {
+            coEvery { it.resolve(any()) } answers { OwnedCopyRuntimeResult.Available(runtime(firstArg())) }
+        },
+    ) = viewModel(repository(MutableStateFlow(listOf(card))), true,
+        CanonicalProjectionReadiness().apply { markSucceeded() }, runtimeRegistry = registry,
+        preferredCopyRepository = preferences, mutationRepository = mutations, projectionClock = CanonicalProjectionClock { 321L })
+
+    private suspend fun changeFamilyGrouping(
+        vm: LibraryViewModel,
+        card: CanonicalLibraryCard,
+        key: OwnedCopyKey,
+        suppressed: Boolean,
+    ): CanonicalCopyChangeResult = kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn { continuation ->
+        val method = vm.javaClass.methods.singleOrNull { it.name == "changeFamilyGrouping" && it.parameterCount == 4 }
+        assertTrue("Missing captured exact-edition ViewModel family mutation consumer", method != null)
+        try { method!!.invoke(vm, card, key, suppressed, continuation) }
+        catch (failure: java.lang.reflect.InvocationTargetException) { throw failure.targetException }
+    }
 
     private var latestVm: LibraryViewModel? = null
     private val stateSnapshot: LibraryState get() = requireNotNull(latestVm).state.value

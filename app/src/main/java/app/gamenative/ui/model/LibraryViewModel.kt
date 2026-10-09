@@ -47,6 +47,7 @@ import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.library.canonical.CanonicalCardKey
+import app.gamenative.library.canonical.CanonicalCardLookup
 import app.gamenative.library.canonical.CanonicalGuardedMutationResult
 import app.gamenative.library.canonical.CanonicalLibraryCard
 import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
@@ -59,6 +60,7 @@ import app.gamenative.library.canonical.CanonicalPublicLibraryGate
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.canonical.PreferredCopyRepository
+import app.gamenative.library.canonical.hasValidFamilyBindings
 import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.OwnedCopyActionRouter
@@ -1130,7 +1132,7 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun canonicalCard(key: CanonicalCardKey): CanonicalLibraryCard? = synchronized(renderLock) {
-        latestCanonicalCards?.singleOrNull { card -> card.key == key }
+        latestCanonicalCards?.let { CanonicalCardLookup.resolve(it, key) }
     }
 
     suspend fun routeCanonicalAction(
@@ -1184,16 +1186,72 @@ class LibraryViewModel @Inject constructor(
         val grouped = key as? CanonicalCardKey.Grouped
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST
         val card = canonicalCard(key)
-            ?.takeIf { it.canonicalId == grouped.canonicalId && it.preferredCopy != null }
+            ?.takeIf {
+                if (it.isPresentationFamily) it.hasValidFamilyBindings()
+                else it.canonicalId == grouped.canonicalId
+            }
+            ?.takeIf {
+                it.preferredCopy != null || (it.isPresentationFamily &&
+                    it.memberPreferences.values.any { preference -> preference?.preferredCopyKeyOrNull() != null })
+            }
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST
         return try {
-            preferredCopyRepository.clearPreferredCopy(
-                canonicalId = card.canonicalId,
-                nowEpochMs = canonicalProjectionClock.nowEpochMs(),
-            )
+            if (card.isPresentationFamily) {
+                preferredCopyRepository.clearFamilyPreferredCopy(card, canonicalProjectionClock.nowEpochMs())
+            } else {
+                preferredCopyRepository.clearPreferredCopy(
+                    canonicalId = card.canonicalId,
+                    nowEpochMs = canonicalProjectionClock.nowEpochMs(),
+                )
+            }
             CanonicalCopyChangeResult.SUCCESS
         } catch (error: CancellationException) {
             throw error
+        } catch (_: IllegalArgumentException) {
+            if (card.isPresentationFamily) CanonicalCopyChangeResult.COPY_STATE_CHANGED
+            else CanonicalCopyChangeResult.TRANSACTION_FAILED
+        } catch (_: Exception) {
+            CanonicalCopyChangeResult.TRANSACTION_FAILED
+        }
+    }
+
+    suspend fun changeFamilyGrouping(
+        card: CanonicalLibraryCard,
+        key: OwnedCopyKey,
+        suppressed: Boolean,
+    ): CanonicalCopyChangeResult {
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
+        }
+        if (canonicalCard(card.key) != card) return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+        if (card.key !is CanonicalCardKey.Grouped ||
+            (if (suppressed) !card.hasValidFamilyBindings() else card.isPresentationFamily || !card.familyGroupingSuppressed) ||
+            key !in card.copyCanonicalIds || card.copies.singleOrNull { it.key == key } == null
+        ) {
+            return CanonicalCopyChangeResult.INVALID_REQUEST
+        }
+        val resolved = try {
+            runtimeRegistry.resolve(key)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+        }
+        if (!canonicalPublicLibraryGate.isEnabled()) {
+            return CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED
+        }
+        if (resolved !is OwnedCopyRuntimeResult.Available || resolved.copy.key != key ||
+            resolved.copy.reference.key != key || canonicalCard(card.key) != card
+        ) {
+            return CanonicalCopyChangeResult.COPY_STATE_CHANGED
+        }
+        return try {
+            preferredCopyRepository.setFamilyGroupingSuppressed(card, key, suppressed, canonicalProjectionClock.nowEpochMs())
+            CanonicalCopyChangeResult.SUCCESS
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: IllegalArgumentException) {
+            CanonicalCopyChangeResult.COPY_STATE_CHANGED
         } catch (_: Exception) {
             CanonicalCopyChangeResult.TRANSACTION_FAILED
         }
@@ -1209,7 +1267,7 @@ class LibraryViewModel @Inject constructor(
         val grouped = cardKey as? CanonicalCardKey.Grouped
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST
         val card = canonicalCard(cardKey)
-            ?.takeIf { it.canonicalId == grouped.canonicalId && it.copies.size >= 2 }
+            ?.takeIf { !it.isPresentationFamily && it.canonicalId == grouped.canonicalId && it.copies.size >= 2 }
             ?: return CanonicalCopyChangeResult.INVALID_REQUEST
         val summary = card.copies.singleOrNull { copy -> copy.key == copyKey }
             ?.takeIf { copy -> copy.source != GameSource.STEAM && copy.canSeparateMatch }

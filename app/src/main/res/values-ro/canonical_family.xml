@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_copy_family_separate_action">Păstrează ediția separat</string>
+    <string name="canonical_copy_family_separate_title">Separi ediția?</string>
+    <string name="canonical_copy_family_separate_message">Păstrează această ediție ca intrare separată în bibliotecă. Asocierea cu Steam și copiile instalate vor rămâne neschimbate.</string>
+    <string name="canonical_copy_family_separate_confirm">Păstrează ediția separat</string>
+    <string name="canonical_copy_family_reset_grouping">Permite din nou gruparea edițiilor</string>
+</resources>

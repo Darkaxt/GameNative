@@ -60,7 +60,7 @@ class SteamCatalogSearchCoordinatorTest {
     }
 
     @Test
-    fun completeAggregationUsesValidatedFifteenHitBound() = runTest {
+    fun aggregationUsesTenHitBoundAndPreservesIncompleteEvidence() = runTest {
         val coordinator = coordinator(
             store = source(
                 SteamCatalogSearchResult((1..20).map(::hit), complete = true),
@@ -70,7 +70,8 @@ class SteamCatalogSearchCoordinatorTest {
 
         val result = coordinator.searchResult("Example", locale)
 
-        assertEquals((1..15).toList(), result.hits.map(SteamStoreSearchHit::steamAppId))
+        assertEquals((1..10).toList(), result.hits.map(SteamStoreSearchHit::steamAppId))
+        assertEquals(false, result.complete)
     }
 
     @Test

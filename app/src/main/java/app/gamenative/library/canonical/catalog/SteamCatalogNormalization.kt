@@ -8,6 +8,7 @@ internal object SteamCatalogNormalization {
     private val nonWord = Regex("[^\\p{L}\\p{N}_]+")
     private val whitespace = Regex("\\s+")
     private val playdeadAlias = Regex("^playdead['’]s\\s+(.+)$", RegexOption.IGNORE_CASE)
+    private val deluxeEditionSuffix = Regex("\\bdeluxe(?: edition| version)?$")
     private val romanNumerals = mapOf("iii" to "3")
     private val legalSuffixes = setOf(
         "inc",
@@ -60,11 +61,13 @@ internal object SteamCatalogNormalization {
         val key = titleKey(value)
         return editions.mapNotNullTo(linkedSetOf()) { (phrase, label) ->
             label.takeIf { phrase in key }
+        }.apply {
+            if (deluxeEditionSuffix.containsMatchIn(key)) add("deluxe")
         }
     }
 
     fun editionBaseTitle(value: String?): String {
-        var key = titleKey(value)
+        var key = deluxeEditionSuffix.replace(titleKey(value), " ")
         editions.forEach { (phrase, _) ->
             key = Regex("\\b${Regex.escape(phrase)}\\b").replace(key, " ")
         }

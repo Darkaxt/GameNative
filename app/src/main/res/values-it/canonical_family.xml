@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_copy_family_separate_action">Mantieni separata questa edizione</string>
+    <string name="canonical_copy_family_separate_title">Separare questa edizione?</string>
+    <string name="canonical_copy_family_separate_message">Mantieni questa edizione come voce separata nella libreria. La sua corrispondenza con Steam e le copie installate resteranno invariate.</string>
+    <string name="canonical_copy_family_separate_confirm">Mantieni separata questa edizione</string>
+    <string name="canonical_copy_family_reset_grouping">Consenti nuovamente il raggruppamento delle edizioni</string>
+</resources>

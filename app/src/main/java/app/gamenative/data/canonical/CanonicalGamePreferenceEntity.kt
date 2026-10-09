@@ -33,6 +33,8 @@ data class CanonicalGamePreferenceEntity(
     val artworkOverrideJson: String?,
     @ColumnInfo("updated_at")
     val updatedAt: Long,
+    @ColumnInfo(name = "family_grouping_suppressed", defaultValue = "0")
+    val familyGroupingSuppressed: Boolean = false,
 ) {
     fun preferredCopyKeyOrNull(): OwnedCopyKey? {
         val accountScope = preferredAccountScope ?: return null

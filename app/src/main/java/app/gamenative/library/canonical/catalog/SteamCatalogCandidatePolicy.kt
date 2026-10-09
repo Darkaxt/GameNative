@@ -9,8 +9,9 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
     fun evaluate(
         source: SourceCatalogEvidence,
         candidates: List<SteamCatalogCandidate>,
+        artworkAppIds: Set<Int> = emptySet(),
     ): CatalogDecision {
-        val ranked = ranked(source, candidates).let { scored ->
+        val ranked = ranked(source, candidates, artworkAppIds).let { scored ->
             if (source.appType == CanonicalAppType.GAME) {
                 scored.filter(ScoredCandidate::typeCompatible)
             } else {
@@ -45,10 +46,11 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
     private fun ranked(
         source: SourceCatalogEvidence,
         candidates: List<SteamCatalogCandidate>,
+        artworkAppIds: Set<Int> = emptySet(),
     ): List<ScoredCandidate> {
         val bestById = linkedMapOf<Int, ScoredCandidate>()
         candidates.forEach { candidate ->
-            val scored = score(source, candidate)
+            val scored = score(source, candidate, candidate.steamAppId in artworkAppIds)
             val existing = bestById[candidate.steamAppId]
             if (existing == null || scored.score > existing.score) {
                 bestById[candidate.steamAppId] = scored
@@ -63,6 +65,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
     private fun score(
         source: SourceCatalogEvidence,
         candidate: SteamCatalogCandidate,
+        matchingArtwork: Boolean,
     ): ScoredCandidate {
         val candidateTitleKey = SteamCatalogNormalization.titleKey(candidate.title)
         val titleMatch = SteamCatalogNormalization.titleKeys(source.title)
@@ -113,11 +116,18 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
         val editionBaseMatch = sourceEditionBase.isNotEmpty() &&
             sourceEditionBase == SteamCatalogNormalization.editionBaseTitle(candidate.title)
 
+        val artworkCorroborated = matchingArtwork && titleMatch == CatalogTitleMatch.EXACT &&
+            typeCompatible && !developerConflict && !editionConflict
+        val artworkWeight = if (artworkCorroborated) 0.14 else 0.0
+
         return ScoredCandidate(
             candidate = candidate,
-            score = rounded((titleWeight + developerWeight + yearWeight + typeWeight).coerceIn(0.0, 1.0)),
+            score = rounded(
+                (titleWeight + developerWeight + yearWeight + typeWeight + artworkWeight).coerceIn(0.0, 1.0),
+            ),
             strongTitle = titleMatch != null,
-            corroborated = developerWeight > 0.0 || yearWeight > 0.0,
+            corroborated = developerWeight > 0.0 || yearWeight > 0.0 || artworkCorroborated,
+            artworkCorroborated = artworkCorroborated,
             exactTitleAndCloseYear = titleMatch == CatalogTitleMatch.EXACT && yearDelta != null && yearDelta <= 1,
             typeCompatible = typeCompatible,
             developerExact = developerExact,
@@ -134,7 +144,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
     ): AmbiguityResolution {
         val family = ranked.filter { candidate ->
             candidate.typeCompatible &&
-                candidate.developerExact &&
+                (candidate.developerExact || candidate.artworkCorroborated) &&
                 (candidate.strongTitle || candidate.editionBaseMatch)
         }
         if (family.size < 2) return AmbiguityResolution(ranked)
@@ -206,6 +216,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
         val score: Double,
         val strongTitle: Boolean,
         val corroborated: Boolean,
+        val artworkCorroborated: Boolean,
         val exactTitleAndCloseYear: Boolean,
         val typeCompatible: Boolean,
         val developerExact: Boolean,

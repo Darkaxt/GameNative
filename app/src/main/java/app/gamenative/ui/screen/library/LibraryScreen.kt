@@ -243,6 +243,7 @@ fun HomeLibraryScreen(
         onUseAutomaticCopySelection = viewModel::useAutomaticCopySelection,
         onSeparateCanonicalCopy = viewModel::separateCanonicalCopy,
         onResetCanonicalDecision = viewModel::resetCanonicalDecision,
+        onChangeFamilyGrouping = viewModel::changeFamilyGrouping,
         gameDetailState = gameDetailState,
         reviewSummaryState = reviewSummaryState,
         onLoadReviewSummary = { appId -> detailViewModel.loadReviewSummary(appId, isOffline) },
@@ -346,6 +347,8 @@ internal fun LibraryScreenContent(
     onUseAutomaticCopySelection: suspend (CanonicalCardKey) -> CanonicalCopyChangeResult,
     onSeparateCanonicalCopy: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult,
     onResetCanonicalDecision: suspend (CanonicalCardKey, OwnedCopyKey) -> CanonicalCopyChangeResult,
+    onChangeFamilyGrouping: suspend (CanonicalLibraryCard, OwnedCopyKey, Boolean) -> CanonicalCopyChangeResult =
+        { _, _, _ -> CanonicalCopyChangeResult.INVALID_REQUEST },
     gameDetailState: GameDetailState = GameDetailState.Loading,
     reviewSummaryState: ReviewSummaryState = ReviewSummaryState.Idle,
     onLoadReviewSummary: (Int) -> Unit = {},
@@ -498,6 +501,7 @@ internal fun LibraryScreenContent(
     var selectedSourceItem by remember { mutableStateOf<LibraryItem?>(null) }
     var selectedPresentationCard by remember { mutableStateOf<LibraryCard?>(null) }
     var showCanonicalDetail by remember { mutableStateOf(false) }
+    var loadedCanonicalDetailId by remember { mutableStateOf<CanonicalGameId?>(null) }
     var activeActionGuard by remember { mutableStateOf<OwnedCopyActionGuard?>(null) }
     var pendingInitialOperation by remember { mutableStateOf<OwnedCopyOperation?>(null) }
     var sourceOptionsRequestId by remember { mutableStateOf<Long?>(null) }
@@ -679,6 +683,7 @@ internal fun LibraryScreenContent(
         selectedSourceItem = null
         selectedPresentationCard = null
         showCanonicalDetail = false
+        loadedCanonicalDetailId = null
         activeActionGuard = null
         pendingInitialOperation = null
         sourceOptionsRequestId = null
@@ -762,6 +767,7 @@ internal fun LibraryScreenContent(
                 selectedSourceItem = null
                 showCanonicalDetail = true
                 selectedCardIdentity = identity
+                loadedCanonicalDetailId = canonical.canonicalId
                 onOpenCanonicalDetail(canonical.canonicalId)
             }
         }
@@ -1682,6 +1688,12 @@ internal fun LibraryScreenContent(
                 selectedCanonicalCard != null &&
                 presentationCard != null
             ) {
+                LaunchedEffect(selectedCanonicalCard.canonicalId) {
+                    if (loadedCanonicalDetailId != selectedCanonicalCard.canonicalId) {
+                        loadedCanonicalDetailId = selectedCanonicalCard.canonicalId
+                        onOpenCanonicalDetail(selectedCanonicalCard.canonicalId)
+                    }
+                }
                 val mutableSteamMatchCopies = selectedCanonicalCard.copies.filter { copy ->
                     copy.source != GameSource.STEAM
                 }
@@ -2051,6 +2063,27 @@ internal fun LibraryScreenContent(
                     copiesSheetFeedback = null
                     lifecycleScope.launch {
                         when (onResetCanonicalDecision(currentCopiesCard.key, copy.key)) {
+                            CanonicalCopyChangeResult.SUCCESS -> dismissCopiesSheet()
+                            CanonicalCopyChangeResult.TRANSACTION_FAILED -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.MUTATION_FAILED
+                            }
+                            CanonicalCopyChangeResult.INVALID_REQUEST,
+                            CanonicalCopyChangeResult.PUBLIC_FEATURE_DISABLED,
+                            CanonicalCopyChangeResult.COPY_STATE_CHANGED,
+                            -> {
+                                copiesActionInProgress = false
+                                copiesSheetFeedback = CanonicalCopiesFeedback.COPY_STATE_CHANGED
+                                onRefresh()
+                            }
+                        }
+                    }
+                },
+                onChangeFamilyGrouping = { capturedCard, key, suppressed ->
+                    copiesActionInProgress = true
+                    copiesSheetFeedback = null
+                    lifecycleScope.launch {
+                        when (onChangeFamilyGrouping(capturedCard, key, suppressed)) {
                             CanonicalCopyChangeResult.SUCCESS -> dismissCopiesSheet()
                             CanonicalCopyChangeResult.TRANSACTION_FAILED -> {
                                 copiesActionInProgress = false

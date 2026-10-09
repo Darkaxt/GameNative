@@ -18,6 +18,7 @@ import app.gamenative.library.canonical.CanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.NoOpCanonicalLibraryDiagnosticSink
 import app.gamenative.library.canonical.recordSafely
 import app.gamenative.library.canonical.CopyUnavailableReason
+import app.gamenative.library.canonical.artwork.steamPortraitArtworkUrl
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.canonical.source.SteamOwnedCopySourceAdapter
 import app.gamenative.service.SteamService
@@ -710,6 +711,7 @@ class SteamOwnedCopyRuntimeAdapter @Inject constructor(
                 capabilities = capabilities(source, libraryItemPresent = true, sourceState),
                 isVrOnly = app.isVrOnly,
                 isVrSupported = app.isVrSupported,
+                originalArtworkUrl = steamPortraitArtworkUrl(reference.appId),
             ),
         )
     }

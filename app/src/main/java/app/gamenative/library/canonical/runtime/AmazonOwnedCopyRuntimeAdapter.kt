@@ -646,6 +646,7 @@ class AmazonOwnedCopyRuntimeAdapter @Inject constructor(
                 lastPlayedEpochMs = latestPositiveTimestamp(game.lastPlayed, localLastPlayed),
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, libraryItemPresent = true, sourceState),
+                originalArtworkUrl = game.artUrl.takeIf(String::isNotBlank),
             ),
         )
     }

@@ -170,7 +170,7 @@ class OwnedCopyActionRouterTest {
     }
 
     @Test
-    fun playUsesOnlyUniquePositiveMaximumAmongInstalledCapableCopies() = runTest {
+    fun playRequiresExplicitChoiceAmongInstalledCopiesRegardlessOfPositiveHistory() = runTest {
         val fixture = fixture()
         val steam = key(GameSource.STEAM, "1")
         val gog = key(GameSource.GOG, "2")
@@ -186,15 +186,14 @@ class OwnedCopyActionRouterTest {
             ),
         )
 
-        val result = fixture.router.route(card, OwnedCopyOperation.PLAY) as OwnedCopyRouteResult.Ready
+        val result = fixture.router.route(card, OwnedCopyOperation.PLAY)
 
-        assertEquals(gog, result.guard.key)
-        assertEquals(ActionSelectionPolicy.MOST_RECENT_PLAY, result.policy)
-        assertEquals(0, fixture.adapters.getValue(GameSource.EPIC).resolveCalls)
+        assertEquals(OwnedCopyRouteResult.NeedsChooser(listOf(steam, gog)), result)
+        assertEquals(0, fixture.totalResolveCalls())
     }
 
     @Test
-    fun customPlayCopyParticipatesInRecencyOnlyWhenSummaryIsInstalled() = runTest {
+    fun nativeCustomPlayCapabilityRequiresChoiceInsteadOfUsingRecencyOrInstallFlag() = runTest {
         val steam = key(GameSource.STEAM, "1")
         val custom = key(GameSource.CUSTOM_GAME, "9")
 
@@ -209,9 +208,9 @@ class OwnedCopyActionRouterTest {
                 ),
             ),
             OwnedCopyOperation.PLAY,
-        ) as OwnedCopyRouteResult.Ready
-        assertEquals(custom, installedResult.guard.key)
-        assertEquals(ActionSelectionPolicy.MOST_RECENT_PLAY, installedResult.policy)
+        )
+        assertEquals(OwnedCopyRouteResult.NeedsChooser(listOf(steam, custom)), installedResult)
+        assertEquals(0, installedFixture.totalResolveCalls())
 
         val staleFixture = fixture()
         staleFixture.available(steam, setOf(OwnedCopyOperation.PLAY))
@@ -224,9 +223,9 @@ class OwnedCopyActionRouterTest {
                 ),
             ),
             OwnedCopyOperation.PLAY,
-        ) as OwnedCopyRouteResult.Ready
-        assertEquals(steam, staleResult.guard.key)
-        assertEquals(ActionSelectionPolicy.MOST_RECENT_PLAY, staleResult.policy)
+        )
+        assertEquals(OwnedCopyRouteResult.NeedsChooser(listOf(steam, custom)), staleResult)
+        assertEquals(0, staleFixture.totalResolveCalls())
     }
 
     @Test

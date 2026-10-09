@@ -392,6 +392,7 @@ class EpicOwnedCopyRuntimeAdapter @Inject constructor(
                 lastPlayedEpochMs = latestPositiveTimestamp(game.lastPlayed, localLastPlayed),
                 playtimeMinutes = sourceState.playtimeMinutes,
                 capabilities = capabilities(source, libraryItemPresent = true, sourceState),
+                originalArtworkUrl = game.artCover.takeIf(String::isNotBlank),
             ),
         )
     }

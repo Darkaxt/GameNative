@@ -200,7 +200,7 @@ class CanonicalLibraryDaoTest {
     fun aggregateReadModelDoesNotAddAnEntityOrChangeSchemaVersion() {
         val sqlite = database.openHelper.readableDatabase
 
-        assertEquals(31, sqlite.version)
+        assertEquals(32, sqlite.version)
         val tables = sqlite.query("SELECT name FROM sqlite_master WHERE type = 'table'").use { cursor ->
             buildList {
                 while (cursor.moveToNext()) add(cursor.getString(0))

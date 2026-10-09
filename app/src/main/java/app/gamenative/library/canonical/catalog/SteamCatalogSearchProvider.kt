@@ -75,7 +75,12 @@ class SteamStoreSearchProvider internal constructor(
     override suspend fun search(
         query: String,
         locale: MetadataLocale,
-    ): List<SteamStoreSearchHit> {
+    ): List<SteamStoreSearchHit> = searchResult(query, locale).hits
+
+    override suspend fun searchResult(
+        query: String,
+        locale: MetadataLocale,
+    ): SteamCatalogSearchResult {
         val trimmedQuery = query.trim()
         require(trimmedQuery.isNotEmpty()) { "Steam catalog query is blank" }
         require(trimmedQuery.codePointCount(0, trimmedQuery.length) <= MAX_QUERY_CODE_POINTS) {
@@ -90,7 +95,7 @@ class SteamStoreSearchProvider internal constructor(
                 .setQueryParameter("l", locale.steamLanguage)
                 .setQueryParameter("cc", locale.normalizedCountry)
                 .build()
-            parseHits(executeValidated(Request.Builder().url(requestUrl).get().build()))
+            parseHits(executeValidated(Request.Builder().url(requestUrl).get().build()), trimmedQuery)
         } catch (error: CancellationException) {
             throw error
         } catch (error: SteamRateLimitExhaustedException) {
@@ -132,47 +137,54 @@ class SteamStoreSearchProvider internal constructor(
         throw SteamCatalogSearchException()
     }
 
-    private fun parseHits(body: String): List<SteamStoreSearchHit> {
+    private fun parseHits(body: String, query: String): SteamCatalogSearchResult {
         val root = JSON.parseToJsonElement(body) as? JsonObject
             ?: throw SteamCatalogSearchException()
+        val total = (root["total"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
         val items = root["items"] as? JsonArray
-            ?: if ((root["total"] as? JsonPrimitive)?.contentOrNull == "0") {
-                return emptyList()
+            ?: if (total == 0L && "items" !in root) {
+                return SteamCatalogSearchResult(emptyList(), complete = true)
             } else {
                 throw SteamCatalogSearchException()
             }
-        return items.asSequence()
-            .mapNotNull { it as? JsonObject }
-            .filter { item -> (item["type"] as? JsonPrimitive)?.contentOrNull == "app" }
-            .mapNotNull { item ->
-                val appId = (item["id"] as? JsonPrimitive)
-                    ?.contentOrNull
-                    ?.toIntOrNull()
-                    ?.takeIf { it > 0 }
-                    ?: return@mapNotNull null
-                val title = sanitizeSteamText(
-                    (item["name"] as? JsonPrimitive)?.contentOrNull,
-                ) ?: return@mapNotNull null
-                val image = (item["tiny_image"] as? JsonPrimitive)
-                    ?.contentOrNull
-                    ?.toHttpUrlOrNull()
-                    ?.takeIf(urlPolicy::isAllowedMediaUrl)
-                    ?.toString()
-                SteamStoreSearchHit(
-                    steamAppId = appId,
-                    title = title,
-                    headerImageUrl = image,
-                )
+        var malformed = false
+        val hits = items.mapNotNull { element ->
+            val item = element as? JsonObject
+            if (item == null) {
+                malformed = true
+                return@mapNotNull null
             }
-            .distinctBy(SteamStoreSearchHit::steamAppId)
-            .take(MAX_RESULTS)
-            .toList()
+            val type = (item["type"] as? JsonPrimitive)?.contentOrNull
+            if (type == null) {
+                malformed = true
+                return@mapNotNull null
+            }
+            if (type != "app") {
+                if (type != "bundle") malformed = true
+                return@mapNotNull null
+            }
+            val appId = (item["id"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()?.takeIf { it > 0 }
+            val title = sanitizeSteamText((item["name"] as? JsonPrimitive)?.contentOrNull)
+            if (appId == null || title == null) {
+                malformed = true
+                return@mapNotNull null
+            }
+            val image = (item["tiny_image"] as? JsonPrimitive)
+                ?.contentOrNull
+                ?.toHttpUrlOrNull()
+                ?.takeIf(urlPolicy::isAllowedMediaUrl)
+                ?.toString()
+            SteamStoreSearchHit(appId, title, image)
+        }
+        return selectSteamCatalogHits(
+            query, hits,
+            complete = !malformed && total == items.size.toLong(),
+        )
     }
 
     private companion object {
         const val DEFAULT_ENDPOINT = "https://store.steampowered.com/api/storesearch/"
         const val MAX_QUERY_CODE_POINTS = 256
-        const val MAX_RESULTS = 15
         const val MAX_NETWORK_HOPS = 4
         const val MAX_RESPONSE_BYTES = 1024L * 1024L
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)

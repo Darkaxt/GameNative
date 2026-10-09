@@ -649,7 +649,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `automatic scan validates at most fifteen aggregated hits and accepts one corroborated exact candidate`() = runTest {
+    fun `automatic scan validates five hits and keeps truncated discovery review only`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         val selected = match(
             key(GameSource.EPIC, "bounded"),
@@ -684,13 +684,13 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals((1..15).toList(), fetched)
+        assertEquals((1..5).toList(), fetched)
         assertEquals(5, repository.candidatesFor(expected(selected).key).size)
-        assertEquals(1, progress.autoAccepted)
-        val accepted = writer.operations.single() as DecisionOperation.Accepted
-        assertEquals(1, accepted.steamAppId)
-        assertEquals(CanonicalAppType.GAME, accepted.appType)
-        assertEquals(listOf(EnrichmentCall(1, MetadataLocale("en-US", "US"))), enrichment.calls)
+        assertEquals(0, progress.autoAccepted)
+        assertEquals(1, progress.needsReview)
+        assertEquals(1, (writer.operations.single() as DecisionOperation.Review).steamAppId)
+        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
+        assertTrue(enrichment.calls.isEmpty())
     }
 
     @Test
@@ -738,14 +738,16 @@ class SteamCatalogResolutionRepositoryTest {
             listOf("Playdead's INSIDE", "INSIDE", "playdead s inside"),
             queries,
         )
-        assertEquals(15, fetched.size)
-        assertEquals(15, fetched.distinct().size)
+        assertEquals(5, fetched.size)
+        assertEquals(5, fetched.distinct().size)
         assertTrue(304430 in fetched)
-        assertEquals(1, progress.autoAccepted)
+        assertEquals(0, progress.autoAccepted)
+        assertEquals(1, progress.needsReview)
         assertEquals(
             304430,
-            (writer.operations.single() as DecisionOperation.Accepted).steamAppId,
+            (writer.operations.single() as DecisionOperation.Review).steamAppId,
         )
+        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
     }
 
     @Test

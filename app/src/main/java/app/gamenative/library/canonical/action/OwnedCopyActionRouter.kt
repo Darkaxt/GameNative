@@ -66,10 +66,13 @@ class OwnedCopyActionRouter @Inject constructor(
         }
 
         val operationCopies = card.copies.filter { operation in it.capabilities }
-        val capableCopies = if (explicitKey == null && operation == OwnedCopyOperation.OPEN_SOURCE_DETAILS) {
-            operationCopies.filter(OwnedCopySummary::isInstalled).ifEmpty { operationCopies }
-        } else {
-            operationCopies
+        val capableCopies = when {
+            operation == OwnedCopyOperation.PLAY -> operationCopies.filter {
+                it.isInstalled || it.source == GameSource.CUSTOM_GAME
+            }
+            explicitKey == null && operation == OwnedCopyOperation.OPEN_SOURCE_DETAILS ->
+                operationCopies.filter(OwnedCopySummary::isInstalled).ifEmpty { operationCopies }
+            else -> operationCopies
         }
         val selection = if (explicitKey != null) {
             val explicitCopy = card.copies.firstOrNull { it.key == explicitKey }
@@ -78,7 +81,7 @@ class OwnedCopyActionRouter @Inject constructor(
                     operation,
                     ActionFailureReason.INVALID_EXPLICIT_COPY,
                 )
-            if (operation !in explicitCopy.capabilities) {
+            if (explicitCopy !in capableCopies) {
                 return unavailable(
                     explicitKey.source,
                     operation,
@@ -209,21 +212,6 @@ class OwnedCopyActionRouter @Inject constructor(
             return Selection(preferred.key, ActionSelectionPolicy.PREFERRED)
         }
 
-        if (operation == OwnedCopyOperation.PLAY) {
-            val installed = capableCopies.filter(OwnedCopySummary::isInstalled)
-            val maximum = installed.mapNotNull { it.lastPlayedEpochMs?.takeIf { value -> value > 0L } }
-                .maxOrNull()
-            if (maximum != null) {
-                val mostRecent = installed.filter { it.lastPlayedEpochMs == maximum }
-                if (mostRecent.size == 1) {
-                    return Selection(
-                        mostRecent.single().key,
-                        ActionSelectionPolicy.MOST_RECENT_PLAY,
-                    )
-                }
-            }
-        }
-
         return capableCopies.singleOrNull()?.let { copy ->
             Selection(copy.key, ActionSelectionPolicy.SOLE_COPY)
         }
@@ -239,11 +227,15 @@ class OwnedCopyActionRouter @Inject constructor(
         val groupedKey = card.key as? CanonicalCardKey.Grouped ?: return null
         if (groupedKey.canonicalId != card.canonicalId) return null
         return try {
-            preferredCopyRepository.setPreferredCopy(
-                canonicalId = groupedKey.canonicalId,
-                key = selection.key,
-                nowEpochMs = clock.nowEpochMs(),
-            )
+            if (card.isPresentationFamily) {
+                preferredCopyRepository.setFamilyPreferredCopy(card, selection.key, clock.nowEpochMs())
+            } else {
+                preferredCopyRepository.setPreferredCopy(
+                    canonicalId = groupedKey.canonicalId,
+                    key = selection.key,
+                    nowEpochMs = clock.nowEpochMs(),
+                )
+            }
             null
         } catch (error: CancellationException) {
             throw error

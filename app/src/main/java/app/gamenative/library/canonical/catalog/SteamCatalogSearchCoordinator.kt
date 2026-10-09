@@ -43,10 +43,7 @@ class SteamCatalogSearchCoordinator internal constructor(
             } catch (_: Exception) {
                 throw storeFailure
             }
-            return SteamCatalogSearchResult(
-                hits = appListResult.hits.boundedDistinctHits(),
-                complete = false,
-            )
+            return selectSteamCatalogHits(query, appListResult.hits, complete = false)
         }
 
         val loadedAppListHits = try {
@@ -56,21 +53,11 @@ class SteamCatalogSearchCoordinator internal constructor(
         } catch (_: Exception) {
             emptyList()
         }
-        return SteamCatalogSearchResult(
-            hits = (storeResult.hits + loadedAppListHits).boundedDistinctHits(),
-            complete = storeResult.complete,
-        )
+        return selectSteamCatalogHits(query, storeResult.hits + loadedAppListHits, complete = storeResult.complete)
     }
 
     override fun requestImmediateRetry() {
         storeSource.requestImmediateRetry()
         appListSource.requestImmediateRetry()
-    }
-
-    private fun List<SteamStoreSearchHit>.boundedDistinctHits(): List<SteamStoreSearchHit> =
-        distinctBy(SteamStoreSearchHit::steamAppId).take(MAX_RESULTS)
-
-    private companion object {
-        const val MAX_RESULTS = 15
     }
 }

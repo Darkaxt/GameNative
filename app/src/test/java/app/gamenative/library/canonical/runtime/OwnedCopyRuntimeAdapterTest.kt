@@ -106,6 +106,12 @@ import org.robolectric.annotation.Config
 @Config(manifest = Config.NONE, application = android.app.Application::class)
 @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
 class OwnedCopyRuntimeAdapterTest {
+    private fun originalArtwork(copy: OwnedCopyRuntime): String? {
+        val getter = copy.javaClass.methods.singleOrNull { it.name == "getOriginalArtworkUrl" }
+        assertTrue("Independent original-store artwork field is required", getter != null)
+        return requireNotNull(getter).invoke(copy) as String?
+    }
+
     private lateinit var context: Context
     private val scope = AccountScope.parse("a".repeat(64))
     private val otherScope = AccountScope.parse("b".repeat(64))
@@ -258,6 +264,10 @@ class OwnedCopyRuntimeAdapterTest {
         assertTrue(point.isVrSupported)
         assertEquals(app.clientIconUrl, point.iconUrl)
         assertEquals(app.getCapsuleUrl(), point.capsuleImageUrl)
+        assertEquals(
+            "https://shared.akamai.steamstatic.com/steam/apps/42/library_600x900.jpg",
+            originalArtwork(point),
+        )
         assertEquals(app.headerUrl, point.headerImageUrl)
         assertEquals(app.getHeroUrl(), point.heroImageUrl)
         assertEquals(1f, point.gridHeroImageScale)
@@ -342,6 +352,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertTrue(point.featureKeys.isEmpty())
         assertEquals(game.iconUrl, point.iconUrl)
         assertEquals(game.verticalCoverUrl, point.capsuleImageUrl)
+        assertEquals(game.verticalCoverUrl, originalArtwork(point))
         assertEquals(game.imageUrl, point.headerImageUrl)
         assertEquals(game.imageUrl, point.heroImageUrl)
         assertEquals(999L, point.lastPlayedEpochMs)
@@ -366,7 +377,10 @@ class OwnedCopyRuntimeAdapterTest {
     @Test
     fun gogHistoryFailuresAreCategoricalEnrichmentFailuresForPointAndBatch() = runTest {
         val key = key(GameSource.GOG, "123")
-        val game = GOGGame(id = "123", title = "Provider", lastPlayed = 700L)
+        val game = GOGGame(
+            id = "123", title = "Provider", lastPlayed = 700L,
+            iconUrl = "https://images.gog.com/synthetic-icon.jpg",
+        )
         val dao = mockk<GOGGameDao>()
         coEvery { dao.getById("123") } returns game
         coEvery { dao.getAllAsList() } returns listOf(game)
@@ -396,6 +410,8 @@ class OwnedCopyRuntimeAdapterTest {
 
         assertEquals(700L, point.lastPlayedEpochMs)
         assertEquals(700L, batch.lastPlayedEpochMs)
+        assertEquals(game.iconUrl, point.capsuleImageUrl)
+        assertNull(originalArtwork(point))
         verify(exactly = 1) {
             diagnostics.playHistoryFailed(GameSource.GOG, PlayHistoryOrigin.POINT, SensitiveFailure::class)
         }
@@ -593,6 +609,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertTrue(point.featureKeys.isEmpty())
         assertEquals(game.artSquare, point.iconUrl)
         assertEquals(game.artCover, point.capsuleImageUrl)
+        assertEquals(game.artCover, originalArtwork(point))
         assertEquals(game.artPortrait, point.headerImageUrl)
         assertEquals(game.artPortrait, point.heroImageUrl)
         assertEquals(999L, point.lastPlayedEpochMs)
@@ -689,6 +706,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertTrue(point.genreKeys.isEmpty())
         assertEquals(game.artUrl, point.iconUrl)
         assertEquals(game.artUrl, point.capsuleImageUrl)
+        assertEquals(game.artUrl, originalArtwork(point))
         assertEquals(AmazonArtwork.layoutHeroFromProductJson(productJson), point.headerImageUrl)
         assertEquals(AmazonArtwork.layoutHeroFromProductJson(productJson), point.heroImageUrl)
         assertEquals(AmazonArtwork.GRID_HERO_ZOOM_SCALE, point.gridHeroImageScale)
@@ -792,6 +810,7 @@ class OwnedCopyRuntimeAdapterTest {
         assertEquals(CanonicalAppType.GAME, point.appType)
         assertEquals(row.iconUrl, point.iconUrl)
         assertEquals(row.capsuleImageUrl, point.capsuleImageUrl)
+        assertNull(originalArtwork(point))
         assertEquals(row.headerImageUrl, point.headerImageUrl)
         assertEquals(row.heroImageUrl, point.heroImageUrl)
         assertEquals(row.installPath, point.installPath)
