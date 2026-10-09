@@ -104,53 +104,51 @@ private fun ReviewList(
             .collect { nearBottom -> if (nearBottom) onLoadMore() }
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("steam-reviews-list"),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-    ) {
-        item(key = "review-controls") {
-            ReviewControls(
-                query = query,
-                onQueryChange = onQueryChange,
-                onRefresh = onRefresh,
-                onOpenSteam = onOpenSteam,
-            )
-        }
-        if (state.refreshFailed) {
-            item(key = "review-refresh-failed") {
-                Text(
-                    text = stringResource(R.string.canonical_reviews_refresh_failed),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        itemsIndexed(
-            items = state.reviews,
-            key = { index, review -> "${review.postedAtEpochSeconds}:$index" },
-        ) { _, review ->
-            SteamReviewCard(review)
-        }
-        if (state.canLoadMore && !state.loadingMore) {
-            item(key = "reviews-load-more") {
-                Button(
-                    onClick = onLoadMore,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.canonical_reviews_load_more))
+    val controls: @Composable () -> Unit = {
+        ReviewControls(query, onQueryChange, onRefresh, onOpenSteam)
+    }
+    AdaptiveCommunityPane(controls = controls) { inlineControls ->
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("steam-reviews-list"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        ) {
+            if (inlineControls) item(key = "review-controls") { controls() }
+            if (state.refreshFailed) {
+                item(key = "review-refresh-failed") {
+                    Text(
+                        text = stringResource(R.string.canonical_reviews_refresh_failed),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
-        }
-        if (state.loadingMore) {
-            item(key = "reviews-loading-more") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    CircularProgressIndicator()
+            itemsIndexed(
+                items = state.reviews,
+                key = { index, review -> "${review.postedAtEpochSeconds}:$index" },
+            ) { _, review ->
+                SteamReviewCard(review)
+            }
+            if (state.canLoadMore && !state.loadingMore) {
+                item(key = "reviews-load-more") {
+                    Button(
+                        onClick = onLoadMore,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.canonical_reviews_load_more))
+                    }
+                }
+            }
+            if (state.loadingMore) {
+                item(key = "reviews-loading-more") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
                 }
             }
         }
@@ -165,7 +163,7 @@ private fun ReviewControls(
     onRefresh: () -> Unit,
     onOpenSteam: (() -> Unit)?,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = Modifier.testTag("steam-reviews-controls"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -216,7 +214,7 @@ private fun ReviewControls(
                 onClick = { onQueryChange(query.copy(purchaseType = SteamReviewPurchaseType.STEAM)) },
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Button(onClick = onRefresh) {
                 Text(stringResource(R.string.canonical_reviews_refresh))
             }

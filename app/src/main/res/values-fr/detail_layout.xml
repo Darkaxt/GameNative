@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_detail_language_interface">Interface</string>
+    <string name="canonical_detail_language_audio">Audio intégral</string>
+    <string name="canonical_detail_language_subtitles">Sous-titres</string>
+    <string name="canonical_detail_section_expanded">Développé</string>
+    <string name="canonical_detail_section_collapsed">Réduit</string>
+</resources>

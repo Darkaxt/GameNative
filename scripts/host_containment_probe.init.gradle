@@ -1,0 +1,29 @@
+import groovy.json.JsonOutput
+import java.time.Duration
+import org.gradle.api.GradleException
+import org.gradle.api.tasks.testing.Test
+
+// Android's unitTests.all configuration runs after early configureEach callbacks.
+gradle.taskGraph.whenReady { graph ->
+    graph.allTasks.findAll { it instanceof Test && it.path.startsWith(':app:test') }.each { test ->
+        def probeEnabled = System.getenv('GAMENATIVE_HOST_TIMEOUT_PROBE') == '1'
+        if (probeEnabled) {
+            test.timeout.set(Duration.ofSeconds(60))
+            test.testLogging.showStandardStreams = true
+        }
+        test.systemProperty('gamenative.hostTimeoutProbeDeadlineMs', test.timeout.get().toMillis().toString())
+        test.doFirst {
+            def deadlineMs = test.timeout.get().toMillis()
+            if (probeEnabled && deadlineMs != 60000) {
+                throw new GradleException('Probe refuses to launch without the verified one-minute task deadline')
+            }
+            println('HOST_TEST_CONTAINMENT_JSON:' + JsonOutput.toJson([
+                path: test.path,
+                fork_every: test.forkEvery,
+                max_parallel_forks: test.maxParallelForks,
+                max_heap: test.maxHeapSize,
+                task_timeout_ms: deadlineMs
+            ]))
+        }
+    }
+}

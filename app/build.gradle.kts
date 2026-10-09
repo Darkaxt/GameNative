@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.time.Duration
 import java.io.FileInputStream
 import org.gradle.api.tasks.testing.Test
 
@@ -255,7 +256,10 @@ android {
             all {
                 it.maxHeapSize = "1g"
                 it.maxParallelForks = 1
-                it.testLogging { events("started", "failed") }
+                // Retire class-owned Room/Robolectric threads before the next test class.
+                it.forkEvery = 1L
+                it.timeout.set(Duration.ofMinutes(30))
+                it.testLogging { events("started", "passed", "skipped", "failed") }
             }
         }
     }

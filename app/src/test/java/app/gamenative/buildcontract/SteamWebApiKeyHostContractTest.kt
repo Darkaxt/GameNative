@@ -20,12 +20,27 @@ class SteamWebApiKeyHostContractTest {
         val appBuild = File(root, "app/build.gradle.kts").readText()
 
         assertFalse(appBuild.contains("STEAM_WEB_API_KEY"))
-        assertFalse(appBuild.contains(".env"))
+        assertFalse(loadsEnvFile(appBuild))
         assertFalse(
             File(root, "app/src").walkTopDown().any {
                 it.isFile && it.name.startsWith(".env")
             },
         )
+    }
+
+    @Test
+    fun hostEnvCheckDoesNotConfuseEnvironmentProvidersWithDotenvInputs() {
+        assertFalse(loadsEnvFile("""providers.environmentVariable("PUBLIC_BUILD_OPTION")"""))
+    }
+
+    @Test
+    fun hostEnvCheckStillRejectsDotenvFilesInQuotedPaths() {
+        listOf(
+            """file(".env")""",
+            """file("config/.env.local")""",
+            """file('config/.env.production')""",
+            """file("C:\fixture\.env.local")""",
+        ).forEach { source -> assertTrue(source, loadsEnvFile(source)) }
     }
 
     @Test
@@ -70,6 +85,13 @@ class SteamWebApiKeyHostContractTest {
 
         assertEquals(output, 0, process.waitFor())
     }
+
+    private fun loadsEnvFile(source: String): Boolean = Regex("\"[^\"]*\"|'[^']*'")
+        .findAll(source)
+        .any { match ->
+            val fileName = match.value.drop(1).dropLast(1).replace('\\', '/').substringAfterLast('/')
+            fileName == ".env" || fileName.startsWith(".env.")
+        }
 
     private fun repositoryRoot(): File = generateSequence(
         File(checkNotNull(System.getProperty("user.dir"))),

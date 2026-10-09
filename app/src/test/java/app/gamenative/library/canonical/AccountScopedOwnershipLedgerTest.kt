@@ -16,14 +16,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.junit.rules.TimeoutRule
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, application = android.app.Application::class)
 class AccountScopedOwnershipLedgerTest {
+    @get:Rule val timeout = TimeoutRule.seconds(30)
+
     private lateinit var database: PluviaDatabase
     private lateinit var lifecycleState: InMemoryAccountLifecycleState
     private val scopeA = AccountScope.parse("a".repeat(64))

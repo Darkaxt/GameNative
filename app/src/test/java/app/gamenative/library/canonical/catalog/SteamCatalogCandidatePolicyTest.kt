@@ -29,13 +29,15 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun uniqueExactCandidateWithAdjacentReleaseYearRequiresReviewBelowScoreThreshold() {
-        val result = policy.evaluate(
-            source = source(title = "Example", developer = null, year = 2020),
-            candidates = listOf(candidate(42, "Example", null, 2021)),
-        )
+    fun uniqueExactCandidateWithAdjacentReleaseYearAutoAcceptsWithoutPartyEvidence() {
+        for (candidateYear in listOf(2019, 2021)) {
+            val result = policy.evaluate(
+                source = source(title = "Example", developer = null, year = 2020),
+                candidates = listOf(candidate(42, "Example", "Studio", candidateYear)),
+            )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+            assertEquals(CatalogDecision.AutoAccept(42), result)
+        }
     }
 
     @Test

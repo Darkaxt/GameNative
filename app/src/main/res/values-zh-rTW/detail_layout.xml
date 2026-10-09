@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_detail_language_interface">介面</string>
+    <string name="canonical_detail_language_audio">完整語音</string>
+    <string name="canonical_detail_language_subtitles">字幕</string>
+    <string name="canonical_detail_section_expanded">已展開</string>
+    <string name="canonical_detail_section_collapsed">已收合</string>
+</resources>

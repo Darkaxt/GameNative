@@ -118,6 +118,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             score = rounded((titleWeight + developerWeight + yearWeight + typeWeight).coerceIn(0.0, 1.0)),
             strongTitle = titleMatch != null,
             corroborated = developerWeight > 0.0 || yearWeight > 0.0,
+            exactTitleAndCloseYear = titleMatch == CatalogTitleMatch.EXACT && yearDelta != null && yearDelta <= 1,
             typeCompatible = typeCompatible,
             developerExact = developerExact,
             developerConflict = developerConflict,
@@ -180,7 +181,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             rounded(top.score - ranked[1].score)
         }
         val canAccept = top.typeCompatible &&
-            top.score >= 0.80 &&
+            (top.score >= 0.80 || top.exactTitleAndCloseYear) &&
             top.strongTitle &&
             top.corroborated &&
             !top.developerConflict &&
@@ -205,6 +206,7 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
         val score: Double,
         val strongTitle: Boolean,
         val corroborated: Boolean,
+        val exactTitleAndCloseYear: Boolean,
         val typeCompatible: Boolean,
         val developerExact: Boolean,
         val developerConflict: Boolean,

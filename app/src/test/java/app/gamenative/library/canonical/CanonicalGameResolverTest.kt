@@ -29,8 +29,8 @@ class CanonicalGameResolverTest {
     private val accountScope = AccountScope.parse("a".repeat(64))
 
     @Test
-    fun resolverVersionAdvancesForRemainingSteamStagePocParity() {
-        assertEquals(5, CURRENT_RESOLVER_VERSION)
+    fun resolverVersionAdvancesForAutomaticAdjacentYearReconsideration() {
+        assertEquals(6, CURRENT_RESOLVER_VERSION)
     }
 
     @Test

@@ -3,6 +3,8 @@ package app.gamenative.ui.screen.library.components
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -101,47 +103,46 @@ private fun DiscussionListing(
         loadingMore = state.loadingMore,
         onLoadMore = onLoadMore,
     )
-    LazyColumn(
-        state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("steam-discussions-list"),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-    ) {
-        item(key = "discussion-controls") {
-            DiscussionControls(
-                onRefresh = onRefresh,
-                externalLabel = stringResource(R.string.canonical_detail_open_steam_discussions),
-                onOpenExternal = onOpenCommunity,
-            )
-        }
-        if (state.refreshFailed) {
-            item(key = "discussion-refresh-failed") {
-                Text(
-                    text = stringResource(R.string.canonical_discussions_refresh_failed),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        itemsIndexed(
-            items = state.threads,
-            key = { _, thread -> thread.route },
-        ) { _, thread ->
-            DiscussionSummaryCard(thread, onOpenDiscussion)
-        }
-        if (state.canLoadMore && !state.loadingMore) {
-            item(key = "discussion-load-more") {
-                Button(
-                    onClick = onLoadMore,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.canonical_discussions_load_more))
+    val controls: @Composable () -> Unit = {
+        DiscussionControls(onRefresh, stringResource(R.string.canonical_detail_open_steam_discussions), onOpenCommunity)
+    }
+    AdaptiveCommunityPane(controls = controls) { inlineControls ->
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("steam-discussions-list"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        ) {
+            if (inlineControls) item(key = "discussion-controls") { controls() }
+            if (state.refreshFailed) {
+                item(key = "discussion-refresh-failed") {
+                    Text(
+                        text = stringResource(R.string.canonical_discussions_refresh_failed),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
-        }
-        if (state.loadingMore) {
-            item(key = "discussion-loading-more") { LoadingRow() }
+            itemsIndexed(
+                items = state.threads,
+                key = { _, thread -> thread.route },
+            ) { _, thread ->
+                DiscussionSummaryCard(thread, onOpenDiscussion)
+            }
+            if (state.canLoadMore && !state.loadingMore) {
+                item(key = "discussion-load-more") {
+                    Button(
+                        onClick = onLoadMore,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.canonical_discussions_load_more))
+                    }
+                }
+            }
+            if (state.loadingMore) {
+                item(key = "discussion-loading-more") { LoadingRow() }
+            }
         }
     }
 }
@@ -162,55 +163,53 @@ private fun DiscussionThread(
         loadingMore = state.loadingMore,
         onLoadMore = onLoadMore,
     )
-    LazyColumn(
-        state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("steam-discussion-thread"),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-    ) {
-        item(key = "thread-controls") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onBackToListing) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
-                    Text(stringResource(R.string.canonical_discussions_back))
-                }
-                Text(
-                    text = state.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                DiscussionControls(
-                    onRefresh = onRefresh,
-                    externalLabel = stringResource(R.string.canonical_discussions_open_thread),
-                    onOpenExternal = onOpenThread?.let { open -> { open(state.route) } },
-                )
+    val controls: @Composable () -> Unit = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onBackToListing) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                Text(stringResource(R.string.canonical_discussions_back))
             }
+            Text(state.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            DiscussionControls(
+                onRefresh, stringResource(R.string.canonical_discussions_open_thread),
+                onOpenThread?.let { open -> { open(state.route) } },
+            )
         }
-        if (state.refreshFailed) {
-            item(key = "thread-refresh-failed") {
-                Text(
-                    text = stringResource(R.string.canonical_discussions_refresh_failed),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-        itemsIndexed(state.posts) { index, post ->
-            DiscussionPostCard(index, post)
-        }
-        if (state.canLoadMore && !state.loadingMore) {
-            item(key = "thread-load-more") {
-                Button(
-                    onClick = onLoadMore,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.canonical_discussions_load_more))
+    }
+    AdaptiveCommunityPane(controls = controls) { inlineControls ->
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("steam-discussion-thread"),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        ) {
+            if (inlineControls) item(key = "thread-controls") { controls() }
+            if (state.refreshFailed) {
+                item(key = "thread-refresh-failed") {
+                    Text(
+                        text = stringResource(R.string.canonical_discussions_refresh_failed),
+                        color = MaterialTheme.colorScheme.error,
+                    )
                 }
             }
-        }
-        if (state.loadingMore) {
-            item(key = "thread-loading-more") { LoadingRow() }
+            itemsIndexed(state.posts) { index, post ->
+                DiscussionPostCard(index, post)
+            }
+            if (state.canLoadMore && !state.loadingMore) {
+                item(key = "thread-load-more") {
+                    Button(
+                        onClick = onLoadMore,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.canonical_discussions_load_more))
+                    }
+                }
+            }
+            if (state.loadingMore) {
+                item(key = "thread-loading-more") { LoadingRow() }
+            }
         }
     }
 }
@@ -281,13 +280,17 @@ private fun DiscussionPostCard(index: Int, post: SteamDiscussionPost) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DiscussionControls(
     onRefresh: () -> Unit,
     externalLabel: String,
     onOpenExternal: (() -> Unit)?,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        modifier = Modifier.testTag("steam-discussions-controls"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Button(onClick = onRefresh) {
             Text(stringResource(R.string.canonical_discussions_refresh))
         }

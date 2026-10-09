@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_detail_language_interface">Oberfläche</string>
+    <string name="canonical_detail_language_audio">Vollständige Sprachausgabe</string>
+    <string name="canonical_detail_language_subtitles">Untertitel</string>
+    <string name="canonical_detail_section_expanded">Ausgeklappt</string>
+    <string name="canonical_detail_section_collapsed">Eingeklappt</string>
+</resources>

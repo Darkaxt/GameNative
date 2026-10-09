@@ -14,6 +14,17 @@ class SteamCommunityLiveValidationTest {
     private val discussions by lazy { SteamDiscussionProvider() }
 
     @Test
+    fun dredgeProductionDiscussionListingAndThreadRemainReadable() = runTest(timeout = 3.minutes) {
+        requireLiveValidation()
+        validateDiscussions(
+            steamAppId = 1_562_430,
+            listingPageCount = 2,
+            threadPageCount = 2,
+            targetIndex = 0,
+        )
+    }
+
+    @Test
     fun threeTitleMultiPageProductionProvidersMatchValidatedPoc() = runTest(timeout = 10.minutes) {
         requireLiveValidation()
 

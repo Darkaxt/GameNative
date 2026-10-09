@@ -1169,6 +1169,35 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
+    fun `version five adjacent year review is automatically reconsidered once without manual reset`() = runTest {
+        val game = canonical(1, steamAppId = null)
+        val selected = match(key(GameSource.EPIC, "adjacent-year-review"), game.canonicalId,
+            title = "Exact Marker", developer = "", year = 2024).copy(
+            candidateSteamAppId = 42, matchMethod = MatchMethod.STEAM_CATALOG,
+            confidence = MatchConfidence.REVIEW_REQUIRED, resolverVersion = 5,
+        )
+        db.canonicalGameDao().insert(game)
+        seedMatch(selected)
+        var searches = 0
+        val resolver = repository(
+            search = SteamCatalogSearchSource { query, _ ->
+                searches++
+                listOf(SteamStoreSearchHit(42, query, null))
+            },
+            records = SteamCatalogRecordSource { steamAppId, _ ->
+                record(steamAppId, "Exact Marker", "Studio", 2023)
+            },
+        )
+        val progress = resolver.scanAutomatically()
+        assertEquals(1, progress.total)
+        assertEquals(1, progress.autoAccepted)
+        assertTrue(writer.operations.single() is DecisionOperation.Accepted)
+        assertEquals(1, searches)
+        resolver.scanAutomatically()
+        assertEquals(1, searches)
+    }
+
+    @Test
     fun `manual confirmation enriches the validated selected identity`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         val selected = match(key(GameSource.GOG, "manual-confirm"), canonical.canonicalId, title = "Manual Marker")
