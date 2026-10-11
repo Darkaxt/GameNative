@@ -401,6 +401,8 @@ jobs:
               version_name=os.environ['EXPECTED_VERSION_NAME'], signer=digests[0],
               apk_sha256=hashlib.sha256(apk.read_bytes()).hexdigest(), native=native,
               mapping_sha256=hashlib.sha256(mapping.read_bytes()).hexdigest(),
+              schema_version=32,
+              schema32_sha256=hashlib.sha256(pathlib.Path('app/schemas/app.gamenative.db.PluviaDatabase/32.json').read_bytes()).hexdigest(),
               schema31_sha256=hashlib.sha256(pathlib.Path('app/schemas/app.gamenative.db.PluviaDatabase/31.json').read_bytes()).hexdigest(),
               run_id=os.environ['GITHUB_RUN_ID'], artifact_only=True)
           assert provenance['commit'] == os.environ['EXPECTED_COMMIT']

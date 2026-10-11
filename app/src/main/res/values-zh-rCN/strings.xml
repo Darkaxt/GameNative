@@ -722,6 +722,7 @@
     <string name="achievement_position_bottom_left">左下</string>
     <string name="achievement_position_bottom_right">右下</string>
     <string name="launch_steam_client_description">推荐使用 Headless\nEA、Rockstar、Ubisoft 等启动器必需\n启用多人游戏并修复 DRM 和手柄问题</string>
+    <string name="steam_starting">正在启动 Steam…</string>
     <string name="launch_bionic_steam">启用实验性 Bionic Steam</string>
     <string name="allow_steam_updates">允许 Steam 更新</string>
     <string name="allow_steam_updates_description">将 Steam 更新至最新版本，会显著降低性能</string>
@@ -1064,7 +1065,7 @@
     </plurals>
     <string name="support_upgrade_reply_cap_pro_hint">Pro 报告无需排队。</string>
     <string name="support_limit_title">已达到今天的合理使用限额</string>
-    <string name="support_upgrade_reason_required">AI 回复需要 GameNative 订阅。</string>
+    <string name="support_upgrade_reason_required">AI 回复需要 GameNative 订阅。如果你已在 Discord 或 Ko-fi 上订阅，请在设置中连接 Discord。</string>
     <string name="support_see_plans">查看方案</string>
     <string name="support_plan_basic_title">$5/月 · Basic</string>
     <string name="support_plan_basic_body">让你的游戏运行起来，或运行得更好。</string>
@@ -1083,11 +1084,12 @@
     <string name="support_new_debug_run">新的调试运行</string>
     <string name="support_fix_request_action">请求定制修复</string>
     <string name="support_fix_request_title">请求定制修复</string>
-    <string name="support_fix_request_message">AI 可以修改此游戏的文件，或为你的设备构建新的驱动或模拟器。它会先运行一次游戏来测量问题。如果定制修复无法解决问题，AI 会告诉你，并且不会消耗定制修复次数。</string>
+    <string name="support_fix_request_message">AI 可以修改此游戏的文件，或为你的设备构建新的驱动或模拟器。如果你已经发送过报告，它会立即查看该报告。如果没有，它会运行一次游戏来测量问题。</string>
     <string name="support_fix_request_left">剩余定制修复：%1$d / %2$d。</string>
     <string name="support_fix_request_left_resets">剩余定制修复：%1$d / %2$d（%3$s 重置）。</string>
-    <string name="support_fix_request_run">运行游戏</string>
+    <string name="support_fix_request_run">请求修复</string>
     <string name="support_fix_request_failed">无法开始定制修复。请重试。</string>
+    <string name="support_fix_request_in_progress">此游戏的自定义修复已在准备中。</string>
     <string name="support_fix_upgrade_reason">所有方案都包含定制修复。</string>
     <string name="support_fix_quota">你目前已用完所有定制修复次数。</string>
     <string name="support_fix_quota_resets">你已用完所有定制修复次数。将于 %1$s 重置。</string>
@@ -1620,6 +1622,14 @@
     <string name="gog_login_success_title">登录成功</string>
     <string name="rockstar_login_required_title">需要登录 Rockstar</string>
     <string name="rockstar_login_failed">Rockstar 登录失败：%1$s</string>
+    <string name="rockstar_link_refused">此 Rockstar 账户已关联到其他 Steam 账户。</string>
+    <string name="rockstar_link_title">要关联 Steam 账户吗？</string>
+    <string name="rockstar_link_text">将你的 Steam 账户 %1$s 关联到 Rockstar 账户 %2$s，即可在此处游玩此游戏。Rockstar 不允许之后解除此关联。</string>
+    <string name="rockstar_link_confirm">关联</string>
+    <string name="rockstar_link_skip">以后再说</string>
+    <string name="rockstar_link_done">已将 Steam 账户关联到 Rockstar</string>
+    <string name="rockstar_link_failed">无法关联 Steam 账户：%1$s</string>
+    <string name="rockstar_link_unchecked">无法检查 Steam 关联。请在设置中退出 Rockstar 登录，然后重新登录以重试。</string>
     <string name="ea_login_required_title">需要登录 EA</string>
     <string name="ea_login_success">已以 %1$s 身份登录 EA</string>
     <string name="ea_login_failed">EA 登录失败：%1$s</string>

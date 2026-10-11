@@ -736,6 +736,7 @@
 	<string name="achievement_position_bottom_left">Stânga jos</string>
 	<string name="achievement_position_bottom_right">Dreapta jos</string>
 	<string name="launch_steam_client_description">Headless este recomandat\nNecesar pentru EA, Rockstar, Ubisoft și alte launchere\nActivează modul multiplayer și rezolvă problemele de DRM și controler</string>
+	<string name="steam_starting">Se pornește Steam…</string>
 	<string name="launch_bionic_steam">Activează Bionic Steam experimental</string>
 	<string name="allow_steam_updates">Permite actualizările Steam</string>
 	<string name="allow_steam_updates_description">Actualizează Steam la ultima versiune. Reduce semnificativ performanța.</string>
@@ -1081,7 +1082,7 @@
     </plurals>
     <string name="support_upgrade_reply_cap_pro_hint">Rapoartele Pro sar peste coadă.</string>
     <string name="support_limit_title">Limita zilnică de utilizare corectă a fost atinsă</string>
-    <string name="support_upgrade_reason_required">Răspunsurile AI necesită un abonament GameNative.</string>
+    <string name="support_upgrade_reason_required">Răspunsurile AI necesită un abonament GameNative. Dacă ai deja un abonament pe Discord sau Ko-fi, conectează Discord în Setări.</string>
     <string name="support_see_plans">Vezi planurile</string>
     <string name="support_plan_basic_title">$5/lună · Basic</string>
     <string name="support_plan_basic_body">Fă-ți jocurile să ruleze sau să ruleze mai bine.</string>
@@ -1100,11 +1101,12 @@
     <string name="support_new_debug_run">Rulare nouă de depanare</string>
     <string name="support_fix_request_action">Cere o remediere personalizată</string>
     <string name="support_fix_request_title">Cere o remediere personalizată</string>
-    <string name="support_fix_request_message">AI-ul poate modifica fișierele acestui joc sau poate construi un driver ori un emulator nou pentru dispozitivul tău. Mai întâi rulează jocul o dată pentru a măsura problema. Dacă o remediere personalizată nu poate ajuta, AI-ul îți spune, iar aceasta nu consumă o remediere personalizată.</string>
+    <string name="support_fix_request_message">AI-ul poate modifica fișierele acestui joc sau poate construi un driver ori un emulator nou pentru dispozitivul tău. Dacă ai trimis deja un raport, îl analizează acum. Dacă nu, rulează jocul o dată pentru a măsura problema.</string>
     <string name="support_fix_request_left">Remedieri personalizate rămase: %1$d din %2$d.</string>
     <string name="support_fix_request_left_resets">Remedieri personalizate rămase: %1$d din %2$d (se resetează pe %3$s).</string>
-    <string name="support_fix_request_run">Rulează jocul</string>
+    <string name="support_fix_request_run">Cere remedierea</string>
     <string name="support_fix_request_failed">Nu s-a putut porni o remediere personalizată. Încearcă din nou.</string>
+    <string name="support_fix_request_in_progress">O remediere personalizată pentru acest joc este deja în pregătire.</string>
     <string name="support_fix_upgrade_reason">Remedierile personalizate sunt incluse în fiecare plan.</string>
     <string name="support_fix_quota">Ai folosit deocamdată toate remedierile personalizate.</string>
     <string name="support_fix_quota_resets">Ai folosit toate remedierile personalizate. Se resetează pe %1$s.</string>
@@ -2842,6 +2844,14 @@
     <string name="steam_agreement_decline">Refuză</string>
     <string name="rockstar_login_required_title">Autentificare Rockstar necesară</string>
     <string name="rockstar_login_failed">Autentificarea Rockstar a eșuat: %1$s</string>
+    <string name="rockstar_link_refused">Acest cont Rockstar este asociat cu un alt cont Steam.</string>
+    <string name="rockstar_link_title">Asociezi contul Steam?</string>
+    <string name="rockstar_link_text">Asociază contul tău Steam %1$s cu contul Rockstar %2$s pentru a putea juca acest joc aici. Rockstar nu permite anularea ulterioară a acestei asocieri.</string>
+    <string name="rockstar_link_confirm">Asociază</string>
+    <string name="rockstar_link_skip">Nu acum</string>
+    <string name="rockstar_link_done">Cont Steam asociat cu Rockstar</string>
+    <string name="rockstar_link_failed">Contul Steam nu a putut fi asociat: %1$s</string>
+    <string name="rockstar_link_unchecked">Asocierea cu Steam nu a putut fi verificată. Deconectează-te de la Rockstar din Setări și conectează-te din nou pentru a reîncerca.</string>
     <string name="ea_login_required_title">Autentificare EA necesară</string>
     <string name="ea_login_success">Autentificat la EA ca %1$s</string>
     <string name="ea_login_failed">Autentificarea EA a eșuat: %1$s</string>

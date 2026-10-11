@@ -27,6 +27,7 @@ import app.gamenative.service.epic.EpicService
 import app.gamenative.service.gog.GOGConstants
 import app.gamenative.service.gog.GOGService
 import app.gamenative.service.SteamService
+import app.gamenative.service.download.SteamDownloadMode
 import app.gamenative.ui.component.dialog.state.MessageDialogState
 import app.gamenative.ui.data.AppMenuOption
 import app.gamenative.ui.enums.AppOptionMenuType
@@ -694,7 +695,7 @@ class CanonicalActionExecutionTest {
         mockkObject(PrefManager)
         try {
             every { PrefManager.useExternalStorage } returns false
-            every { SteamService.downloadApp(42) } returns null
+            every { SteamService.downloadApp(42, SteamDownloadMode.UPDATE) } returns null
             every { AmazonService.getProductIdByAppId(42) } returns "product"
             every { AmazonService.getAmazonGameOf("product") } returns amazonGame
             coEvery { AmazonService.downloadGame(context, "product", any()) } returns
@@ -715,7 +716,7 @@ class CanonicalActionExecutionTest {
                 ) { _, _ -> error("update must not play") },
             )
 
-            verify(timeout = 2_000, exactly = 1) { SteamService.downloadApp(42) }
+            verify(timeout = 2_000, exactly = 1) { SteamService.downloadApp(42, SteamDownloadMode.UPDATE) }
             coVerify(timeout = 2_000, exactly = 1) {
                 AmazonService.downloadGame(context, "product", any())
             }
@@ -724,6 +725,50 @@ class CanonicalActionExecutionTest {
             unmockkObject(AmazonService.Companion)
             unmockkObject(SteamService.Companion)
         }
+    }
+
+    @Test
+    fun canonicalSteamResumeRetainsRecordedModeWithoutChangingTheCopy() {
+        val context = mockk<Context>(relaxed = true)
+        val item = LibraryItem(appId = "STEAM_42", gameSource = GameSource.STEAM)
+        mockkObject(SteamService.Companion)
+        try {
+            SteamService.workshopPausedApps.clear()
+            every { SteamService.getAppDownloadInfo(42) } returns null
+            every { SteamService.hasPartialDownload(42) } returns true
+            SteamDownloadMode.entries.forEach { mode ->
+                every { SteamService.resumeModeFor(42) } returns mode
+                every { SteamService.downloadApp(42, mode) } returns null
+                assertTrue(
+                    SteamAppScreen().onCanonicalOwnedCopyOperation(
+                        context,
+                        item,
+                        OwnedCopyOperation.PAUSE_RESUME_DOWNLOAD,
+                    ) { _, _ -> error("Resume must not launch a game") },
+                )
+                verify(timeout = 2_000, exactly = 1) { SteamService.downloadApp(42, mode) }
+            }
+        } finally {
+            unmockkObject(SteamService.Companion)
+        }
+    }
+
+    @Test
+    fun mergedSteamConfirmationKeepsExactCopyAndDistinctInstallVerifyUpdateModes() {
+        val source = File(
+            repositoryRoot(),
+            "app/src/main/java/app/gamenative/ui/screen/library/appscreen/SteamAppScreen.kt",
+        ).readText()
+        val confirm = source.substringAfter("DialogType.UPDATE_VERIFY_CONFIRM ->")
+            .substringBefore("DialogType.INSTALL_IMAGEFS ->")
+        assertTrue(confirm.contains("val currentGameId = currentItem.gameId"))
+        assertTrue(confirm.contains("pendingOperation == AppOptionMenuType.VerifyFiles"))
+        assertTrue(confirm.contains("SteamDownloadMode.VERIFY"))
+        assertTrue(confirm.contains("SteamDownloadMode.UPDATE"))
+        assertTrue(confirm.contains("SteamService.downloadApp(currentGameId, mode)"))
+        assertTrue(confirm.contains("executeGuardedConfirmation("))
+        assertTrue(confirm.contains("operation = OwnedCopyOperation.UPDATE"))
+        assertTrue(source.contains("SteamService.downloadApp(currentGameId, dlcAppIds, branch = branch, mode = SteamDownloadMode.INSTALL)"))
     }
 
     @Test

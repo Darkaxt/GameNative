@@ -61,6 +61,7 @@ import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.service.DownloadService
 import app.gamenative.service.SteamService
 import app.gamenative.service.SteamService.Companion.getAppDirPath
+import app.gamenative.service.download.SteamDownloadMode
 import app.gamenative.ui.component.dialog.MessageDialog
 import app.gamenative.ui.component.dialog.LoadingDialog
 import app.gamenative.ui.component.dialog.state.MessageDialogState
@@ -630,7 +631,7 @@ class SteamAppScreen : BaseAppScreen() {
                 }
                 SteamService.hasPartialDownload(gameId) -> {
                     CoroutineScope(Dispatchers.IO).launch {
-                        SteamService.downloadApp(gameId)
+                        SteamService.downloadApp(gameId, SteamService.resumeModeFor(gameId))
                     }
                     true
                 }
@@ -688,7 +689,9 @@ class SteamAppScreen : BaseAppScreen() {
             resumeWorkshopDownload(gameId, context)
         } else if (SteamService.hasPartialDownload(gameId)) {
             CoroutineScope(Dispatchers.IO).launch {
-                SteamService.downloadApp(gameId)
+                // Resuming an interrupted transfer keeps the mode it was started with (an
+                // interrupted verify stays a verify; an install stays an install).
+                SteamService.downloadApp(gameId, SteamService.resumeModeFor(gameId))
             }
         } else if (!isInstalled) {
             // Request storage permissions first, then show install dialog
@@ -714,7 +717,8 @@ class SteamAppScreen : BaseAppScreen() {
             resumeWorkshopDownload(gameId, context)
         } else {
             CoroutineScope(Dispatchers.IO).launch {
-                SteamService.downloadApp(gameId)
+                // Resume of an interrupted run: the download record remembers its mode.
+                SteamService.downloadApp(gameId, SteamService.resumeModeFor(gameId))
             }
         }
     }
@@ -745,7 +749,7 @@ class SteamAppScreen : BaseAppScreen() {
 
     override fun onUpdateClick(context: Context, libraryItem: LibraryItem) {
         CoroutineScope(Dispatchers.IO).launch {
-            SteamService.downloadApp(libraryItem.gameId)
+            SteamService.downloadApp(libraryItem.gameId, SteamDownloadMode.UPDATE)
         }
     }
 
@@ -1064,7 +1068,7 @@ class SteamAppScreen : BaseAppScreen() {
 
         if (container.language != config.language) {
             CoroutineScope(Dispatchers.IO).launch {
-                SteamService.downloadApp(libraryItem.gameId)
+                SteamService.downloadApp(libraryItem.gameId, SteamDownloadMode.UPDATE)
             }
         }
     }
@@ -1320,7 +1324,7 @@ class SteamAppScreen : BaseAppScreen() {
                                     ConversionTracker.campaignAttribution(currentItem.gameId),
                             )
                             CoroutineScope(Dispatchers.IO).launch {
-                                SteamService.downloadApp(currentItem.gameId)
+                                SteamService.downloadApp(currentItem.gameId, SteamDownloadMode.UPDATE)
                             }
                         }
                     }
@@ -1375,7 +1379,13 @@ class SteamAppScreen : BaseAppScreen() {
                                 val currentGameId = currentItem.gameId
                                 CoroutineScope(Dispatchers.IO).launch {
                                     val container = ContainerUtils.getOrCreateContainer(context, currentItem.appId)
-                                    SteamService.downloadApp(currentGameId)
+                                    // Verify repairs the recorded installed build; update takes the current manifests.
+                                    val mode = if (pendingOperation == AppOptionMenuType.VerifyFiles) {
+                                        SteamDownloadMode.VERIFY
+                                    } else {
+                                        SteamDownloadMode.UPDATE
+                                    }
+                                    SteamService.downloadApp(currentGameId, mode)
                                     MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_DLL_REPLACED)
                                     MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_DLL_RESTORED)
                                     MarkerUtils.removeMarker(getAppDirPath(currentGameId), Marker.STEAM_COLDCLIENT_USED)
@@ -1605,7 +1615,7 @@ class SteamAppScreen : BaseAppScreen() {
                                 ConversionTracker.campaignAttribution(currentGameId),
                         )
                         CoroutineScope(Dispatchers.IO).launch {
-                            SteamService.downloadApp(currentGameId, dlcAppIds, branch = branch, isUpdateOrVerify = false)
+                            SteamService.downloadApp(currentGameId, dlcAppIds, branch = branch, mode = SteamDownloadMode.INSTALL)
                         }
                     }
                 },
@@ -1761,11 +1771,13 @@ class SteamAppScreen : BaseAppScreen() {
                             val container = ContainerUtils.getOrCreateContainer(context, libraryItem.appId)
                             val dlcAppIds = SteamService.getInstalledApp(gameId)
                                 ?.dlcDepots.orEmpty()
+                            // Switching branch: take that branch's CURRENT manifests (an update
+                            // against the newly selected branch), not the installed build's.
                             SteamService.downloadApp(
                                 gameId,
                                 dlcAppIds,
                                 branch = selectedBranch,
-                                isUpdateOrVerify = true,
+                                mode = SteamDownloadMode.UPDATE,
                             )
                             container.isNeedsUnpacking = true
                             container.saveData()

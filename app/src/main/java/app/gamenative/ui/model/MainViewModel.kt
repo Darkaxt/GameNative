@@ -52,6 +52,7 @@ import kotlin.io.path.name
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import app.gamenative.service.cloud.CloseSyncTracker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -676,6 +677,10 @@ class MainViewModel @Inject constructor(
             delay(100)
 
             val container = apiJob.await()
+            if (container.isLaunchHeadlessSteam && !bootAwaitingGameWindow) {
+                bootAwaitingGameWindow = true
+                startBootGameExitWatch(context, appId)
+            }
 
             if (app.gamenative.BuildConfig.XR_BUILD &&
                 container.isLaunchImmersiveMode() &&
@@ -693,6 +698,15 @@ class MainViewModel @Inject constructor(
     }
 
     fun exitSteamApp(context: Context, appId: String, onComplete: (() -> Unit)? = null) {
+        // the close-time sync uploads straight out of the install dir, so the store's delete joins this.
+        // reserved HERE, before the launch, so an uninstall started right after exit can't miss it.
+        val closeSyncKey = runCatching {
+            CloseSyncTracker.keyOf(
+                ContainerUtils.extractGameSourceFromContainerId(appId),
+                ContainerUtils.extractGameIdFromContainerId(appId),
+            )
+        }.getOrDefault(appId)
+        val closeSync = CloseSyncTracker.reserve(closeSyncKey)
         viewModelScope.launch {
             try {
                 Timber.tag("Exit").i("Exiting, getting feedback for appId: $appId")
@@ -719,6 +733,7 @@ class MainViewModel @Inject constructor(
                 }
 
                 handleExitCloudSync(context, appId, gameId)
+                closeSync.complete()
 
                 // Prompt user to save temporary container configuration if one was applied
                 if (hadTemporaryOverride) {
@@ -785,6 +800,10 @@ class MainViewModel @Inject constructor(
             } finally {
                 onComplete?.invoke()
             }
+        }.invokeOnCompletion {
+            // backstop: a launch cancelled before it runs, or one that throws before the sync, must not
+            // leave the delete waiting forever.
+            closeSync.complete()
         }
     }
 
@@ -822,7 +841,10 @@ class MainViewModel @Inject constructor(
         val isLocalSavesOnly = ContainerUtils.isLocalSavesOnly(context, appId)
         if (isLocalSavesOnly || (gameSource == GameSource.STEAM && isOffline.value)) {
             Timber.tag("Exit").i("Local saves only or offline mode enabled for $appId — skipping cloud sync on exit")
-            if (!isLocalSavesOnly && gameSource == GameSource.STEAM) pushEaCloudSaves(context, appId, gameId)
+            if (!isLocalSavesOnly && gameSource == GameSource.STEAM) {
+                pushEaCloudSaves(context, appId, gameId)
+                pushRockstarCloudSaves(context, appId, gameId)
+            }
             return
         }
 
@@ -888,6 +910,7 @@ class MainViewModel @Inject constructor(
                 Timber.tag("Steam").e(t, "[Cloud Saves] Exception during close app sync for $gameId")
             }
             pushEaCloudSaves(context, appId, gameId)
+            pushRockstarCloudSaves(context, appId, gameId)
         }
     }
 
@@ -901,6 +924,21 @@ class MainViewModel @Inject constructor(
             throw e
         } catch (t: Throwable) {
             Timber.tag("EA").w("Cloud save push failed for $gameId: ${t.javaClass.simpleName}")
+        }
+    }
+
+    private suspend fun pushRockstarCloudSaves(context: Context, appId: String, gameId: Int) {
+        try {
+            withContext(Dispatchers.IO) {
+                val gameDir = File(SteamService.getAppDirPath(gameId))
+                if (!app.gamenative.service.rockstar.RockstarLaunchSupport.isRockstarTitle(gameDir)) return@withContext
+                val container = ContainerUtils.getContainer(context, appId)
+                app.gamenative.service.rockstar.RockstarCloudSavesManager.syncAfterExit(context, container, gameDir)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Timber.tag("RockstarCloud").w("Cloud save push failed for $gameId: ${t.javaClass.simpleName}")
         }
     }
 

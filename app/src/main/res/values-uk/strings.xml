@@ -730,6 +730,7 @@
     <string name="achievement_position_bottom_left">Лівий нижній</string>
     <string name="achievement_position_bottom_right">Правий нижній</string>
     <string name="launch_steam_client_description">Рекомендовано Headless\nПотрібно для EA, Rockstar, Ubisoft та інших лаунчерів\nВмикає мультиплеєр і виправляє проблеми з DRM та контролером</string>
+    <string name="steam_starting">Запуск Steam…</string>
     <string name="launch_bionic_steam">Увімкнути експериментальний Bionic Steam</string>
     <string name="allow_steam_updates">Дозволити оновлення клієнту Steam</string>
     <string name="allow_steam_updates_description">Оновлює клієнт Steam до останньої версії. Значно зменшує продуктивність.</string>
@@ -1076,7 +1077,7 @@
     </plurals>
     <string name="support_upgrade_reply_cap_pro_hint">Звіти Pro проходять без черги.</string>
     <string name="support_limit_title">Денний ліміт чесного використання вичерпано</string>
-    <string name="support_upgrade_reason_required">Для відповідей AI потрібна підписка GameNative.</string>
+    <string name="support_upgrade_reason_required">Для відповідей AI потрібна підписка GameNative. Якщо ви вже маєте підписку в Discord або на Ko-fi, підключіть Discord у налаштуваннях.</string>
     <string name="support_see_plans">Переглянути плани</string>
     <string name="support_plan_basic_title">$5/місяць · Basic</string>
     <string name="support_plan_basic_body">Запустіть свої ігри або змусьте їх працювати краще.</string>
@@ -1095,11 +1096,12 @@
     <string name="support_new_debug_run">Новий налагоджувальний запуск</string>
     <string name="support_fix_request_action">Запросити індивідуальне виправлення</string>
     <string name="support_fix_request_title">Запросити індивідуальне виправлення</string>
-    <string name="support_fix_request_message">AI може змінити файли цієї гри або зібрати новий драйвер чи емулятор для вашого пристрою. Спочатку він один раз запускає гру, щоб виміряти проблему. Якщо індивідуальне виправлення не допоможе, AI повідомить вам про це, і виправлення не буде витрачено.</string>
+    <string name="support_fix_request_message">AI може змінити файли цієї гри або зібрати новий драйвер чи емулятор для вашого пристрою. Якщо ви вже надіслали звіт, він зараз перегляне цей звіт. Якщо ні, він один раз запустить гру, щоб виміряти проблему.</string>
     <string name="support_fix_request_left">Залишилося індивідуальних виправлень: %1$d з %2$d.</string>
     <string name="support_fix_request_left_resets">Залишилося індивідуальних виправлень: %1$d з %2$d (оновляться %3$s).</string>
-    <string name="support_fix_request_run">Запустити гру</string>
+    <string name="support_fix_request_run">Запросити виправлення</string>
     <string name="support_fix_request_failed">Не вдалося почати індивідуальне виправлення. Спробуйте ще раз.</string>
+    <string name="support_fix_request_in_progress">Індивідуальне виправлення для цієї гри вже готується.</string>
     <string name="support_fix_upgrade_reason">Індивідуальні виправлення входять до кожного тарифу.</string>
     <string name="support_fix_quota">Ви поки що використали всі індивідуальні виправлення.</string>
     <string name="support_fix_quota_resets">Ви використали всі індивідуальні виправлення. Вони оновляться %1$s.</string>
@@ -1641,6 +1643,14 @@
     <string name="gog_login_success_title">Вхід успішний</string>
     <string name="rockstar_login_required_title">Потрібен вхід у Rockstar</string>
     <string name="rockstar_login_failed">Не вдалося увійти в Rockstar: %1$s</string>
+    <string name="rockstar_link_refused">Цей обліковий запис Rockstar прив’язано до іншого облікового запису Steam.</string>
+    <string name="rockstar_link_title">Прив’язати обліковий запис Steam?</string>
+    <string name="rockstar_link_text">Прив’яжіть свій обліковий запис Steam %1$s до облікового запису Rockstar %2$s, щоб грати в цю гру тут. Rockstar не дозволяє скасувати цю прив’язку пізніше.</string>
+    <string name="rockstar_link_confirm">Прив’язати</string>
+    <string name="rockstar_link_skip">Не зараз</string>
+    <string name="rockstar_link_done">Обліковий запис Steam прив’язано до Rockstar</string>
+    <string name="rockstar_link_failed">Не вдалося прив’язати обліковий запис Steam: %1$s</string>
+    <string name="rockstar_link_unchecked">Не вдалося перевірити прив’язку Steam. Вийдіть із Rockstar у Налаштуваннях і увійдіть знову, щоб повторити спробу.</string>
     <string name="ea_login_required_title">Потрібен вхід в EA</string>
     <string name="ea_login_success">Виконано вхід в EA як %1$s</string>
     <string name="ea_login_failed">Не вдалося увійти в EA: %1$s</string>

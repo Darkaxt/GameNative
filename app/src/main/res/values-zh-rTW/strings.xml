@@ -724,6 +724,7 @@
     <string name="achievement_position_bottom_left">左下</string>
     <string name="achievement_position_bottom_right">右下</string>
     <string name="launch_steam_client_description">建議使用 Headless\nEA、Rockstar、Ubisoft 等啟動器必需\n啟用多人遊戲並修復 DRM 和控制器問題</string>
+    <string name="steam_starting">正在啟動 Steam…</string>
     <string name="launch_bionic_steam">啟用實驗性 Bionic Steam</string>
     <string name="allow_steam_updates">允許 Steam 更新</string>
     <string name="allow_steam_updates_description">將 Steam 更新至最新版本, 會顯著降低效能</string>
@@ -1066,7 +1067,7 @@
     </plurals>
     <string name="support_upgrade_reply_cap_pro_hint">Pro 報告不必排隊。</string>
     <string name="support_limit_title">已達到今天的合理使用額度</string>
-    <string name="support_upgrade_reason_required">AI 回覆需要 GameNative 訂閱。</string>
+    <string name="support_upgrade_reason_required">AI 回覆需要 GameNative 訂閱。如果你已在 Discord 或 Ko-fi 上訂閱，請在設定中連接 Discord。</string>
     <string name="support_see_plans">查看方案</string>
     <string name="support_plan_basic_title">$5/月 · Basic</string>
     <string name="support_plan_basic_body">讓你的遊戲執行起來，或執行得更好。</string>
@@ -1085,11 +1086,12 @@
     <string name="support_new_debug_run">新的偵錯執行</string>
     <string name="support_fix_request_action">請求客製修正</string>
     <string name="support_fix_request_title">請求客製修正</string>
-    <string name="support_fix_request_message">AI 可以修改此遊戲的檔案，或為你的裝置建置新的驅動程式或模擬器。它會先執行一次遊戲來測量問題。如果客製修正無法解決問題，AI 會告訴你，並且不會消耗客製修正次數。</string>
+    <string name="support_fix_request_message">AI 可以修改此遊戲的檔案，或為你的裝置建置新的驅動程式或模擬器。如果你已經傳送過報告，它會立即檢視該報告。如果沒有，它會執行一次遊戲來測量問題。</string>
     <string name="support_fix_request_left">剩餘客製修正：%1$d / %2$d。</string>
     <string name="support_fix_request_left_resets">剩餘客製修正：%1$d / %2$d（%3$s 重設）。</string>
-    <string name="support_fix_request_run">執行遊戲</string>
+    <string name="support_fix_request_run">請求修正</string>
     <string name="support_fix_request_failed">無法開始客製修正。請再試一次。</string>
+    <string name="support_fix_request_in_progress">此遊戲的自訂修正已在準備中。</string>
     <string name="support_fix_upgrade_reason">所有方案都包含客製修正。</string>
     <string name="support_fix_quota">你目前已用完所有客製修正次數。</string>
     <string name="support_fix_quota_resets">你已用完所有客製修正次數。將於 %1$s 重設。</string>
@@ -1622,6 +1624,14 @@
     <string name="gog_login_success_title">登入成功</string>
     <string name="rockstar_login_required_title">需要登入 Rockstar</string>
     <string name="rockstar_login_failed">Rockstar 登入失敗：%1$s</string>
+    <string name="rockstar_link_refused">此 Rockstar 帳戶已連結至其他 Steam 帳戶。</string>
+    <string name="rockstar_link_title">要連結 Steam 帳戶嗎？</string>
+    <string name="rockstar_link_text">將你的 Steam 帳戶 %1$s 連結至 Rockstar 帳戶 %2$s，即可在這裡遊玩此遊戲。Rockstar 不允許之後解除此連結。</string>
+    <string name="rockstar_link_confirm">連結</string>
+    <string name="rockstar_link_skip">稍後再說</string>
+    <string name="rockstar_link_done">已將 Steam 帳戶連結至 Rockstar</string>
+    <string name="rockstar_link_failed">無法連結 Steam 帳戶：%1$s</string>
+    <string name="rockstar_link_unchecked">無法檢查 Steam 連結。請在設定中登出 Rockstar，然後重新登入以重試。</string>
     <string name="ea_login_required_title">需要登入 EA</string>
     <string name="ea_login_success">已以 %1$s 身分登入 EA</string>
     <string name="ea_login_failed">EA 登入失敗：%1$s</string>

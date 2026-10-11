@@ -635,6 +635,14 @@
     <string name="gog_login_success_title">Вход выполнен успешно</string>
     <string name="rockstar_login_required_title">Требуется вход в Rockstar</string>
     <string name="rockstar_login_failed">Не удалось войти в Rockstar: %1$s</string>
+    <string name="rockstar_link_refused">Эта учетная запись Rockstar привязана к другой учетной записи Steam.</string>
+    <string name="rockstar_link_title">Привязать учетную запись Steam?</string>
+    <string name="rockstar_link_text">Привяжите свою учетную запись Steam %1$s к учетной записи Rockstar %2$s, чтобы играть в эту игру здесь. Rockstar не позволяет отменить эту привязку позже.</string>
+    <string name="rockstar_link_confirm">Привязать</string>
+    <string name="rockstar_link_skip">Не сейчас</string>
+    <string name="rockstar_link_done">Учетная запись Steam привязана к Rockstar</string>
+    <string name="rockstar_link_failed">Не удалось привязать учетную запись Steam: %1$s</string>
+    <string name="rockstar_link_unchecked">Не удалось проверить привязку Steam. Выйдите из Rockstar в Настройках и войдите снова, чтобы повторить попытку.</string>
     <string name="ea_login_required_title">Требуется вход в EA</string>
     <string name="ea_login_success">Выполнен вход в EA как %1$s</string>
     <string name="ea_login_failed">Не удалось войти в EA: %1$s</string>
@@ -687,6 +695,7 @@
     <string name="launch_dependency_failed_title">Ошибка загрузки зависимости запуска</string>
     <string name="launch_steam_client_beta">Запустить Steam Client</string>
     <string name="launch_steam_client_description">Рекомендуется Headless\nТребуется для EA, Rockstar, Ubisoft и других лаунчеров\nВключает мультиплеер и устраняет проблемы с DRM и контроллером</string>
+    <string name="steam_starting">Запуск Steam…</string>
     <string name="launch_bionic_steam">Включить экспериментальный Bionic Steam</string>
     <string name="left_analog_stick">Левый аналоговый джойстик</string>
     <string name="left_stick">Левый джойстик</string>
@@ -1257,7 +1266,7 @@ https://gamenative.app
     </plurals>
     <string name="support_upgrade_reply_cap_pro_hint">Отчёты Pro проходят без очереди.</string>
     <string name="support_limit_title">Дневной лимит честного использования исчерпан</string>
-    <string name="support_upgrade_reason_required">Для ответов AI нужна подписка GameNative.</string>
+    <string name="support_upgrade_reason_required">Для ответов AI нужна подписка GameNative. Если вы уже оформили подписку в Discord или на Ko-fi, подключите Discord в настройках.</string>
     <string name="support_see_plans">Посмотреть планы</string>
     <string name="support_plan_basic_title">$5/месяц · Basic</string>
     <string name="support_plan_basic_body">Запустите свои игры или заставьте их работать лучше.</string>
@@ -1276,11 +1285,12 @@ https://gamenative.app
     <string name="support_new_debug_run">Новый отладочный запуск</string>
     <string name="support_fix_request_action">Запросить индивидуальное исправление</string>
     <string name="support_fix_request_title">Запросить индивидуальное исправление</string>
-    <string name="support_fix_request_message">AI может изменить файлы этой игры или собрать новый драйвер или эмулятор для вашего устройства. Сначала он один раз запускает игру, чтобы измерить проблему. Если индивидуальное исправление не поможет, AI сообщит вам об этом, и исправление не будет израсходовано.</string>
+    <string name="support_fix_request_message">AI может изменить файлы этой игры или собрать новый драйвер или эмулятор для вашего устройства. Если вы уже отправили отчёт, он сейчас изучит этот отчёт. Если нет, он один раз запустит игру, чтобы измерить проблему.</string>
     <string name="support_fix_request_left">Осталось индивидуальных исправлений: %1$d из %2$d.</string>
     <string name="support_fix_request_left_resets">Осталось индивидуальных исправлений: %1$d из %2$d (обновятся %3$s).</string>
-    <string name="support_fix_request_run">Запустить игру</string>
+    <string name="support_fix_request_run">Запросить исправление</string>
     <string name="support_fix_request_failed">Не удалось начать индивидуальное исправление. Повторите попытку.</string>
+    <string name="support_fix_request_in_progress">Индивидуальное исправление для этой игры уже готовится.</string>
     <string name="support_fix_upgrade_reason">Индивидуальные исправления входят в каждый тариф.</string>
     <string name="support_fix_quota">Вы пока израсходовали все индивидуальные исправления.</string>
     <string name="support_fix_quota_resets">Вы израсходовали все индивидуальные исправления. Они обновятся %1$s.</string>

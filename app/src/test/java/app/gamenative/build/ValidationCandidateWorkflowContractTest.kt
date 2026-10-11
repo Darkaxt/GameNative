@@ -34,6 +34,15 @@ class ValidationCandidateWorkflowContractTest {
     }
 
     @Test
+    fun candidateProvenanceIncludesCurrentSchemaAndPreservesHistoricalDigest() {
+        val job = workflow().substringAfter("  validation-candidate:")
+        assertTrue("Candidate must identify the actual database version", job.contains("schema_version=32,"))
+        assertTrue("Current family preference schema must be hashed", job.contains("schema32_sha256="))
+        assertTrue(job.contains("app/schemas/app.gamenative.db.PluviaDatabase/32.json"))
+        assertTrue("Historical schema digest remains useful for upgrade provenance", job.contains("schema31_sha256="))
+    }
+
+    @Test
     fun freshCandidateCheckoutCreatesRequiredPropertiesBeforeGradle() {
         val job = workflow().substringAfter("  validation-candidate:")
         val configure = job.indexOf(": > local.properties")

@@ -753,6 +753,7 @@
     <string name="achievement_position_bottom_left">En bas à gauche</string>
     <string name="achievement_position_bottom_right">En bas à droite</string>
     <string name="launch_steam_client_description">Headless est recommandé\nRequis pour EA, Rockstar, Ubisoft et les autres lanceurs\nActive le multijoueur et corrige les problèmes de DRM et de manette</string>
+    <string name="steam_starting">Démarrage de Steam…</string>
     <string name="launch_bionic_steam">Activer Bionic Steam expérimental</string>
     <string name="allow_steam_updates">Autoriser les mises à jour Steam</string>
     <string name="allow_steam_updates_description">Met à jour Steam vers la dernière version. Réduit considérablement les performances.</string>
@@ -1097,7 +1098,7 @@
     </plurals>
     <string name="support_upgrade_reply_cap_pro_hint">Les rapports Pro passent avant la file d\'attente.</string>
     <string name="support_limit_title">Limite d\'usage raisonnable du jour atteinte</string>
-    <string name="support_upgrade_reason_required">Les réponses de l\'AI nécessitent un abonnement GameNative.</string>
+    <string name="support_upgrade_reason_required">Les réponses de l\'AI nécessitent un abonnement GameNative. Si vous êtes déjà abonné via Discord ou Ko-fi, connectez Discord dans les Paramètres.</string>
     <string name="support_see_plans">Voir les abonnements</string>
     <string name="support_plan_basic_title">$5/mois · Basic</string>
     <string name="support_plan_basic_body">Faites fonctionner vos jeux, ou faites-les mieux tourner.</string>
@@ -1116,11 +1117,12 @@
     <string name="support_new_debug_run">Nouvelle session de débogage</string>
     <string name="support_fix_request_action">Demander un correctif personnalisé</string>
     <string name="support_fix_request_title">Demander un correctif personnalisé</string>
-    <string name="support_fix_request_message">L\'AI peut modifier les fichiers de ce jeu ou compiler un nouveau pilote ou émulateur pour votre appareil. Elle lance d\'abord le jeu une fois pour mesurer le problème. Si un correctif personnalisé ne peut pas aider, l\'AI vous le dit, et aucun correctif personnalisé n\'est utilisé.</string>
+    <string name="support_fix_request_message">L\'AI peut modifier les fichiers de ce jeu ou compiler un nouveau pilote ou émulateur pour votre appareil. Si vous avez déjà envoyé un rapport, elle l\'examine maintenant. Sinon, elle lance le jeu une fois pour mesurer le problème.</string>
     <string name="support_fix_request_left">Correctifs personnalisés restants : %1$d sur %2$d.</string>
     <string name="support_fix_request_left_resets">Correctifs personnalisés restants : %1$d sur %2$d (réinitialisation le %3$s).</string>
-    <string name="support_fix_request_run">Lancer le jeu</string>
+    <string name="support_fix_request_run">Demander le correctif</string>
     <string name="support_fix_request_failed">Impossible de démarrer un correctif personnalisé. Veuillez réessayer.</string>
+    <string name="support_fix_request_in_progress">Un correctif personnalisé est déjà en préparation pour ce jeu.</string>
     <string name="support_fix_upgrade_reason">Les correctifs personnalisés sont inclus dans tous les abonnements.</string>
     <string name="support_fix_quota">Vous avez utilisé tous vos correctifs personnalisés pour le moment.</string>
     <string name="support_fix_quota_resets">Vous avez utilisé tous vos correctifs personnalisés. Ils seront réinitialisés le %1$s.</string>
@@ -1661,6 +1663,14 @@
     <string name="gog_login_success_title">Connexion réussie</string>
     <string name="rockstar_login_required_title">Connexion Rockstar requise</string>
     <string name="rockstar_login_failed">Échec de la connexion Rockstar : %1$s</string>
+    <string name="rockstar_link_refused">Ce compte Rockstar est lié à un autre compte Steam.</string>
+    <string name="rockstar_link_title">Lier le compte Steam ?</string>
+    <string name="rockstar_link_text">Liez votre compte Steam %1$s au compte Rockstar %2$s pour pouvoir jouer à ce jeu ici. Rockstar ne permet pas d\'annuler cette liaison par la suite.</string>
+    <string name="rockstar_link_confirm">Lier</string>
+    <string name="rockstar_link_skip">Pas maintenant</string>
+    <string name="rockstar_link_done">Compte Steam lié à Rockstar</string>
+    <string name="rockstar_link_failed">Impossible de lier le compte Steam : %1$s</string>
+    <string name="rockstar_link_unchecked">Impossible de vérifier la liaison Steam. Déconnectez-vous de Rockstar dans les Paramètres, puis reconnectez-vous pour réessayer.</string>
     <string name="ea_login_required_title">Connexion EA requise</string>
     <string name="ea_login_success">Connecté à EA en tant que %1$s</string>
     <string name="ea_login_failed">Échec de la connexion EA : %1$s</string>
