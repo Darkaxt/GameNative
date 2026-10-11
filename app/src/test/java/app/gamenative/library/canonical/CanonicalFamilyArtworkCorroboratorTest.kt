@@ -22,6 +22,7 @@ import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.toList
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -45,6 +46,19 @@ class CanonicalFamilyArtworkCorroboratorTest {
         assertEquals(listOf(originalUrl(1), originalUrl(2)), images.requests.map { it.url })
         assertTrue(images.requests.all { it.source == GameSource.GOG && it.nativeAppId == null })
         assertTrue(reads.groupingBy { it }.eachCount().values.all { it >= 2 })
+        assertEquals(0, images.candidateRequests)
+    }
+
+    @Test
+    fun publicGamesDbOriginalsReachHashingAndGroupWithoutSteamIdentity() = runTest {
+        replace(1) { it.copy(originalArtworkUrl = "${originalUrl(1)}?namespace=gamesdb") }
+        replace(2) { it.copy(originalArtworkUrl = "${originalUrl(2)}?namespace=gamesdb") }
+        val unassigned = cards.map { it.copy(steamAppId = null) }
+        val family = project(producer(), unassigned).single()
+        assertEquals(unassigned.flatMap { it.copies }.toSet(), family.copies.toSet())
+        assertEquals(mapOf(cards[0].canonicalId to null, cards[1].canonicalId to null), family.memberSteamAppIds)
+        assertEquals(2, images.requests.size)
+        assertTrue(images.requests.all { it.url.endsWith("?namespace=gamesdb") })
         assertEquals(0, images.candidateRequests)
     }
 
@@ -212,6 +226,58 @@ class CanonicalFamilyArtworkCorroboratorTest {
         val owner = producer()
         images.action = { throw CancellationException("synthetic owning cancellation") }
         assertTrue(runCatching { project(owner) }.exceptionOrNull() is CancellationException)
+    }
+
+    @Test
+    fun laterFamilyTimeoutCannotDiscardAnAlreadyCorroboratedFamily() = runTest {
+        val later = listOf(card(3, "Later Game"), card(4, "Later Game Deluxe"))
+        later.forEach { runtimes[it.copies.single().key] = available(it) }
+        var cleaned = false
+        images.action = { request ->
+            if (request.url == originalUrl(3)) {
+                try { awaitCancellation() } finally { cleaned = true }
+            } else fingerprint()
+        }
+        val result = project(producer(), cards + later)
+        assertEquals(3, result.size)
+        assertEquals(cards.flatMap { it.copies }.toSet(), result.single { it.isPresentationFamily }.copies.toSet())
+        assertEquals(20_000L, testScheduler.currentTime)
+        assertTrue(cleaned)
+    }
+
+    @Test
+    fun laterFamilyIoFailureCannotDiscardAnAlreadyCorroboratedFamily() = runTest {
+        val later = listOf(card(3, "Later Game"), card(4, "Later Game Deluxe"))
+        later.forEach { runtimes[it.copies.single().key] = available(it) }
+        images.action = { request ->
+            if (request.url == originalUrl(3)) throw IOException("synthetic later family failure")
+            fingerprint()
+        }
+        val result = project(producer(), cards + later)
+        assertEquals(3, result.size)
+        assertEquals(cards.flatMap { it.copies }.toSet(), result.single { it.isPresentationFamily }.copies.toSet())
+        assertEquals(later.map { it.canonicalId }.toSet(), result.filterNot { it.isPresentationFamily }.map { it.canonicalId }.toSet())
+    }
+
+    @Test
+    fun boundedFamilyPhasesContinueAfterOneTimesOutWithoutDroppingEarlierProgress() = runTest {
+        val later = listOf(card(3, "Later Game"), card(4, "Later Game Deluxe"))
+        val final = listOf(card(5, "Zebra Game"), card(6, "Zebra Game Deluxe"))
+        (later + final).forEach { runtimes[it.copies.single().key] = available(it) }
+        var cleaned = false
+        images.action = { request ->
+            if (request.url == originalUrl(3)) {
+                try { awaitCancellation() } finally { cleaned = true }
+            } else fingerprint()
+        }
+        val owner = CanonicalFamilyArtworkCorroborator(images) { key -> runtimes.getValue(key) }
+        val updates = owner.projectBatches(cards + later + final).toList()
+        assertEquals(listOf(5, 4), updates.map { it.size })
+        assertEquals(2, updates.last().count { it.isPresentationFamily })
+        assertEquals(6, updates.last().flatMap { it.copies }.map { it.key }.distinct().size)
+        assertEquals(20_000L, testScheduler.currentTime)
+        assertTrue(cleaned)
+        assertTrue(images.requests.any { it.url == originalUrl(5) })
     }
 
     @Test

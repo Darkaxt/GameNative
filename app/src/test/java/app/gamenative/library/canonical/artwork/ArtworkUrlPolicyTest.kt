@@ -14,6 +14,26 @@ class ArtworkUrlPolicyTest {
     }
 
     @Test(timeout = 5_000)
+    fun gamesDbOriginalCoverRetainsItsFixedPublicNamespace() {
+        val raw = "https://images.gog.com/" +
+            "fb262e008995fad102368fc360b2aeba0ffd62186802e5b42fd25a688573b78d_glx_vertical_cover.webp?namespace=gamesdb"
+        assertNotNull(original(GameSource.GOG, raw))
+        assertNotNull(original(GameSource.GOG, "https://images.gog-statics.com/fixture.webp?namespace=gamesdb"))
+    }
+
+    @Test(timeout = 5_000)
+    fun namespaceExceptionCannotAdmitCredentialsOtherQueriesOrOtherStores() {
+        listOf(
+            "namespace=private", "namespace=", "namespace", "namespace=gamesdb&namespace=gamesdb",
+            "namespace=gamesdb&token=synthetic-secret", "token=synthetic-secret", "Namespace=gamesdb",
+        ).forEach { query ->
+            assertNull(query, original(GameSource.GOG, "https://images.gog.com/fixture.webp?$query"))
+        }
+        assertNull(original(GameSource.EPIC, "https://cdn1.epicgames.com/fixture.jpg?namespace=gamesdb"))
+        assertNull(original(GameSource.AMAZON, "https://m.media-amazon.com/fixture.jpg?namespace=gamesdb"))
+    }
+
+    @Test(timeout = 5_000)
     fun displayedSteamFallbackCannotBecomeOriginalGogOrEpicEvidence() {
         val steam = "https://shared.akamai.steamstatic.com/steam/apps/42/library_600x900.jpg"
         assertNull(original(GameSource.GOG, steam))

@@ -38,6 +38,22 @@ class CachedArtworkFingerprintSourceTest {
     }
 
     @Test
+    fun gamesDbOriginalNamespaceReachesTheProviderAndSurvivesCacheRecreation() = runBlocking {
+        val fingerprint = ArtworkFixtures.fingerprint(192, 288)
+        val raw = "$originalUrl?namespace=gamesdb"
+        val file = File(temporary.root, "fingerprints.bin")
+        val first = cached(file) { requested ->
+            assertEquals(raw, requested)
+            fingerprint
+        }
+        assertEquals(fingerprint, original(first, raw))
+        val recreated = cached(file) { error("Namespaced original must reuse its own public cache") }
+        assertEquals(fingerprint, original(recreated, raw))
+        assertNull(original(recreated, "$raw&token=synthetic-secret"))
+        assertEquals(1, calls)
+    }
+
+    @Test
     fun independentCandidateFetchIsBoundToItsOwnAppIdAndReused() = runBlocking {
         val fingerprint = ArtworkFixtures.fingerprint(192, 288)
         val owner = cached { fingerprint }

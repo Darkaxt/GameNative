@@ -16,7 +16,12 @@ class ArtworkUrlPolicy internal constructor(
         if (source == GameSource.CUSTOM_GAME) return null
         if (source == GameSource.STEAM) return steamAppId?.let { candidateUrl(it, raw) }
         val url = publicUrl(source, raw) ?: return null
-        if (url.querySize != 0 || !IMAGE_PATH.matches(url.encodedPath)) return null
+        if (!IMAGE_PATH.matches(url.encodedPath)) return null
+        if (url.querySize != 0) {
+            if (source != GameSource.GOG || url.querySize != 1 ||
+                url.queryParameterNames != setOf("namespace") || url.queryParameter("namespace") != "gamesdb"
+            ) return null
+        }
         return url
     }
 

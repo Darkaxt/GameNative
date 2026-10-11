@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
@@ -53,7 +54,7 @@ class CanonicalLibraryRepository @Inject constructor(
         .flatMapLatest { cards ->
             flow {
                 emit(cards)
-                familyArtwork?.let { emit(it.project(cards)) }
+                familyArtwork?.let { emitAll(it.projectBatches(cards)) }
             }
         }
         .buffer(0)

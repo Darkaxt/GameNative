@@ -15,8 +15,13 @@ import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
 import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import java.io.IOException
+import java.util.Collections
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** Optional native evidence acquisition; the resulting family is presentation, never a catalog mutation. */
@@ -29,57 +34,79 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
     constructor(fingerprints: CachedArtworkFingerprintSource, runtimes: OwnedCopyRuntimeRegistry) :
         this(fingerprints, runtimes::resolve)
 
+    internal fun projectBatches(cards: List<CanonicalLibraryCard>): Flow<List<CanonicalLibraryCard>> = flow {
+        if (!validSnapshot(cards)) return@flow
+        var projected = cards
+        for (members in candidates(cards)) {
+            currentCoroutineContext().ensureActive()
+            val result = project(members)
+            if (result.size < members.size) {
+                projected = replaceMembers(projected, members, result)
+                emit(projected)
+            }
+        }
+    }
+
     suspend fun project(cards: List<CanonicalLibraryCard>): List<CanonicalLibraryCard> {
-        if (cards.map { it.canonicalId }.distinct().size != cards.size) return cards
+        if (!validSnapshot(cards)) return cards
+        var projected = cards
+        withTimeoutOrNull(PHASE_TIMEOUT_MS) {
+            var consideredMembers = 0
+            for (members in candidates(cards)) {
+                if (consideredMembers + members.size > MAX_PHASE_MEMBERS) continue
+                consideredMembers += members.size
+                val result = try {
+                    corroborate(members)
+                } catch (_: IOException) {
+                    members
+                }
+                if (result.size < members.size) projected = replaceMembers(projected, members, result)
+            }
+        }
+        return projected
+    }
+
+    private fun validSnapshot(cards: List<CanonicalLibraryCard>): Boolean {
+        if (cards.map { it.canonicalId }.distinct().size != cards.size) return false
         val copyKeys = cards.flatMap { it.copies }.map { it.key }
-        if (copyKeys.distinct().size != copyKeys.size) return cards
-        val candidates = cards.filter(CanonicalGameFamilyProjection::eligible)
+        return copyKeys.distinct().size == copyKeys.size
+    }
+
+    private fun candidates(cards: List<CanonicalLibraryCard>): Collection<List<CanonicalLibraryCard>> =
+        cards.filter(CanonicalGameFamilyProjection::eligible)
             .groupBy { CanonicalGameFamilyProjection.familyTitleKey(it.displayName) }
             .toSortedMap().filter { (title, members) ->
                 title.isNotBlank() && members.size in 2..CanonicalGameFamilyProjection.MAX_FAMILY_MEMBERS &&
-                    members.all { it.copies.size <= MAX_MEMBER_COPIES } &&
-                    members.map { it.canonicalId }.distinct().size == members.size &&
-                    members.flatMap { it.copies }.let { copies -> copies.map { it.key }.distinct().size == copies.size }
+                    members.all { it.copies.size <= MAX_MEMBER_COPIES }
             }.values
-        if (candidates.isEmpty()) return cards
-        return try {
-            withTimeoutOrNull(PHASE_TIMEOUT_MS) {
-                val artworks = linkedMapOf<CanonicalGameId, ArtworkFingerprint>()
-                val developers = linkedMapOf<CanonicalGameId, Set<String>>()
-                val evidence = linkedMapOf<CanonicalGameId, Pair<CanonicalLibraryCard, OwnedCopyRuntime>>()
-                var consideredMembers = 0
-                for (members in candidates) {
-                    if (consideredMembers + members.size > MAX_PHASE_MEMBERS) continue
-                    consideredMembers += members.size
-                    val originals = linkedMapOf<CanonicalGameId, OwnedCopyRuntime>()
-                    for (member in members.sortedBy { it.canonicalId.value }) {
-                        val original = originalCopy(member) ?: break
-                        originals[member.canonicalId] = original
-                    }
-                    if (originals.size != members.size) continue
-                    val acquired = linkedMapOf<CanonicalGameId, ArtworkFingerprint>()
-                    for ((id, original) in originals) {
-                        val fingerprint = fingerprints.original(original.key.source, requireNotNull(original.originalArtworkUrl),
-                            (original.reference as? SourceOwnedCopyReference.Steam)?.appId)?.takeIf { it.isValid() } ?: break
-                        acquired[id] = fingerprint
-                    }
-                    if (acquired.size != members.size) continue
-                    artworks.putAll(acquired)
-                    for (member in members) {
-                        val original = originals.getValue(member.canonicalId)
-                        developers[member.canonicalId] = setOf(original.developerKey)
-                        evidence[member.canonicalId] = member to original
-                    }
-                }
-                for ((member, original) in evidence.values) {
-                    val refreshed = currentCopy(original.key, member.copies.single { it.key == original.key })
-                    if (refreshed == null || !sameEvidence(original, refreshed)) return@withTimeoutOrNull cards
-                }
-                CanonicalGameFamilyProjection.project(cards, artworks, developers)
-            } ?: cards
-        } catch (_: IOException) {
-            cards
+
+    private suspend fun corroborate(members: List<CanonicalLibraryCard>): List<CanonicalLibraryCard> {
+        val originals = linkedMapOf<CanonicalGameId, OwnedCopyRuntime>()
+        for (member in members.sortedBy { it.canonicalId.value }) {
+            originals[member.canonicalId] = originalCopy(member) ?: return members
         }
+        val artworks = linkedMapOf<CanonicalGameId, ArtworkFingerprint>()
+        for ((id, original) in originals) {
+            artworks[id] = fingerprints.original(original.key.source, requireNotNull(original.originalArtworkUrl),
+                (original.reference as? SourceOwnedCopyReference.Steam)?.appId)?.takeIf { it.isValid() } ?: return members
+        }
+        for (member in members) {
+            val original = originals.getValue(member.canonicalId)
+            val refreshed = currentCopy(original.key, member.copies.single { it.key == original.key })
+            if (refreshed == null || !sameEvidence(original, refreshed)) return members
+        }
+        return CanonicalGameFamilyProjection.project(members, artworks,
+            originals.mapValues { (_, original) -> setOf(original.developerKey) })
+    }
+
+    private fun replaceMembers(
+        cards: List<CanonicalLibraryCard>,
+        members: List<CanonicalLibraryCard>,
+        result: List<CanonicalLibraryCard>,
+    ): List<CanonicalLibraryCard> {
+        val ids = members.mapTo(hashSetOf()) { it.canonicalId }
+        return Collections.unmodifiableList((cards.filterNot { it.canonicalId in ids } + result)
+            .sortedBy { it.key.stableComposeKey() })
     }
 
     private suspend fun originalCopy(member: CanonicalLibraryCard): OwnedCopyRuntime? {

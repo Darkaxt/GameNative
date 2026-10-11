@@ -20,8 +20,11 @@ import okhttp3.CookieJar
 import okhttp3.EventListener
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okio.Buffer
@@ -65,6 +68,22 @@ class ArtworkImageProviderTest {
         server.enqueue(imageResponse())
         val result = original(provider, server.url("/fixture.png").toString())
         assertNotNull(result)
+        assertTrue(ArtworkFixtures.corroborates(ArtworkFixtures.fingerprint(192, 288), requireNotNull(result)))
+    }
+
+    @Test
+    fun productionPolicyPreservesGamesDbNamespaceThroughTransportAndNativeDecode() = runBlocking {
+        val raw = "https://images.gog.com/fixture_glx_vertical_cover.webp?namespace=gamesdb"
+        var requested: String? = null
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requested = chain.request().url.toString()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(ArtworkEncodedFixtures.png().toResponseBody("image/png".toMediaType())).build()
+        }.build()
+        val provider = ArtworkImageProvider(client, ArtworkUrlPolicy.Default)
+        val result = original(provider, raw)
+        assertNotNull(result)
+        assertEquals(raw, requested)
         assertTrue(ArtworkFixtures.corroborates(ArtworkFixtures.fingerprint(192, 288), requireNotNull(result)))
     }
 

@@ -45,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -93,6 +94,35 @@ class CanonicalFamilyLibraryFlowTest {
         assertFalse(family.copies.any { it.source == GameSource.STEAM })
         assertEquals(setOf(GameSource.GOG, GameSource.EPIC), family.ownedSources)
         assertEquals(2, images.requests.size)
+    }
+
+    @Test
+    fun nativeGamesDbQueryGroupsGogAndEpicInTheActualRoomLibraryFlow() = runFlowTest {
+        seed()
+        val original = (runtimes.getValue(firstKey) as OwnedCopyRuntimeResult.Available).copy
+        runtimes[firstKey] = OwnedCopyRuntimeResult.Available(original.copy(
+            originalArtworkUrl = "${original.originalArtworkUrl}?namespace=gamesdb",
+        ))
+        val before = db.canonicalLibraryDao().observePresentGames().first()
+        val family = repository().observeCards().first { it.size == 1 }.single()
+        assertEquals(setOf(firstKey, secondKey), family.copies.map { it.key }.toSet())
+        assertTrue(images.requests.any { it.endsWith("?namespace=gamesdb") })
+        assertEquals(before, db.canonicalLibraryDao().observePresentGames().first())
+    }
+
+    @Test
+    fun familyAfterThirtyMemberBudgetIsNotPermanentlySkipped() = runFlowTest {
+        for (group in 0L..15L) {
+            val title = "Fixture Game ${group.toString().padStart(2, '0')}"
+            seedMember(group * 2 + 1, key(group * 2 + 1, GameSource.GOG), title)
+            seedMember(group * 2 + 2, key(group * 2 + 2, GameSource.EPIC), "$title Deluxe")
+        }
+        val before = db.canonicalLibraryDao().observePresentGames().first()
+        val families = withTimeoutOrNull(3_000) { repository().observeCards().first { it.size == 16 } }
+        assertTrue("All 16 families must progress, not only the first 30 members", families != null)
+        assertTrue(requireNotNull(families).all { it.isPresentationFamily && it.copies.size == 2 })
+        assertEquals(32, families.flatMap { it.copies }.map { it.key }.distinct().size)
+        assertEquals(before, db.canonicalLibraryDao().observePresentGames().first())
     }
 
     @Test
