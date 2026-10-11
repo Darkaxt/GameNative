@@ -13,6 +13,8 @@ import app.gamenative.db.dao.CanonicalFacetDao
 import app.gamenative.db.dao.GameDetailSnapshotDao
 import app.gamenative.library.canonical.catalog.SteamPublicPicsFacets
 import app.gamenative.library.metadata.CanonicalGameMetadata
+import app.gamenative.library.metadata.GameMetadataProvenance
+import app.gamenative.library.metadata.MetadataProvider
 import app.gamenative.library.metadata.MetadataFacet
 import app.gamenative.library.metadata.MetadataLocale
 import app.gamenative.library.metadata.MetadataLocaleProvider
@@ -306,8 +308,10 @@ class RoomGameFacetRepository private constructor(
     }
 
     private fun decodeMetadata(snapshot: GameDetailSnapshotEntity): CanonicalGameMetadata? {
-        if (snapshot.sourceRevision != STEAM_APPDETAILS_SOURCE_REVISION) return null
+        if (snapshot.sourceRevision !in STEAM_APPDETAILS_SOURCE_REVISIONS) return null
         return try {
+            val provenance = JSON.decodeFromString<GameMetadataProvenance>(snapshot.provenanceJson)
+            if (provenance.provider != MetadataProvider.STEAM_APPDETAILS) return null
             JSON.decodeFromString<CanonicalGameMetadata>(snapshot.payloadJson)
         } catch (_: SerializationException) {
             null
@@ -317,7 +321,9 @@ class RoomGameFacetRepository private constructor(
     }
 
     private companion object {
-        const val STEAM_APPDETAILS_SOURCE_REVISION = "steam_appdetails_v1"
+        val STEAM_APPDETAILS_SOURCE_REVISIONS = setOf(
+            "steam_appdetails_v1", "steam_appdetails_v2", "steam_appdetails_v3", "steam_appdetails_v4",
+        )
         val JSON = Json { ignoreUnknownKeys = true }
         val STEAM_GENRE_LABELS = mapOf(
             1 to "Action",

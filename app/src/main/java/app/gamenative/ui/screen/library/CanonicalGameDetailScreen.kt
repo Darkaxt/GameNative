@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -88,7 +87,7 @@ import app.gamenative.ui.screen.library.components.GameMediaItem
 import app.gamenative.ui.screen.library.components.GameMediaPager
 import app.gamenative.ui.screen.library.components.GameOptionsPanel
 import app.gamenative.ui.screen.library.components.OwnedSourceBadges
-import app.gamenative.ui.screen.library.components.ResponsiveDetailGrid
+import app.gamenative.ui.screen.library.components.ResponsiveDetailColumns
 import app.gamenative.ui.screen.library.components.SteamDiscussionsTab
 import app.gamenative.ui.screen.library.components.SteamMediaGallery
 import app.gamenative.ui.screen.library.components.SteamMediaImage
@@ -243,8 +242,8 @@ internal fun CanonicalGameDetailScreen(
 
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
                         .widthIn(max = DETAIL_MAX_WIDTH)
+                        .fillMaxWidth()
                         .weight(1f)
                         .align(Alignment.CenterHorizontally),
                 ) {
@@ -551,93 +550,91 @@ private fun DetailOverview(
                     }
                 }
                 else -> {
-                    ResponsiveDetailGrid(
-                        sections = listOf(
-                            {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().testTag("canonical-detail-overview-reading"),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                                ) {
-                                    if (media.isNotEmpty() || !metadata.headerImageUrl.isNullOrBlank()) {
-                                        SteamMediaGallery(
-                                            media = media, fallbackImageUrl = metadata.headerImageUrl,
-                                            contentDescription = title, provider = mediaProvider,
-                                            modifier = Modifier.widthIn(max = galleryWidth).fillMaxWidth()
-                                                .align(Alignment.CenterHorizontally),
-                                        )
-                                    }
-                                    metadata.shortDescription?.let { description ->
-                                        Text(
-                                            text = description,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                        )
-                                    }
-                                    metadata.about?.let { about ->
-                                        Text(
-                                            text = stringResource(R.string.canonical_detail_about),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                        Text(text = about, style = MaterialTheme.typography.bodyMedium)
-                                    }
-                                    if (metadata.features.isNotEmpty()) {
-                                        Text(
-                                            text = stringResource(R.string.canonical_detail_features),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                                        ) {
-                                            metadata.features.forEach { feature ->
-                                                AssistChip(onClick = {}, label = { Text(feature.label) })
-                                            }
-                                        }
-                                    }
+                    ResponsiveDetailColumns(
+                        primary = {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().testTag("canonical-detail-overview-reading"),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                if (media.isNotEmpty() || !metadata.headerImageUrl.isNullOrBlank()) {
+                                    SteamMediaGallery(
+                                        media = media, fallbackImageUrl = metadata.headerImageUrl,
+                                        contentDescription = title, provider = mediaProvider,
+                                        modifier = Modifier.widthIn(max = galleryWidth).fillMaxWidth()
+                                            .align(Alignment.CenterHorizontally),
+                                    )
                                 }
-                            },
-                            {
-                                DetailSection(Modifier.testTag("canonical-detail-overview-summary")) {
-                                    if (hasSteamIdentity) {
-                                        DetailReviewSummary(reviewSummaryState, cachedReviewCount, onRetryReviewSummary)
-                                    }
-                                    compatibilityStatus?.let { status ->
-                                        HorizontalDivider()
-                                        Text(
-                                            text = stringResource(status.labelResId()),
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                    }
-                                    hltbStats?.let { stats ->
-                                        Text(
-                                            text = stringResource(R.string.canonical_detail_hltb_main, stats.mainHours),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                        )
-                                    }
-                                    metadata.releaseDate?.let { DetailField(R.string.canonical_detail_release, it) }
-                                    Column(
-                                        modifier = Modifier.testTag("canonical-detail-ownership"),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                metadata.shortDescription?.let { description ->
+                                    Text(
+                                        text = description,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                }
+                                metadata.about?.let { about ->
+                                    Text(
+                                        text = stringResource(R.string.canonical_detail_about),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(text = about, style = MaterialTheme.typography.bodyMedium)
+                                }
+                                if (metadata.features.isNotEmpty()) {
+                                    Text(
+                                        text = stringResource(R.string.canonical_detail_features),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
                                     ) {
-                                        Text(stringResource(R.string.canonical_copies_title), style = MaterialTheme.typography.titleMedium)
-                                        OwnedSourceBadges(sources = ownedSources.toList(), iconSize = 16)
-                                        copies.forEach { copy ->
-                                            Text(copy.nativeTitle, style = MaterialTheme.typography.bodyMedium)
-                                            Text(
-                                                stringResource(
-                                                    if (copy.isInstalled) R.string.library_installed else R.string.library_not_installed,
-                                                ),
-                                            )
-                                            copy.playtimeMinutes?.let { Text(stringResource(R.string.canonical_copy_playtime_minutes, it)) }
+                                        metadata.features.forEach { feature ->
+                                            AssistChip(onClick = {}, label = { Text(feature.label) })
                                         }
                                     }
-                                    DetailProvenance(state, metadata, showFields = false)
-                                    sourceDetails?.let { CanonicalSourceInformation(it) }
                                 }
-                            },
-                        ),
+                            }
+                        },
+                        compact = {
+                            DetailSection(Modifier.testTag("canonical-detail-overview-summary")) {
+                                if (hasSteamIdentity) {
+                                    DetailReviewSummary(reviewSummaryState, cachedReviewCount, onRetryReviewSummary)
+                                }
+                                compatibilityStatus?.let { status ->
+                                    HorizontalDivider()
+                                    Text(
+                                        text = stringResource(status.labelResId()),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                                hltbStats?.let { stats ->
+                                    Text(
+                                        text = stringResource(R.string.canonical_detail_hltb_main, stats.mainHours),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                }
+                                metadata.releaseDate?.let { DetailField(R.string.canonical_detail_release, it) }
+                                Column(
+                                    modifier = Modifier.testTag("canonical-detail-ownership"),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(stringResource(R.string.canonical_copies_title), style = MaterialTheme.typography.titleMedium)
+                                    OwnedSourceBadges(sources = ownedSources.toList(), iconSize = 16)
+                                    copies.forEach { copy ->
+                                        Text(copy.nativeTitle, style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            stringResource(
+                                                if (copy.isInstalled) R.string.library_installed else R.string.library_not_installed,
+                                            ),
+                                        )
+                                        copy.playtimeMinutes?.let { Text(stringResource(R.string.canonical_copy_playtime_minutes, it)) }
+                                    }
+                                }
+                                DetailProvenance(state, metadata, showFields = false)
+                                sourceDetails?.let { CanonicalSourceInformation(it) }
+                            }
+                        },
                     )
                 }
             }
@@ -733,88 +730,40 @@ private fun DetailFields(
 ) {
     var minimumExpanded by rememberSaveable { mutableStateOf(false) }
     var recommendedExpanded by rememberSaveable { mutableStateOf(false) }
+    val facts = metadata?.let {
+        listOf(
+            DetailFact("developer", R.string.canonical_detail_developer, it.developers.joinToString(", ")),
+            DetailFact("publisher", R.string.canonical_detail_publisher, it.publishers.joinToString(", ")),
+            DetailFact("release", R.string.canonical_detail_release, it.releaseDate),
+            DetailFact(
+                "platforms", R.string.canonical_detail_platforms,
+                GamePlatform.entries.filter(it.platforms::contains).joinToString(", ") { platform -> platform.label() },
+            ),
+            DetailFact("genres", R.string.canonical_detail_genres, it.genres.joinToString(", ") { genre -> genre.label }),
+            DetailFact("features", R.string.canonical_detail_features, it.features.joinToString(", ") { feature -> feature.label }),
+            DetailFact("achievements", R.string.canonical_detail_achievements, it.achievementCount?.toString()),
+            DetailFact("dlc", R.string.canonical_detail_dlc, it.dlcCount?.toString()),
+            DetailFact("age", R.string.canonical_detail_required_age, it.contentRatings?.requiredAge?.toString()),
+            DetailFact("critic", R.string.canonical_detail_critic_score, it.contentRatings?.criticScore?.toString()),
+            DetailFact("descriptors", R.string.canonical_detail_content_descriptors, it.contentRatings?.descriptorIds?.joinToString(", ")),
+            DetailFact("notes", R.string.canonical_detail_content_notes, it.contentRatings?.notes),
+        ).filterNot { fact -> fact.value.isNullOrBlank() }
+    }.orEmpty()
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        sourceDetails?.let { DetailSection { CanonicalSourceInformation(it) } }
-        if (metadata == null) {
-            Text(stringResource(R.string.canonical_detail_unavailable))
-        } else {
-            val facts = listOf(
-                DetailFact("developer", R.string.canonical_detail_developer, metadata.developers.joinToString(", ")),
-                DetailFact("publisher", R.string.canonical_detail_publisher, metadata.publishers.joinToString(", ")),
-                DetailFact("release", R.string.canonical_detail_release, metadata.releaseDate),
-                DetailFact(
-                    "platforms", R.string.canonical_detail_platforms,
-                    GamePlatform.entries
-                        .filter(metadata.platforms::contains).joinToString(", ") { it.label() },
-                ),
-                DetailFact("genres", R.string.canonical_detail_genres, metadata.genres.joinToString(", ") { it.label }),
-                DetailFact("features", R.string.canonical_detail_features, metadata.features.joinToString(", ") { it.label }),
-                DetailFact("achievements", R.string.canonical_detail_achievements, metadata.achievementCount?.toString()),
-                DetailFact("dlc", R.string.canonical_detail_dlc, metadata.dlcCount?.toString()),
-                DetailFact("age", R.string.canonical_detail_required_age, metadata.contentRatings?.requiredAge?.toString()),
-                DetailFact("critic", R.string.canonical_detail_critic_score, metadata.contentRatings?.criticScore?.toString()),
-                DetailFact(
-                    "descriptors", R.string.canonical_detail_content_descriptors,
-                    metadata.contentRatings?.descriptorIds?.joinToString(", "),
-                ),
-                DetailFact("notes", R.string.canonical_detail_content_notes, metadata.contentRatings?.notes),
-            ).filterNot { it.value.isNullOrBlank() }
-            ResponsiveDetailGrid(
-                sections = facts.map { fact ->
-                    {
+        ResponsiveDetailColumns(
+            compactFirst = true,
+            hasCompact = facts.isNotEmpty() || sourceDetails != null || steamMatchStatus != null,
+            compact = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    sourceDetails?.let { DetailSection { CanonicalSourceInformation(it) } }
+                    facts.forEach { fact ->
                         DetailSection(Modifier.testTag("canonical-detail-fact:${fact.key}")) {
                             DetailField(fact.label, fact.value)
                         }
                     }
-                },
-                minimumColumnWidth = 300.dp,
-            )
-            ResponsiveDetailGrid(
-                sections = buildList {
-                    if (metadata.languages.isNotEmpty() || metadata.languageSupport.isNotEmpty()) {
-                        add {
-                            DetailSection(Modifier.testTag("canonical-detail-languages")) {
-                                Text(stringResource(R.string.canonical_detail_languages), style = MaterialTheme.typography.titleMedium)
-                                if (metadata.languageSupport.isEmpty()) {
-                                    Text(metadata.languages.joinToString(", "))
-                                } else {
-                                    DetailLanguageMatrix(
-                                        metadata.languageSupport + metadata.languages
-                                            .filterNot { name -> metadata.languageSupport.any { it.name == name } }
-                                            .map { GameLanguageSupport(it) },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    metadata.requirements?.minimum?.takeIf(String::isNotBlank)?.let { minimum ->
-                        add {
-                            ExpandableDetailSection(
-                                R.string.canonical_detail_minimum_requirements, "minimum", minimumExpanded,
-                                onToggle = { minimumExpanded = !minimumExpanded },
-                            ) { Text(minimum) }
-                        }
-                    }
-                    metadata.requirements?.recommended?.takeIf(String::isNotBlank)?.let { recommended ->
-                        add {
-                            ExpandableDetailSection(
-                                R.string.canonical_detail_recommended_requirements, "recommended", recommendedExpanded,
-                                onToggle = { recommendedExpanded = !recommendedExpanded },
-                            ) { Text(recommended) }
-                        }
-                    }
-                    add { DetailSection { DetailStoreInformation(metadata, onOpen) } }
-                    add { DetailSection { DetailProvenance(state, metadata, showFields = true) } }
-                },
-            )
-        }
-        ResponsiveDetailGrid(
-            sections = buildList {
-                steamMatchStatus?.let { status ->
-                    add {
+                    steamMatchStatus?.let { status ->
                         DetailSection {
                             Text(stringResource(R.string.steam_match_title), style = MaterialTheme.typography.titleMedium)
                             Text(stringResource(status.labelResId()), style = MaterialTheme.typography.bodyLarge)
@@ -826,7 +775,46 @@ private fun DetailFields(
                         }
                     }
                 }
-                add { DetailSection { DetailResourcesSection(links = links, onOpen = onOpen) } }
+            },
+            primary = {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    if (metadata == null) {
+                        Text(stringResource(R.string.canonical_detail_unavailable))
+                    } else {
+                        if (metadata.languages.isNotEmpty() || metadata.languageSupport.isNotEmpty()) {
+                            DetailSection(Modifier.testTag("canonical-detail-languages")) {
+                                Text(stringResource(R.string.canonical_detail_languages), style = MaterialTheme.typography.titleMedium)
+                                DetailLanguageSupport(
+                                    metadata.languageSupport + metadata.languages
+                                        .filterNot { name -> metadata.languageSupport.any { it.name == name } }
+                                        .map { GameLanguageSupport(it) },
+                                )
+                            }
+                        }
+                        metadata.requirements?.minimum?.takeIf(String::isNotBlank)?.let { minimum ->
+                            ExpandableDetailSection(
+                                R.string.canonical_detail_minimum_requirements, "minimum", minimumExpanded,
+                                onToggle = { minimumExpanded = !minimumExpanded },
+                            ) { Text(minimum) }
+                        }
+                        metadata.requirements?.recommended?.takeIf(String::isNotBlank)?.let { recommended ->
+                            ExpandableDetailSection(
+                                R.string.canonical_detail_recommended_requirements, "recommended", recommendedExpanded,
+                                onToggle = { recommendedExpanded = !recommendedExpanded },
+                            ) { Text(recommended) }
+                        }
+                        if (metadata.storePrice != null || metadata.storePackages.isNotEmpty() || metadata.isFree == true ||
+                            listOf(metadata.storeLinks?.website, metadata.storeLinks?.support, metadata.storeLinks?.manual)
+                                .any { safeMetadataExternalLink(it) != null }
+                        ) {
+                            DetailSection { DetailStoreInformation(metadata, onOpen) }
+                        }
+                        if (state is GameDetailState.Content) {
+                            DetailSection { DetailProvenance(state, metadata, showFields = true) }
+                        }
+                    }
+                    DetailSection { DetailResourcesSection(links = links, onOpen = onOpen) }
+                }
             },
         )
     }
@@ -857,43 +845,36 @@ private fun ExpandableDetailSection(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DetailLanguageMatrix(languages: List<GameLanguageSupport>) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(
-            R.string.canonical_detail_languages, R.string.canonical_detail_language_interface,
-            R.string.canonical_detail_language_audio, R.string.canonical_detail_language_subtitles,
-        ).forEach { label ->
-            Text(stringResource(label), modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-        }
+private fun DetailLanguageSupport(languages: List<GameLanguageSupport>) {
+    if (languages.none { it.interfaceSupported != null || it.fullAudioSupported != null || it.subtitlesSupported != null }) {
+        Text(languages.joinToString(", ") { it.name })
+        return
     }
     languages.forEachIndexed { index, language ->
-        HorizontalDivider()
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(language.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            listOf(
-                "interface" to language.interfaceSupported, "audio" to language.fullAudioSupported,
-                "subtitles" to language.subtitlesSupported,
-            ).forEach { (key, supported) ->
-                Text(
-                    supported.capabilityLabel(),
-                    modifier = Modifier.weight(1f)
-                        .testTag("canonical-detail-language:$index:$key"),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(language.name, style = MaterialTheme.typography.bodyMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(
+                    Triple("interface", R.string.canonical_detail_language_interface, language.interfaceSupported),
+                    Triple("audio", R.string.canonical_detail_language_audio, language.fullAudioSupported),
+                    Triple("subtitles", R.string.canonical_detail_language_subtitles, language.subtitlesSupported),
+                ).forEach { (key, label, supported) ->
+                    if (supported != null) {
+                        val stateLabel = stringResource(if (supported) R.string.yes else R.string.no)
+                        Text(
+                            "${stringResource(label)} ${if (supported) "✓" else "✗"}",
+                            modifier = Modifier.testTag("canonical-detail-language:$index:$key")
+                                .semantics { stateDescription = stateLabel },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
             }
         }
     }
 }
-
-@Composable
-private fun Boolean?.capabilityLabel(): String = stringResource(
-    when (this) {
-        true -> R.string.yes
-        false -> R.string.no
-        null -> R.string.canonical_detail_support_unknown
-    },
-)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

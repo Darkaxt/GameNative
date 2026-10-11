@@ -224,9 +224,11 @@ class SteamCatalogProvider internal constructor(
     private fun parseLanguages(raw: String?): List<String> = parseLanguageSupport(raw).map(GameLanguageSupport::name)
 
     private fun parseLanguageSupport(raw: String?): List<GameLanguageSupport> {
-        val separated = sanitizeSteamText(raw?.replace(BREAK_TAG, ",")) ?: return emptyList()
-        val hasAudioLegend = separated.contains("languages with full audio support", ignoreCase = true)
-        return separated.split(',').take(65).mapNotNull { entry ->
+        val sections = raw?.take(MAX_LANGUAGE_TEXT_LENGTH)?.split(BREAK_TAG).orEmpty().mapNotNull(::sanitizeSteamText)
+        val hasAudioLegend = raw != null && raw.length <= MAX_LANGUAGE_TEXT_LENGTH &&
+            sections.size > 1 && sections.last().let { it.startsWith('*') && it.drop(1).isNotBlank() }
+        val names = if (hasAudioLegend) sections.dropLast(1) else sections
+        return names.flatMap { it.split(',') }.take(65).mapNotNull { entry ->
             val text = entry.trim()
             if (text.isEmpty() || text.startsWith('*')) return@mapNotNull null
             val name = text.trimEnd('*').trim().take(80).takeIf(String::isNotBlank) ?: return@mapNotNull null
@@ -305,6 +307,7 @@ class SteamCatalogProvider internal constructor(
         const val DEFAULT_ENDPOINT = "https://store.steampowered.com/api/appdetails"
         const val MAX_NETWORK_HOPS = 4
         const val MAX_RESPONSE_BYTES = 4L * 1024L * 1024L
+        const val MAX_LANGUAGE_TEXT_LENGTH = 16_384
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
         val BREAK_TAG = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
         val RELEASE_YEAR = Regex("(?<!\\d)\\d{4}(?!\\d)")

@@ -7,6 +7,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -45,13 +46,17 @@ class CanonicalResponsiveLayoutTest {
     @get:Rule(order = 1) val composeRule = createComposeRule()
 
     @Test
-    fun wideDetailsFactsUseColumnsInsteadOfAContinuousTextScroll() {
+    fun wideDetailsKeepCompactFactsBesideTheWiderTechnicalColumn() {
         screen()
         tab("DETAILS")
         val developer = bounds("canonical-detail-fact:developer")
         val publisher = bounds("canonical-detail-fact:publisher")
-        assertEquals(developer.top, publisher.top, 1f)
-        assertTrue(publisher.left > developer.right)
+        val languages = bounds("canonical-detail-languages")
+        assertTrue(publisher.top >= developer.bottom)
+        assertEquals(developer.left, publisher.left, 1f)
+        assertEquals(developer.top, languages.top, 1f)
+        assertTrue(languages.left > developer.right)
+        assertTrue("technical content needs more width than compact facts", languages.width > developer.width * 1.5f)
         composeRule.onNodeWithText("Fixture Studio").assertIsDisplayed()
         composeRule.onNodeWithText("Fixture Publisher").assertIsDisplayed()
     }
@@ -71,32 +76,94 @@ class CanonicalResponsiveLayoutTest {
     }
 
     @Test
-    fun languageCapabilitiesHaveSeparateAlignedColumnsAndUnknownIsNotFalse() {
+    fun knownLanguageCapabilitiesUseLabeledTicksAndCrossesWithoutUnknownCells() {
         screen()
         tab("DETAILS")
         composeRule.onNodeWithTag("canonical-detail-languages").performScrollTo()
-        val interfaceCell = bounds("canonical-detail-language:0:interface")
-        val audioCell = bounds("canonical-detail-language:0:audio")
-        val subtitlesCell = bounds("canonical-detail-language:0:subtitles")
-        assertEquals(interfaceCell.top, audioCell.top, 1f)
-        assertEquals(audioCell.top, subtitlesCell.top, 1f)
-        assertTrue(interfaceCell.right <= audioCell.left && audioCell.right <= subtitlesCell.left)
         val context = ApplicationProvider.getApplicationContext<Application>()
-        composeRule.onNodeWithTag("canonical-detail-language:0:subtitles")
-            .assertTextEquals(context.getString(R.string.canonical_detail_support_unknown))
+        composeRule.onNodeWithTag("canonical-detail-language:0:interface")
+            .assertTextEquals("${context.getString(R.string.canonical_detail_language_interface)} ✓")
         composeRule.onNodeWithTag("canonical-detail-language:0:audio")
-            .assertTextEquals(context.getString(R.string.no))
+            .assertTextEquals("${context.getString(R.string.canonical_detail_language_audio)} ✗")
+        composeRule.onNodeWithTag("canonical-detail-language:0:subtitles").assertDoesNotExist()
+        composeRule.onNodeWithText(context.getString(R.string.canonical_detail_support_unknown)).assertDoesNotExist()
     }
 
     @Test
-    fun languageNamesWithoutCapabilityRowsRemainVisibleAsUnknown() {
+    fun languageNamesWithoutCapabilitiesRemainVisibleWithoutInventedCells() {
         screen()
         tab("DETAILS")
         composeRule.onNodeWithTag("canonical-detail-languages").performScrollTo()
         composeRule.onNodeWithText("French").assertExists()
-        val context = ApplicationProvider.getApplicationContext<Application>()
-        composeRule.onNodeWithTag("canonical-detail-language:1:audio")
-            .assertTextEquals(context.getString(R.string.canonical_detail_support_unknown))
+        listOf("interface", "audio", "subtitles").forEach { key ->
+            composeRule.onNodeWithTag("canonical-detail-language:1:$key").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun allNullCapabilityRowsRenderOnlyTheCompactLanguageList() {
+        screen(metadataTransform = {
+            it.copy(languageSupport = listOf(GameLanguageSupport("English"), GameLanguageSupport("French")))
+        })
+        tab("DETAILS")
+        composeRule.onNodeWithTag("canonical-detail-languages").performScrollTo()
+        composeRule.onNodeWithText("English, French").assertIsDisplayed()
+        listOf("interface", "audio", "subtitles").forEach { key ->
+            composeRule.onNodeWithTag("canonical-detail-language:0:$key").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun tallFactsCannotDelayTheOtherColumnsLanguageAndRequirementsSections() {
+        screen(metadataTransform = { it.copy(developers = listOf(List(24) { line -> "Studio description line $line" }.joinToString("\n"))) })
+        tab("DETAILS")
+        val developer = unclippedBounds("canonical-detail-fact:developer")
+        val languages = unclippedBounds("canonical-detail-languages")
+        val minimum = unclippedBounds("canonical-detail-requirements:minimum")
+        assertEquals(developer.top.value, languages.top.value, 1f)
+        assertTrue("requirements must flow independently: minimum=$minimum developer=$developer languages=$languages",
+            minimum.top < developer.bottom)
+        assertTrue(languages.left > developer.right)
+    }
+
+    @Test
+    @Config(qualifiers = "w420dp-h900dp")
+    fun narrowLargeFontLanguageSupportWrapsWithoutHorizontalOverflow() {
+        screen(fontScale = { 1.8f })
+        tab("DETAILS")
+        composeRule.onNodeWithTag("canonical-detail-languages").performScrollTo()
+        assertWithinViewport("canonical-detail-languages")
+        assertWithinViewport("canonical-detail-language:0:interface")
+        assertWithinViewport("canonical-detail-language:0:audio")
+        composeRule.onNodeWithTag("canonical-detail-language:0:subtitles").assertDoesNotExist()
+    }
+
+    @Test
+    fun sparseDetailsDoNotReserveAnEmptyFactsSidebar() {
+        screen(metadataTransform = {
+            it.copy(developers = emptyList(), publishers = emptyList(), releaseDate = null,
+                platforms = emptySet(), achievementCount = null, dlcCount = null)
+        })
+        tab("DETAILS")
+        val languages = unclippedBounds("canonical-detail-languages")
+        val root = unclippedBounds("canonical-detail-screen")
+        assertTrue("absent facts must not consume a sidebar", languages.right - languages.left > (root.right - root.left) * 0.8f)
+    }
+
+    @Test
+    fun mediaSelectionSurvivesWideStackedWideResponsiveTransitions() {
+        val fontScale = mutableStateOf(1f)
+        screen(fontScale = { fontScale.value }, metadataTransform = {
+            it.copy(screenshots = listOf("https://untrusted.invalid/one.jpg", "https://untrusted.invalid/two.jpg"))
+        })
+        composeRule.onNodeWithTag("steam-media-thumbnail:1").performClick()
+        composeRule.onNodeWithText("2/2").assertExists()
+        composeRule.runOnIdle { fontScale.value = 2f }
+        composeRule.onNodeWithText("2/2").assertExists()
+        composeRule.runOnIdle { fontScale.value = 1f }
+        composeRule.onNodeWithText("2/2").assertExists()
+        composeRule.onNodeWithTag("steam-media-gallery").performScrollTo()
+        assertWithinViewport("steam-media-gallery")
     }
 
     @Test
@@ -120,6 +187,18 @@ class CanonicalResponsiveLayoutTest {
         val summary = bounds("canonical-detail-overview-summary")
         assertEquals(reading.top, summary.top, 1f)
         assertTrue(reading.right < summary.left)
+        assertTrue("reading content must be wider than its summary sidebar", reading.width > summary.width * 1.5f)
+    }
+
+    @Test
+    @Config(qualifiers = "w2000dp-h900dp")
+    fun veryWideOverviewKeepsTheBodyBoundedAndCentered() {
+        screen()
+        val reading = unclippedBounds("canonical-detail-overview-reading")
+        val summary = unclippedBounds("canonical-detail-overview-summary")
+        val root = unclippedBounds("canonical-detail-screen")
+        assertTrue("body must retain its 1180dp reading bound", (summary.right - reading.left).value <= 1180f)
+        assertEquals(((root.left + root.right) / 2f).value, ((reading.left + summary.right) / 2f).value, 1f)
     }
 
     @Test
@@ -225,8 +304,15 @@ class CanonicalResponsiveLayoutTest {
     private fun bounds(tag: String) = composeRule.onNodeWithTag(tag, useUnmergedTree = true)
         .fetchSemanticsNode().boundsInRoot
 
-    private fun screen(fontScale: (() -> Float)? = null, communityEntries: Int = 1) {
-        val metadata = CanonicalGameMetadata(
+    private fun unclippedBounds(tag: String) = composeRule.onNodeWithTag(tag, useUnmergedTree = true)
+        .getUnclippedBoundsInRoot()
+
+    private fun screen(
+        fontScale: (() -> Float)? = null,
+        communityEntries: Int = 1,
+        metadataTransform: (CanonicalGameMetadata) -> CanonicalGameMetadata = { it },
+    ) {
+        val metadata = metadataTransform(CanonicalGameMetadata(
             title = "Fixture game", shortDescription = "Fixture short description", about = "Fixture about",
             headerImageUrl = null, screenshots = emptyList(), movies = emptyList(),
             developers = listOf("Fixture Studio"), publishers = listOf("Fixture Publisher"),
@@ -239,7 +325,7 @@ class CanonicalResponsiveLayoutTest {
                     fullAudioSupported = false, subtitlesSupported = null,
                 ),
             ),
-        )
+        ))
         composeRule.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(

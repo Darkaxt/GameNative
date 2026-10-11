@@ -51,7 +51,7 @@ class GameMetadataRepositoryTest {
         assertEquals(canonicalId.value, stored.canonicalId)
         assertEquals("en-US", stored.locale)
         assertEquals("US", stored.country)
-        assertEquals("steam_appdetails_v3", stored.sourceRevision)
+        assertEquals("steam_appdetails_v4", stored.sourceRevision)
         assertTrue(stored.provenanceJson.contains("STEAM_APPDETAILS"))
         assertFalse(stored.payloadJson.contains(TRUSTED_APP_ID.toString()))
         assertEquals(listOf(MetadataFacet(1, "Action")), facetRepository.lastGenres)
@@ -364,7 +364,42 @@ class GameMetadataRepositoryTest {
         val repository = repository(FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)), snapshots,
             FakeProvider(metadata("Fresh title", NOW)))
         assertEquals(MetadataRefreshResult.Refreshed, repository.refresh(canonicalId()))
-        assertEquals("steam_appdetails_v3", snapshots.current.value?.sourceRevision)
+        assertEquals("steam_appdetails_v4", snapshots.current.value?.sourceRevision)
+    }
+
+    @Test
+    fun currentAgeV3LanguagesAreServedStaleBeforeCorrectedCapabilitiesRefresh() = runTest {
+        val old = metadata("Cached localized languages", NOW - 1_000).copy(
+            languages = listOf("Englisch"), languageSupport = listOf(GameLanguageSupport("Englisch")),
+        )
+        val snapshots = FakeSnapshotDao(snapshot(old).copy(sourceRevision = "steam_appdetails_v3"))
+        val fresh = old.copy(languageSupport = listOf(GameLanguageSupport("Englisch", fullAudioSupported = true)))
+        val provider = FakeProvider(fresh)
+        val repository = repository(FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)), snapshots, provider)
+
+        val states = repository.observe(canonicalId()).filterIsInstance<GameDetailState.Content>().take(2).toList()
+        assertTrue("v3 must refresh even inside its seven-day TTL", states.first().stale)
+        assertEquals(null, states.first().metadata.languageSupport.single().fullAudioSupported)
+        assertEquals(true, states.last().metadata.languageSupport.single().fullAudioSupported)
+        assertFalse(states.last().stale)
+        assertEquals("steam_appdetails_v4", snapshots.current.value?.sourceRevision)
+        assertEquals(listOf(TRUSTED_APP_ID), provider.requestedIds)
+    }
+
+    @Test
+    fun failedV3LanguageRefreshPreservesUsableNamesAndReportsStaleFailure() = runTest {
+        val old = metadata("Offline localized languages", NOW - 1_000).copy(languages = listOf("Englisch"))
+        val snapshot = snapshot(old).copy(sourceRevision = "steam_appdetails_v3")
+        val snapshots = FakeSnapshotDao(snapshot)
+        val provider = FakeProvider(failure = IOException("offline"))
+        val repository = repository(FakeCanonicalGameDao(canonical(TRUSTED_APP_ID)), snapshots, provider)
+
+        val states = repository.observe(canonicalId()).filterIsInstance<GameDetailState.Content>().take(2).toList()
+        assertTrue(states.first().stale)
+        assertEquals(old.languages, states.last().metadata.languages)
+        assertTrue(states.last().stale && states.last().refreshFailed)
+        assertEquals(snapshot, snapshots.current.value)
+        assertEquals(listOf(TRUSTED_APP_ID), provider.requestedIds)
     }
 
     private fun repository(
@@ -430,7 +465,7 @@ class GameMetadataRepositoryTest {
                 ),
             ),
             fetchedAt = metadata.fetchedAtEpochMs,
-            sourceRevision = "steam_appdetails_v3",
+            sourceRevision = "steam_appdetails_v4",
         )
 
     private fun decode(entity: GameDetailSnapshotEntity?): CanonicalGameMetadata =

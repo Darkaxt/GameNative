@@ -418,6 +418,55 @@ class SteamCatalogProviderTest {
     }
 
     @Test
+    fun localizedAudioLegendUsesTheProviderMarkerNotAnEnglishSentence() = runTest {
+        server.enqueue(MockResponse().setBody(languageFixture(
+            "Englisch<strong>*</strong>, Französisch<strong>*</strong>, Japanisch<br><strong>*</strong>Sprachen mit voller Audiounterstützung",
+        )))
+        val metadata = requireNotNull(provider().fetch(TRUSTED_APP_ID, MetadataLocale("de-DE", "DE")))
+
+        assertEquals(listOf("Englisch", "Französisch", "Japanisch"), metadata.languages)
+        assertEquals(listOf(true, true, false), metadata.languageSupport.map { it.fullAudioSupported })
+        assertTrue(metadata.languageSupport.all { it.interfaceSupported == null && it.subtitlesSupported == null })
+        assertEquals("german", server.takeRequest().requestUrl?.queryParameter("l"))
+    }
+
+    @Test
+    fun namesOrStarsWithoutAnAudioLegendDoNotInventCapabilities() = runTest {
+        listOf("English, French", "English<strong>*</strong>, French").forEach { raw ->
+            server.enqueue(MockResponse().setBody(languageFixture(raw)))
+            val metadata = requireNotNull(provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US")))
+            assertEquals(listOf("English", "French"), metadata.languages)
+            assertTrue(metadata.languageSupport.all {
+                it.fullAudioSupported == null && it.interfaceSupported == null && it.subtitlesSupported == null
+            })
+        }
+    }
+
+    @Test
+    fun audioLegendPhraseWithoutItsLeadingMarkerIsNotCapabilityAuthority() = runTest {
+        server.enqueue(MockResponse().setBody(languageFixture(
+            "English<strong>*</strong>, French<br>languages with full audio support",
+        )))
+        val metadata = requireNotNull(provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US")))
+        assertTrue(metadata.languageSupport.all { it.fullAudioSupported == null })
+    }
+
+    @Test
+    fun oversizedLanguageFieldCannotAcquireAuthorityFromAnOutOfBoundsLegend() = runTest {
+        server.enqueue(MockResponse().setBody(languageFixture(
+            "English<strong>*</strong>, French" + " ".repeat(20_000) +
+                "<br><strong>*</strong>languages with full audio support",
+        )))
+        val metadata = requireNotNull(provider().fetch(TRUSTED_APP_ID, MetadataLocale("en-US", "US")))
+        assertEquals(listOf("English", "French"), metadata.languages)
+        assertTrue(metadata.languageSupport.all { it.fullAudioSupported == null })
+    }
+
+    private fun languageFixture(raw: String): String = successFixture().replace(
+        "<strong>English</strong>, French<br>German", raw,
+    )
+
+    @Test
     fun malformedExtendedFieldsAndCredentialLinksDoNotDiscardDescriptions() = runTest {
         server.enqueue(MockResponse().setBody(extendedFixture()
             .replace("\"initial\": 2499", "\"initial\": -1")

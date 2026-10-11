@@ -251,6 +251,26 @@ class GameFacetRepositoryTest {
         )
     }
 
+    @Test
+    fun currentAndUsableLegacyDetailRevisionsRetainLocalizedGenreLabels() {
+        val repository = RoomGameFacetRepository(database, database.canonicalFacetDao(), database.gameDetailSnapshotDao())
+        listOf("steam_appdetails_v2", "steam_appdetails_v3", "steam_appdetails_v4").forEach { revision ->
+            val snapshot = snapshot(metadata(listOf(MetadataFacet(1, "Aktion")))).copy(sourceRevision = revision)
+            assertEquals(revision, listOf(GameFacet("steam:1", "Aktion")),
+                repository.resolveGenres(setOf("steam:1"), listOf(snapshot)))
+        }
+    }
+
+    @Test
+    fun steamRevisionWithUnrelatedProvenanceCannotSupplyGenreLabels() {
+        val repository = RoomGameFacetRepository(database, database.canonicalFacetDao(), database.gameDetailSnapshotDao())
+        val snapshot = snapshot(metadata(listOf(MetadataFacet(1, "Cross-store label")))).copy(
+            provenanceJson = JSON.encodeToString(GameMetadataProvenance(MetadataProvider.EPIC_CMS, setOf(MetadataField.GENRES))),
+        )
+        assertEquals(listOf(GameFacet("steam:1", "Action")),
+            repository.resolveGenres(setOf("steam:1"), listOf(snapshot)))
+    }
+
     private fun canonical() = CanonicalGameEntity(
         canonicalId = CANONICAL_ID.value,
         steamAppId = 42,

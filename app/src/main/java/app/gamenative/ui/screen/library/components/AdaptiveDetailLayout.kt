@@ -15,6 +15,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
@@ -36,19 +40,35 @@ internal fun DetailSection(modifier: Modifier = Modifier, content: @Composable C
 }
 
 @Composable
-internal fun ResponsiveDetailGrid(
-    sections: List<@Composable () -> Unit>,
+internal fun ResponsiveDetailColumns(
+    primary: @Composable () -> Unit,
+    compact: @Composable () -> Unit,
     modifier: Modifier = Modifier,
-    minimumColumnWidth: Dp = 360.dp,
+    compactFirst: Boolean = false,
+    hasCompact: Boolean = true,
+    minimumPrimaryWidth: Dp = 480.dp,
+    compactWidth: Dp = 320.dp,
 ) {
     val fontScale = LocalDensity.current.fontScale
+    val currentPrimary by rememberUpdatedState(primary)
+    val currentCompact by rememberUpdatedState(compact)
+    val primaryContent = remember { movableContentOf { currentPrimary() } }
+    val compactContent = remember { movableContentOf { currentCompact() } }
     BoxWithConstraints(modifier.fillMaxWidth()) {
-        val columns = if (maxWidth >= minimumColumnWidth * fontScale * 2 + 16.dp) 2 else 1
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            sections.chunked(columns).forEach { row ->
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    row.forEach { section -> Box(Modifier.weight(1f)) { section() } }
-                }
+        val sidebarWidth = compactWidth * fontScale
+        if (!hasCompact) {
+            primaryContent()
+        } else if (maxWidth >= minimumPrimaryWidth * fontScale + sidebarWidth + 16.dp) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (compactFirst) Box(Modifier.width(sidebarWidth)) { compactContent() }
+                Box(Modifier.weight(1f)) { primaryContent() }
+                if (!compactFirst) Box(Modifier.width(sidebarWidth)) { compactContent() }
+            }
+        } else {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (compactFirst) compactContent()
+                primaryContent()
+                if (!compactFirst) compactContent()
             }
         }
     }
