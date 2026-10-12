@@ -11,6 +11,9 @@ import app.gamenative.library.community.SteamDiscussionSummary
 import app.gamenative.library.community.SteamReviewCard
 import app.gamenative.library.community.SteamReviewPageSource
 import app.gamenative.library.community.SteamReviewQuery
+import app.gamenative.library.community.SteamReviewCommentSource
+import app.gamenative.library.community.SteamReviewCommentState
+import app.gamenative.library.community.UnavailableSteamReviewComments
 import app.gamenative.library.discovery.SteamReviewSummary
 import app.gamenative.library.discovery.SteamReviewSummarySource
 import app.gamenative.library.metadata.MetadataClock
@@ -31,6 +34,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 
 sealed interface ReviewSummaryState {
     data object Idle : ReviewSummaryState
@@ -53,7 +58,110 @@ class GameDetailViewModel @Inject constructor(
     private val discussionSource: SteamDiscussionSource,
     private val reviewSummarySource: SteamReviewSummarySource,
     private val clock: MetadataClock = SystemMetadataClock(),
+    private val reviewCommentSource: SteamReviewCommentSource = UnavailableSteamReviewComments,
 ) : ViewModel() {
+    private val mutableReviewCommentState = MutableStateFlow<SteamReviewCommentState>(SteamReviewCommentState.Idle)
+    val reviewCommentState: StateFlow<SteamReviewCommentState> = mutableReviewCommentState.asStateFlow()
+    private var commentJob: Job? = null
+    private var commentRevision = 0L
+    private var commentSelection: ReviewCommentSelection? = null
+    private var nextCommentStart: Int? = null
+    private var commentPageCount = 0
+    private val consumedCommentStarts = mutableSetOf<Int>()
+    private val reviewLocations = mutableMapOf<String, String?>()
+
+    fun openReviewComments(recommendationId: String, isOffline: Boolean) {
+        val appId = activeReviewAppId ?: return
+        val reviews = mutableReviewState.value as? ReviewSectionState.Content ?: return
+        if (reviews.reviews.none { it.recommendationId == recommendationId } || !reviewLocations.containsKey(recommendationId)) return
+        closeReviewComments()
+        commentSelection = ReviewCommentSelection(appId, mutableReviewQuery.value, reviewLocations[recommendationId], recommendationId)
+        if (isOffline) mutableReviewCommentState.value = SteamReviewCommentState.Offline(recommendationId)
+        else loadCommentPage(0, previous = null)
+    }
+
+    fun closeReviewComments(): Boolean {
+        val wasOpen = commentSelection != null
+        commentJob?.cancel()
+        commentJob = null
+        commentRevision++
+        commentSelection = null
+        nextCommentStart = null
+        commentPageCount = 0
+        consumedCommentStarts.clear()
+        mutableReviewCommentState.value = SteamReviewCommentState.Idle
+        return wasOpen
+    }
+
+    fun loadMoreReviewComments() {
+        val current = mutableReviewCommentState.value as? SteamReviewCommentState.Content ?: return
+        val start = nextCommentStart ?: return
+        if (!current.canLoadMore || current.loadingMore || start in consumedCommentStarts || commentJob?.isActive == true) return
+        loadCommentPage(start, current)
+    }
+
+    fun refreshReviewComments(isOffline: Boolean) {
+        val selection = commentSelection ?: return
+        if (commentJob?.isActive == true) return
+        if (isOffline) {
+            commentRevision++
+            mutableReviewCommentState.value = SteamReviewCommentState.Offline(selection.recommendationId)
+        } else {
+            loadCommentPage(0, mutableReviewCommentState.value as? SteamReviewCommentState.Content)
+        }
+    }
+
+    private fun loadCommentPage(start: Int, previous: SteamReviewCommentState.Content?) {
+        val selection = commentSelection ?: return
+        val revision = ++commentRevision
+        val append = start > 0
+        commentJob?.cancel()
+        mutableReviewCommentState.value = previous?.copy(loadingMore = append, refreshFailed = false)
+            ?: SteamReviewCommentState.Loading(selection.recommendationId)
+        commentJob = viewModelScope.launch {
+            try {
+                val page = withTimeout(60_000L) {
+                    reviewCommentSource.fetch(selection.appId, selection.query, selection.reviewCursor, selection.recommendationId, start)
+                }
+                if (revision != commentRevision || selection != commentSelection) return@launch
+                if (!append) {
+                    commentPageCount = 0
+                    consumedCommentStarts.clear()
+                }
+                consumedCommentStarts += start
+                commentPageCount++
+                nextCommentStart = page.nextStart?.takeIf {
+                    it in 0..80 && it % 20 == 0 && it > start && it !in consumedCommentStarts && commentPageCount < 5
+                }
+                val comments = ((if (append) previous?.comments.orEmpty() else emptyList()) + page.comments)
+                    .distinctBy { it.commentId }.take(100)
+                mutableReviewCommentState.value = if (comments.isEmpty()) {
+                    SteamReviewCommentState.Empty(selection.recommendationId)
+                } else {
+                    SteamReviewCommentState.Content(selection.recommendationId, comments, nextCommentStart != null && comments.size < 100)
+                }
+            } catch (_: TimeoutCancellationException) {
+                if (revision == commentRevision) commentFailure(selection, previous)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (revision == commentRevision) commentFailure(selection, previous)
+            }
+        }
+    }
+
+    private fun commentFailure(selection: ReviewCommentSelection, previous: SteamReviewCommentState.Content?) {
+        mutableReviewCommentState.value = previous?.copy(loadingMore = false, refreshFailed = true)
+            ?: SteamReviewCommentState.Unavailable(selection.recommendationId)
+    }
+
+    private data class ReviewCommentSelection(
+        val appId: Int,
+        val query: SteamReviewQuery,
+        val reviewCursor: String?,
+        val recommendationId: String,
+    )
+
     private val mutableReviewSummaryState = MutableStateFlow<ReviewSummaryState>(ReviewSummaryState.Idle)
     private var summaryJob: Job? = null
     private var activeSummaryAppId: Int? = null
@@ -170,6 +278,7 @@ class GameDetailViewModel @Inject constructor(
             return
         }
         if (isOffline) {
+            closeReviewComments()
             reviewJob?.cancel()
             activeReviewAppId = steamAppId
             mutableReviewState.value = ReviewSectionState.Offline
@@ -181,6 +290,9 @@ class GameDetailViewModel @Inject constructor(
         val previousContent = (mutableReviewState.value as? ReviewSectionState.Content)
             ?.takeIf { sameRequest }
         val previousPagination = previousContent?.let { reviewPagination() }
+        val previousLocations = reviewLocations.toMap()
+        closeReviewComments()
+        reviewLocations.clear()
         reviewJob?.cancel()
         activeReviewAppId = steamAppId
         nextReviewCursor = null
@@ -196,6 +308,7 @@ class GameDetailViewModel @Inject constructor(
                 if (revision != reviewRevision) return@launch
                 reviewPageCount = 1
                 nextReviewCursor = page.nextCursor
+                page.reviews.take(MAX_REVIEW_CARDS).forEach { reviewLocations[it.recommendationId] = null }
                 mutableReviewState.value = if (page.reviews.isEmpty()) {
                     ReviewSectionState.Empty
                 } else {
@@ -210,6 +323,7 @@ class GameDetailViewModel @Inject constructor(
             } catch (_: Exception) {
                 if (revision != reviewRevision) return@launch
                 previousPagination?.let(::restoreReviewPagination)
+                if (previousContent != null) reviewLocations.putAll(previousLocations)
                 mutableReviewState.value = previousContent
                     ?.copy(loadingMore = false, refreshFailed = true)
                     ?: ReviewSectionState.Unavailable
@@ -219,6 +333,8 @@ class GameDetailViewModel @Inject constructor(
 
     fun updateReviewQuery(query: SteamReviewQuery, isOffline: Boolean) {
         if (mutableReviewQuery.value == query) return
+        closeReviewComments()
+        reviewLocations.clear()
         mutableReviewQuery.value = query
         val appId = activeReviewAppId ?: return
         mutableReviewState.value = ReviewSectionState.Idle
@@ -250,6 +366,7 @@ class GameDetailViewModel @Inject constructor(
                 val reviews = (current.reviews + page.reviews)
                     .deduplicateReviewIdentity()
                     .take(MAX_REVIEW_CARDS)
+                reviews.forEach { if (!reviewLocations.containsKey(it.recommendationId)) reviewLocations[it.recommendationId] = cursor }
                 mutableReviewState.value = ReviewSectionState.Content(
                     reviews = reviews,
                     canLoadMore = canLoadMore() && reviews.size < MAX_REVIEW_CARDS,
@@ -509,6 +626,8 @@ class GameDetailViewModel @Inject constructor(
     }
 
     private fun clearReviews() {
+        closeReviewComments()
+        reviewLocations.clear()
         reviewJob?.cancel()
         reviewJob = null
         activeReviewAppId = null

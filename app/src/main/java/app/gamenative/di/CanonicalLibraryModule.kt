@@ -58,6 +58,8 @@ import app.gamenative.library.community.SteamDiscussionProvider
 import app.gamenative.library.community.SteamDiscussionSource
 import app.gamenative.library.community.SteamReviewPageProvider
 import app.gamenative.library.community.SteamReviewPageSource
+import app.gamenative.library.community.SteamReviewCommentProvider
+import app.gamenative.library.community.SteamReviewCommentSource
 import app.gamenative.library.discovery.GameFacetRepository
 import app.gamenative.library.discovery.RoomGameFacetRepository
 import app.gamenative.library.discovery.SteamReviewSummaryProvider
@@ -231,6 +233,12 @@ abstract class CanonicalLibraryModule {
     abstract fun bindSteamReviewPageSource(
         implementation: SteamReviewPageProvider,
     ): SteamReviewPageSource
+
+    @Binds
+    @Singleton
+    abstract fun bindSteamReviewCommentSource(
+        implementation: SteamReviewCommentProvider,
+    ): SteamReviewCommentSource
 
     @Binds
     @Singleton

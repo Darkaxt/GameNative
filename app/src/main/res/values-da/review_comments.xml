@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">Kommentarer</string>
+    <string name="canonical_review_comments_loading">Indlæser kommentarer…</string>
+    <string name="canonical_review_comments_empty">Ingen offentlige kommentarer.</string>
+    <string name="canonical_review_comments_unavailable">Kommentarer er ikke tilgængelige. Prøv igen.</string>
+    <string name="canonical_review_comments_offline">Kommentarer er ikke tilgængelige offline.</string>
+    <string name="canonical_review_comments_back">Tilbage til anmeldelser</string>
+    <string name="canonical_review_comments_refresh_failed">Kunne ikke opdatere kommentarer. Viser tidligere indlæste kommentarer.</string>
+    <string name="canonical_community_steam_user">Steam-bruger</string>
+</resources>

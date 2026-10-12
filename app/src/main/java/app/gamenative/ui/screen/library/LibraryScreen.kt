@@ -97,6 +97,7 @@ import app.gamenative.library.canonical.action.OwnedCopyRouteResult
 import app.gamenative.library.community.DiscussionSectionState
 import app.gamenative.library.community.ReviewSectionState
 import app.gamenative.library.community.SteamReviewQuery
+import app.gamenative.library.community.SteamReviewCommentState
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.ui.component.GamepadAction
 import app.gamenative.ui.component.GamepadActionBar
@@ -184,6 +185,7 @@ fun HomeLibraryScreen(
     val gameDetailState by detailViewModel.state.collectAsStateWithLifecycle()
     val reviewSummaryState by detailViewModel.reviewSummaryState.collectAsStateWithLifecycle()
     val reviewState by detailViewModel.reviewState.collectAsStateWithLifecycle()
+    val reviewCommentState by detailViewModel.reviewCommentState.collectAsStateWithLifecycle()
     val reviewQuery by detailViewModel.reviewQuery.collectAsStateWithLifecycle()
     val discussionState by detailViewModel.discussionState.collectAsStateWithLifecycle()
     val steamMatchState by steamMatchViewModel.state.collectAsStateWithLifecycle()
@@ -264,6 +266,11 @@ fun HomeLibraryScreen(
         onReviewQueryChange = { query -> detailViewModel.updateReviewQuery(query, isOffline) },
         onRefreshReviews = { detailViewModel.refreshReviews(isOffline) },
         onLoadMoreReviews = detailViewModel::loadMoreReviews,
+        reviewCommentState = reviewCommentState,
+        onOpenReviewComments = { id -> detailViewModel.openReviewComments(id, isOffline) },
+        onCloseReviewComments = detailViewModel::closeReviewComments,
+        onRefreshReviewComments = { detailViewModel.refreshReviewComments(isOffline) },
+        onLoadMoreReviewComments = detailViewModel::loadMoreReviewComments,
         discussionState = discussionState,
         onLoadDiscussions = { appId -> detailViewModel.loadDiscussions(appId, isOffline) },
         onOpenDiscussion = { route -> detailViewModel.openDiscussion(route, isOffline) },
@@ -376,6 +383,11 @@ internal fun LibraryScreenContent(
     onReviewQueryChange: (SteamReviewQuery) -> Unit = {},
     onRefreshReviews: () -> Unit = {},
     onLoadMoreReviews: () -> Unit = {},
+    reviewCommentState: SteamReviewCommentState = SteamReviewCommentState.Idle,
+    onOpenReviewComments: (String) -> Unit = {},
+    onCloseReviewComments: () -> Boolean = { false },
+    onRefreshReviewComments: () -> Unit = {},
+    onLoadMoreReviewComments: () -> Unit = {},
     discussionState: DiscussionSectionState = DiscussionSectionState.Idle,
     onLoadDiscussions: (Int) -> Unit = {},
     onOpenDiscussion: (String) -> Unit = {},
@@ -1770,6 +1782,11 @@ internal fun LibraryScreenContent(
                         onReviewQueryChange = onReviewQueryChange,
                         onRefreshReviews = onRefreshReviews,
                         onLoadMoreReviews = onLoadMoreReviews,
+                        reviewCommentState = reviewCommentState,
+                        onOpenReviewComments = onOpenReviewComments,
+                        onCloseReviewComments = onCloseReviewComments,
+                        onRefreshReviewComments = onRefreshReviewComments,
+                        onLoadMoreReviewComments = onLoadMoreReviewComments,
                         discussionState = discussionState,
                         onLoadDiscussions = {
                             selectedCanonicalCard.steamAppId?.let(onLoadDiscussions)

@@ -10,7 +10,8 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -22,8 +23,6 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -64,7 +63,9 @@ class SteamReviewPageProvider internal constructor(
         val startedAt = System.nanoTime()
         val transport = TransportDiagnostic()
         return try {
-            val parsed = fetchPage(steamAppId, query, cursor, transport)
+            val parsed = withContext(Dispatchers.Default) {
+                fetchPage(steamAppId, query, cursor, transport)
+            }
             recordDiagnostic(
                 SteamCommunityPageDiagnostic(
                     operation = SteamCommunityPageOperation.REVIEWS,
@@ -144,7 +145,15 @@ class SteamReviewPageProvider internal constructor(
         val response = try {
             retryExecutor.execute {
                 transport.attemptCount++
-                client.newCall(request).awaitSteamReviewResponse().also { response ->
+                client.newCall(request).awaitBufferedCommunityResponse(
+                    maxBodyBytes = MAX_RESPONSE_BYTES,
+                    canReadBody = {
+                        transport.httpStatus = it.code
+                        isAllowedNetworkUrl(it.request.url) && it.isSuccessful &&
+                            it.code !in REDIRECT_CODES && it.hasJsonContentType()
+                    },
+                    bodyLimitFailure = { SteamReviewsUnavailable(SteamCommunityFailureReason.BODY_LIMIT) },
+                ).also { response ->
                     transport.httpStatus = response.code
                 }
             }
@@ -330,24 +339,3 @@ class SteamReviewPageProvider internal constructor(
 private class SteamReviewsUnavailable(
     val reason: SteamCommunityFailureReason,
 ) : IOException("Steam reviews unavailable")
-
-private suspend fun Call.awaitSteamReviewResponse(): Response = suspendCancellableCoroutine { continuation ->
-    continuation.invokeOnCancellation { cancel() }
-    enqueue(
-        object : Callback {
-            override fun onFailure(call: Call, error: IOException) {
-                if (continuation.isActive) continuation.resumeWith(Result.failure(error))
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                if (continuation.isActive) {
-                    continuation.resume(response) { _, deliveredResponse, _ ->
-                        deliveredResponse.close()
-                    }
-                } else {
-                    response.close()
-                }
-            }
-        },
-    )
-}

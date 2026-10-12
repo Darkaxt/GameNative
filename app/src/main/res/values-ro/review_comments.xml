@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">Comentarii</string>
+    <string name="canonical_review_comments_loading">Se încarcă comentariile…</string>
+    <string name="canonical_review_comments_empty">Nu există comentarii publice.</string>
+    <string name="canonical_review_comments_unavailable">Comentariile nu sunt disponibile. Încearcă din nou.</string>
+    <string name="canonical_review_comments_offline">Comentariile nu sunt disponibile offline.</string>
+    <string name="canonical_review_comments_back">Înapoi la recenzii</string>
+    <string name="canonical_review_comments_refresh_failed">Comentariile nu au putut fi actualizate. Sunt afișate cele încărcate anterior.</string>
+    <string name="canonical_community_steam_user">Utilizator Steam</string>
+</resources>

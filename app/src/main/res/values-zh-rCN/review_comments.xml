@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">评论</string>
+    <string name="canonical_review_comments_loading">正在加载评论…</string>
+    <string name="canonical_review_comments_empty">暂无公开评论。</string>
+    <string name="canonical_review_comments_unavailable">评论不可用，请重试。</string>
+    <string name="canonical_review_comments_offline">离线时无法获取评论。</string>
+    <string name="canonical_review_comments_back">返回评测</string>
+    <string name="canonical_review_comments_refresh_failed">无法刷新评论，正在显示之前加载的评论。</string>
+    <string name="canonical_community_steam_user">Steam 用户</string>
+</resources>

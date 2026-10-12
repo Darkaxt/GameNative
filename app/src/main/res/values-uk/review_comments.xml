@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">Коментарі</string>
+    <string name="canonical_review_comments_loading">Завантаження коментарів…</string>
+    <string name="canonical_review_comments_empty">Немає публічних коментарів.</string>
+    <string name="canonical_review_comments_unavailable">Коментарі недоступні. Спробуйте ще раз.</string>
+    <string name="canonical_review_comments_offline">Коментарі недоступні без підключення.</string>
+    <string name="canonical_review_comments_back">Назад до відгуків</string>
+    <string name="canonical_review_comments_refresh_failed">Не вдалося оновити коментарі. Показано раніше завантажені коментарі.</string>
+    <string name="canonical_community_steam_user">Користувач Steam</string>
+</resources>

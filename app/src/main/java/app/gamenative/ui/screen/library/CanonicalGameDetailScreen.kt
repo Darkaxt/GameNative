@@ -74,6 +74,7 @@ import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.community.DiscussionSectionState
 import app.gamenative.library.community.ReviewSectionState
 import app.gamenative.library.community.SteamReviewQuery
+import app.gamenative.library.community.SteamReviewCommentState
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.GameDetailState
 import app.gamenative.library.metadata.GameLanguageSupport
@@ -152,6 +153,11 @@ internal fun CanonicalGameDetailScreen(
     selectedDlcCopy: OwnedCopyKey? = null,
     onSelectDlcCopy: (OwnedCopyKey) -> Unit = {},
     onRetryDlc: () -> Unit = {},
+    reviewCommentState: SteamReviewCommentState = SteamReviewCommentState.Idle,
+    onOpenReviewComments: (String) -> Unit = {},
+    onCloseReviewComments: () -> Boolean = { false },
+    onRefreshReviewComments: () -> Unit = {},
+    onLoadMoreReviewComments: () -> Unit = {},
 ) {
     val metadata = when (state) {
         is GameDetailState.Content -> state.metadata
@@ -207,9 +213,12 @@ internal fun CanonicalGameDetailScreen(
     val detailBack = {
         val visibleThread = tabs[selectedTab] == CanonicalDetailTab.DISCUSSIONS &&
             discussionState is DiscussionSectionState.Thread
+        val visibleComments = tabs[selectedTab] == CanonicalDetailTab.REVIEWS &&
+            reviewCommentState != SteamReviewCommentState.Idle
         when {
             optionsMenuVisible -> dismissOptions()
             sourceDetails?.dialogOpen == true -> Unit
+            visibleComments && onCloseReviewComments() -> Unit
             !visibleThread || !onCloseDiscussionThread() -> onBack()
         }
     }
@@ -316,6 +325,11 @@ internal fun CanonicalGameDetailScreen(
                                 onQueryChange = onReviewQueryChange,
                                 onRefresh = onRefreshReviews,
                                 onLoadMore = onLoadMoreReviews,
+                                commentState = if (validSteamAppId == null) SteamReviewCommentState.Idle else reviewCommentState,
+                                onOpenComments = onOpenReviewComments,
+                                onCloseComments = { onCloseReviewComments() },
+                                onRefreshComments = onRefreshReviewComments,
+                                onLoadMoreComments = onLoadMoreReviewComments,
                                 onOpenSteam = validSteamAppId?.let { appId ->
                                     { uriHandler.openUri(steamReviewUrl(appId)) }
                                 },

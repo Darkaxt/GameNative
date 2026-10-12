@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">댓글</string>
+    <string name="canonical_review_comments_loading">댓글 불러오는 중…</string>
+    <string name="canonical_review_comments_empty">공개 댓글이 없습니다.</string>
+    <string name="canonical_review_comments_unavailable">댓글을 불러올 수 없습니다. 다시 시도하세요.</string>
+    <string name="canonical_review_comments_offline">오프라인에서는 댓글을 불러올 수 없습니다.</string>
+    <string name="canonical_review_comments_back">리뷰로 돌아가기</string>
+    <string name="canonical_review_comments_refresh_failed">댓글을 새로고침하지 못했습니다. 이전에 불러온 댓글을 표시합니다.</string>
+    <string name="canonical_community_steam_user">Steam 사용자</string>
+</resources>

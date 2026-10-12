@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">Comments</string>
+    <string name="canonical_review_comments_loading">Loading comments…</string>
+    <string name="canonical_review_comments_empty">No public comments.</string>
+    <string name="canonical_review_comments_unavailable">Comments are unavailable. Try again.</string>
+    <string name="canonical_review_comments_offline">Comments are unavailable offline.</string>
+    <string name="canonical_review_comments_back">Back to reviews</string>
+    <string name="canonical_review_comments_refresh_failed">Could not refresh comments. Showing previously loaded comments.</string>
+    <string name="canonical_community_steam_user">Steam user</string>
+</resources>

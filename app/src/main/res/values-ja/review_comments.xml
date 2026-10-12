@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">コメント</string>
+    <string name="canonical_review_comments_loading">コメントを読み込み中…</string>
+    <string name="canonical_review_comments_empty">公開コメントはありません。</string>
+    <string name="canonical_review_comments_unavailable">コメントを取得できません。もう一度お試しください。</string>
+    <string name="canonical_review_comments_offline">オフラインではコメントを取得できません。</string>
+    <string name="canonical_review_comments_back">レビューに戻る</string>
+    <string name="canonical_review_comments_refresh_failed">コメントを更新できませんでした。以前読み込んだコメントを表示しています。</string>
+    <string name="canonical_community_steam_user">Steamユーザー</string>
+</resources>

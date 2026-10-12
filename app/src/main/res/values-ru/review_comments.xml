@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">Комментарии</string>
+    <string name="canonical_review_comments_loading">Загрузка комментариев…</string>
+    <string name="canonical_review_comments_empty">Нет публичных комментариев.</string>
+    <string name="canonical_review_comments_unavailable">Комментарии недоступны. Попробуйте снова.</string>
+    <string name="canonical_review_comments_offline">Комментарии недоступны без подключения.</string>
+    <string name="canonical_review_comments_back">Назад к отзывам</string>
+    <string name="canonical_review_comments_refresh_failed">Не удалось обновить комментарии. Показаны ранее загруженные комментарии.</string>
+    <string name="canonical_community_steam_user">Пользователь Steam</string>
+</resources>

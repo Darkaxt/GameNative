@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">留言</string>
+    <string name="canonical_review_comments_loading">正在載入留言…</string>
+    <string name="canonical_review_comments_empty">沒有公開留言。</string>
+    <string name="canonical_review_comments_unavailable">留言無法取得，請重試。</string>
+    <string name="canonical_review_comments_offline">離線時無法取得留言。</string>
+    <string name="canonical_review_comments_back">返回評論</string>
+    <string name="canonical_review_comments_refresh_failed">無法重新整理留言，正在顯示先前載入的留言。</string>
+    <string name="canonical_community_steam_user">Steam 使用者</string>
+</resources>

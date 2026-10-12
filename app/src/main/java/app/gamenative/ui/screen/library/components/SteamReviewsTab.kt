@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -39,6 +40,7 @@ import app.gamenative.library.community.SteamReviewPolarity
 import app.gamenative.library.community.SteamReviewPurchaseType
 import app.gamenative.library.community.SteamReviewQuery
 import app.gamenative.library.community.SteamReviewSort
+import app.gamenative.library.community.SteamReviewCommentState
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -52,37 +54,52 @@ internal fun SteamReviewsTab(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onOpenSteam: (() -> Unit)?,
+    commentState: SteamReviewCommentState = SteamReviewCommentState.Idle,
+    onOpenComments: (String) -> Unit = {},
+    onCloseComments: () -> Unit = {},
+    onRefreshComments: () -> Unit = {},
+    onLoadMoreComments: () -> Unit = {},
 ) {
-    when (state) {
-        ReviewSectionState.Idle,
-        ReviewSectionState.Loading,
-        -> ReviewMessage(
-            message = stringResource(R.string.canonical_reviews_loading),
-            loading = true,
-            onOpenSteam = onOpenSteam,
-        )
-        ReviewSectionState.Empty -> ReviewMessage(
-            message = stringResource(R.string.canonical_reviews_empty),
-            onRefresh = onRefresh,
-            onOpenSteam = onOpenSteam,
-        )
-        ReviewSectionState.Offline -> ReviewMessage(
-            message = stringResource(R.string.canonical_reviews_offline),
-            onOpenSteam = onOpenSteam,
-        )
-        ReviewSectionState.Unavailable -> ReviewMessage(
-            message = stringResource(R.string.canonical_reviews_unavailable),
-            onRefresh = onRefresh,
-            onOpenSteam = onOpenSteam,
-        )
-        is ReviewSectionState.Content -> ReviewList(
-            state = state,
-            query = query,
-            onQueryChange = onQueryChange,
-            onRefresh = onRefresh,
-            onLoadMore = onLoadMore,
-            onOpenSteam = onOpenSteam,
-        )
+    val stateHolder = rememberSaveableStateHolder()
+    if (commentState != SteamReviewCommentState.Idle) {
+        stateHolder.SaveableStateProvider("comments-reader") {
+            SteamReviewCommentsPane(commentState, onCloseComments, onRefreshComments, onLoadMoreComments)
+        }
+        return
+    }
+    stateHolder.SaveableStateProvider("reviews-list") {
+        when (state) {
+            ReviewSectionState.Idle,
+            ReviewSectionState.Loading,
+            -> ReviewMessage(
+                message = stringResource(R.string.canonical_reviews_loading),
+                loading = true,
+                onOpenSteam = onOpenSteam,
+            )
+            ReviewSectionState.Empty -> ReviewMessage(
+                message = stringResource(R.string.canonical_reviews_empty),
+                onRefresh = onRefresh,
+                onOpenSteam = onOpenSteam,
+            )
+            ReviewSectionState.Offline -> ReviewMessage(
+                message = stringResource(R.string.canonical_reviews_offline),
+                onOpenSteam = onOpenSteam,
+            )
+            ReviewSectionState.Unavailable -> ReviewMessage(
+                message = stringResource(R.string.canonical_reviews_unavailable),
+                onRefresh = onRefresh,
+                onOpenSteam = onOpenSteam,
+            )
+            is ReviewSectionState.Content -> ReviewList(
+                state = state,
+                query = query,
+                onQueryChange = onQueryChange,
+                onRefresh = onRefresh,
+                onLoadMore = onLoadMore,
+                onOpenSteam = onOpenSteam,
+                onOpenComments = onOpenComments,
+            )
+        }
     }
 }
 
@@ -94,6 +111,7 @@ private fun ReviewList(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onOpenSteam: (() -> Unit)?,
+    onOpenComments: (String) -> Unit,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(listState, state.reviews.size, state.canLoadMore, state.loadingMore) {
@@ -129,7 +147,7 @@ private fun ReviewList(
                 items = state.reviews,
                 key = { index, review -> "${review.postedAtEpochSeconds}:$index" },
             ) { _, review ->
-                SteamReviewCard(review)
+                SteamReviewCard(review, onOpenComments)
             }
             if (state.canLoadMore && !state.loadingMore) {
                 item(key = "reviews-load-more") {
@@ -242,7 +260,7 @@ private fun ReviewFilterChip(
 }
 
 @Composable
-private fun SteamReviewCard(review: SteamReviewCard) {
+private fun SteamReviewCard(review: SteamReviewCard, onOpenComments: (String) -> Unit) {
     val date = remember(review.postedAtEpochSeconds) {
         DateFormat.getDateInstance(DateFormat.MEDIUM)
             .format(Date(review.postedAtEpochSeconds * 1_000L))
@@ -269,7 +287,14 @@ private fun SteamReviewCard(review: SteamReviewCard) {
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
+            Text(stringResource(R.string.canonical_community_steam_user), style = MaterialTheme.typography.labelMedium)
             Text(review.text, style = MaterialTheme.typography.bodyLarge)
+            if (review.recommendationId.isNotBlank() && !review.recommendationId.startsWith("page:")) {
+                OutlinedButton(
+                    onClick = { onOpenComments(review.recommendationId) },
+                    modifier = Modifier.testTag("steam-review-comments:${review.recommendationId}"),
+                ) { Text(stringResource(R.string.canonical_review_comments)) }
+            }
             Text(
                 text = stringResource(
                     R.string.canonical_reviews_stats,

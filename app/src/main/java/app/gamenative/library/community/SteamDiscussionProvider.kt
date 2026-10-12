@@ -10,9 +10,8 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.Call
-import okhttp3.Callback
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -100,7 +99,7 @@ class SteamDiscussionProvider internal constructor(
         val startedAt = System.nanoTime()
         val transport = TransportDiagnostic()
         return try {
-            val parsed = fetchPage(transport)
+            val parsed = withContext(Dispatchers.Default) { fetchPage(transport) }
             recordDiagnostic(
                 SteamCommunityPageDiagnostic(
                     operation = operation,
@@ -166,7 +165,15 @@ class SteamDiscussionProvider internal constructor(
             val response = try {
                 retryExecutor.execute {
                     transport.attemptCount++
-                    client.newCall(request).awaitDiscussionResponse().also { response ->
+                    client.newCall(request).awaitBufferedCommunityResponse(
+                        maxBodyBytes = MAX_RESPONSE_BYTES,
+                        canReadBody = {
+                            transport.httpStatus = it.code
+                            isAllowedNetworkUrl(it.request.url) && it.isSuccessful &&
+                                it.code !in REDIRECT_CODES && it.hasHtmlContentType()
+                        },
+                        bodyLimitFailure = { SteamDiscussionsUnavailable(SteamCommunityFailureReason.BODY_LIMIT) },
+                    ).also { response ->
                         transport.httpStatus = response.code
                     }
                 }
@@ -689,24 +696,3 @@ class SteamDiscussionProvider internal constructor(
 private class SteamDiscussionsUnavailable(
     val reason: SteamCommunityFailureReason,
 ) : IOException("Steam discussions unavailable")
-
-private suspend fun Call.awaitDiscussionResponse(): Response = suspendCancellableCoroutine { continuation ->
-    continuation.invokeOnCancellation { cancel() }
-    enqueue(
-        object : Callback {
-            override fun onFailure(call: Call, error: IOException) {
-                if (continuation.isActive) continuation.resumeWith(Result.failure(error))
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                if (continuation.isActive) {
-                    continuation.resume(response) { _, deliveredResponse, _ ->
-                        deliveredResponse.close()
-                    }
-                } else {
-                    response.close()
-                }
-            }
-        },
-    )
-}

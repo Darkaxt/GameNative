@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="canonical_review_comments">Comentários</string>
+    <string name="canonical_review_comments_loading">Carregando comentários…</string>
+    <string name="canonical_review_comments_empty">Nenhum comentário público.</string>
+    <string name="canonical_review_comments_unavailable">Comentários indisponíveis. Tente novamente.</string>
+    <string name="canonical_review_comments_offline">Comentários indisponíveis offline.</string>
+    <string name="canonical_review_comments_back">Voltar às análises</string>
+    <string name="canonical_review_comments_refresh_failed">Não foi possível atualizar os comentários. Exibindo os carregados anteriormente.</string>
+    <string name="canonical_community_steam_user">Usuário do Steam</string>
+</resources>
