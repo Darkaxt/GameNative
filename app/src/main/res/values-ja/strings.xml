@@ -2959,4 +2959,14 @@
     <string name="support_files_listing_sending">%1$s の一覧を送信中</string>
     <string name="support_files_listing_sent">一覧を送信しました (%1$d 件)</string>
     <string name="support_files_listing_failed">%1$s の一覧を送信できませんでした。%2$s</string>
+    <string name="canonical_dlc_owned">所有済み</string>
+    <string name="canonical_dlc_not_owned">未所有</string>
+    <string name="canonical_dlc_select_copy">所有しているコピーを選択してDLCを表示します。</string>
+    <string name="canonical_dlc_loading">DLC情報を読み込み中…</string>
+    <string name="canonical_dlc_empty">このコピーのDLCは登録されていません。</string>
+    <string name="canonical_dlc_unavailable">このコピーのDLC情報は利用できません。</string>
+    <string name="canonical_dlc_partial_catalog">一部のDLC情報を読み込めませんでした。</string>
+    <string name="canonical_dlc_partial_ownership">所有情報が不完全です。確認できないライセンスは不明のまま表示されます。</string>
+    <string name="canonical_dlc_product">製品 %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

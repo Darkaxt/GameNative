@@ -67,6 +67,8 @@ import androidx.compose.ui.unit.dp
 import app.gamenative.R
 import app.gamenative.data.GameCompatibilityStatus
 import app.gamenative.data.GameSource
+import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.library.dlc.DlcState
 import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.community.DiscussionSectionState
@@ -92,6 +94,7 @@ import app.gamenative.ui.screen.library.components.SteamDiscussionsTab
 import app.gamenative.ui.screen.library.components.SteamMediaGallery
 import app.gamenative.ui.screen.library.components.SteamMediaImage
 import app.gamenative.ui.screen.library.components.SteamReviewsTab
+import app.gamenative.ui.screen.library.components.sourceLabel
 import app.gamenative.utils.HltbService
 import java.math.BigDecimal
 import java.text.DateFormat
@@ -145,6 +148,10 @@ internal fun CanonicalGameDetailScreen(
     backEnabled: Boolean = true,
     sourceDetails: OwnedSourceDetailPresentation? = null,
     sourceOptionsRequestId: Long? = null,
+    dlcState: DlcState = DlcState.Idle,
+    selectedDlcCopy: OwnedCopyKey? = null,
+    onSelectDlcCopy: (OwnedCopyKey) -> Unit = {},
+    onRetryDlc: () -> Unit = {},
 ) {
     val metadata = when (state) {
         is GameDetailState.Content -> state.metadata
@@ -338,6 +345,11 @@ internal fun CanonicalGameDetailScreen(
                                 links = remember(steamAppId) { steamResourceLinks(steamAppId) },
                                 onOpen = uriHandler::openUri,
                                 sourceDetails = sourceDetails,
+                                dlcState = dlcState,
+                                dlcCopies = copies,
+                                selectedDlcCopy = selectedDlcCopy,
+                                onSelectDlcCopy = onSelectDlcCopy,
+                                onRetryDlc = onRetryDlc,
                             )
                         }
                     }
@@ -727,6 +739,11 @@ private fun DetailFields(
     links: List<SteamResourceLink>,
     onOpen: (String) -> Unit,
     sourceDetails: OwnedSourceDetailPresentation?,
+    dlcState: DlcState,
+    dlcCopies: List<OwnedCopySummary>,
+    selectedDlcCopy: OwnedCopyKey?,
+    onSelectDlcCopy: (OwnedCopyKey) -> Unit,
+    onRetryDlc: () -> Unit,
 ) {
     var minimumExpanded by rememberSaveable { mutableStateOf(false) }
     var recommendedExpanded by rememberSaveable { mutableStateOf(false) }
@@ -813,6 +830,15 @@ private fun DetailFields(
                             DetailSection { DetailProvenance(state, metadata, showFields = true) }
                         }
                     }
+                    CanonicalDlcSection(
+                        state = dlcState,
+                        copies = dlcCopies.filter { !it.isHidden && it.unavailableReason == null }.map { copy ->
+                            DlcCopyOption(copy.key, copy.nativeTitle, sourceLabel(copy.source))
+                        },
+                        selectedCopy = selectedDlcCopy,
+                        onSelectCopy = onSelectDlcCopy,
+                        onRetry = onRetryDlc,
+                    )
                     DetailSection { DetailResourcesSection(links = links, onOpen = onOpen) }
                 }
             },

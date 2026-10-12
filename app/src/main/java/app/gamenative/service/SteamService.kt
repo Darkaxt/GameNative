@@ -57,7 +57,12 @@ import app.gamenative.enums.SaveLocation
 import app.gamenative.enums.SyncResult
 import app.gamenative.events.AndroidEvent
 import app.gamenative.events.SteamEvent
+import app.gamenative.library.canonical.AccountScopeInvalidations
 import app.gamenative.library.canonical.SteamOwnershipReadiness
+import app.gamenative.library.dlc.DlcTransportException
+import app.gamenative.library.dlc.SteamDlcLicense
+import app.gamenative.library.dlc.SteamDlcLicenseSnapshot
+import app.gamenative.library.dlc.readSteamDlcPackageApps
 import app.gamenative.library.canonical.catalog.SteamPublicPicsFacets
 import app.gamenative.library.canonical.catalog.parseSteamPublicPicsFacets
 import app.gamenative.utils.CaseInsensitiveFileSystem
@@ -190,6 +195,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import app.gamenative.data.DownloadingAppInfo
 import app.gamenative.data.SteamUnlockedBranch
@@ -303,6 +309,7 @@ class SteamService : Service(), IChallengeUrlChanged {
     private var _loginResult: LoginResult = LoginResult.Failed
 
     private var licenses: List<License> = emptyList()
+    private val dlcLicenseSnapshot = SteamDlcLicenseSnapshot()
 
     private var retryAttempt = 0
 
@@ -392,6 +399,43 @@ class SteamService : Service(), IChallengeUrlChanged {
     val localPersona = _localPersona.asStateFlow()
 
     companion object {
+        internal fun currentDlcLicenseSnapshot(): List<SteamDlcLicense>? {
+            val service = instance ?: return null
+            if (!isConnected || !isLoggedIn || isLoggingOut || isStopping) return null
+            val session = service.steamOwnershipSession ?: return null
+            val accountId = service.steamClient?.steamID?.takeIf { it.isValid }?.accountID?.toInt() ?: return null
+            if (accountId != session.accountId || service.steamOwnershipReadiness.currentGeneration() != session.lifecycleGeneration ||
+                !service.steamOwnershipReadiness.isReady(session.lifecycleGeneration)
+            ) return null
+            val proof = service.dlcLicenseSnapshot.licenseProof(session, accountId)
+            return proof.takeIf { service.steamOwnershipSession === session && instance === service }
+        }
+
+        internal suspend fun readLicensedDlcPackages(licenses: List<SteamDlcLicense>): Map<Int, Set<String>> {
+            if (licenses.isEmpty() || licenses.size > 100 || licenses.map { it.packageId }.distinct().size != licenses.size) {
+                throw DlcTransportException()
+            }
+            val requested = licenses.map { it.packageId }.toSet()
+            if (currentDlcLicenseSnapshot()?.filter { it.packageId in requested }?.toSet() != licenses.toSet()) throw DlcTransportException()
+            val service = instance ?: throw DlcTransportException()
+            val session = service.steamOwnershipSession ?: throw DlcTransportException()
+            val apps = service._steamApps ?: throw DlcTransportException()
+            val callback = withTimeoutOrNull(10_000) {
+                apps.picsGetProductInfo(apps = emptyList(), packages = licenses.map { PICSRequest(it.packageId, it.accessToken) }).await()
+            } ?: throw DlcTransportException()
+            val contents = mutableMapOf<Int, Set<String>>()
+            callback.results.forEach { result ->
+                result.packages.forEach { (id, packageInfo) ->
+                    if (id != packageInfo.id || id !in requested || contents.containsKey(id)) throw DlcTransportException()
+                    readSteamDlcPackageApps(packageInfo.keyValues)?.let { contents[id] = it }
+                }
+            }
+            if (instance !== service || service.steamOwnershipSession !== session ||
+                currentDlcLicenseSnapshot()?.filter { it.packageId in requested }?.toSet() != licenses.toSet()
+            ) throw DlcTransportException()
+            return contents.toMap()
+        }
+
         const val MAX_PICS_BUFFER = 256
 
         const val MAX_RETRY_ATTEMPTS = 20
@@ -4795,6 +4839,8 @@ class SteamService : Service(), IChallengeUrlChanged {
         isLoggingOut = false
         isWaitingForQRAuth = false
         steamOwnershipSession = null
+        dlcLicenseSnapshot.clear()
+        AccountScopeInvalidations.publishInvalidation(GameSource.STEAM)
         setFamilyGroupId(0L)
         familyGroupMembers.clear()
         familyAppOwnerSteamIds.clear()
@@ -4872,6 +4918,8 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         isConnected = false
         steamOwnershipSession = null
+        dlcLicenseSnapshot.clear()
+        AccountScopeInvalidations.publishInvalidation(GameSource.STEAM)
         offlineAchievementSyncJob?.cancel()
         offlineAchievementSyncJob = null
 
@@ -5423,6 +5471,8 @@ class SteamService : Service(), IChallengeUrlChanged {
 
     private fun onLicenseList(callback: LicenseListCallback) {
         if (callback.result != EResult.OK) {
+            dlcLicenseSnapshot.clear()
+            AccountScopeInvalidations.publishInvalidation(GameSource.STEAM)
             Timber.w("Failed to get License list")
             return
         }
@@ -5433,6 +5483,8 @@ class SteamService : Service(), IChallengeUrlChanged {
             return
         }
         val callbackLicenses = callback.licenseList.toList()
+        val dlcAdmission = dlcLicenseSnapshot.pending(ownershipSession)
+        AccountScopeInvalidations.publishInvalidation(GameSource.STEAM)
         Timber.i("Received License List ${callback.result}, size: ${callbackLicenses.size}")
 
         scope.launch {
@@ -5457,6 +5509,10 @@ class SteamService : Service(), IChallengeUrlChanged {
             if (!committed) {
                 Timber.i("Discarded stale Steam license snapshot")
                 return@launch
+            }
+            if (steamOwnershipSession === ownershipSession) {
+                dlcLicenseSnapshot.commit(dlcAdmission, callbackLicenses)
+                AccountScopeInvalidations.publishInvalidation(GameSource.STEAM)
             }
 
             packageRequests.chunked(MAX_PICS_BUFFER).forEach { chunk ->

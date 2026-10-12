@@ -3308,4 +3308,14 @@
     <string name="support_wait_stop">Stop</string>
     <string name="support_reply_ready_tap">Tap to read it.</string>
     <string name="support_notify_me">Notify me when the reply arrives</string>
+    <string name="canonical_dlc_owned">Owned</string>
+    <string name="canonical_dlc_not_owned">Not owned</string>
+    <string name="canonical_dlc_select_copy">Select an owned copy to view its DLC.</string>
+    <string name="canonical_dlc_loading">Loading DLC information…</string>
+    <string name="canonical_dlc_empty">No DLC listed for this copy.</string>
+    <string name="canonical_dlc_unavailable">DLC information is unavailable for this copy.</string>
+    <string name="canonical_dlc_partial_catalog">Some DLC details could not be loaded.</string>
+    <string name="canonical_dlc_partial_ownership">Ownership information is incomplete; missing licenses remain unknown.</string>
+    <string name="canonical_dlc_product">Product %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

@@ -2992,4 +2992,14 @@
     <string name="support_files_listing_sending">%1$s 목록을 보내는 중</string>
     <string name="support_files_listing_sent">목록을 보냈습니다 (%1$d개 항목)</string>
     <string name="support_files_listing_failed">%1$s 목록을 보낼 수 없습니다. %2$s</string>
+    <string name="canonical_dlc_owned">보유함</string>
+    <string name="canonical_dlc_not_owned">미보유</string>
+    <string name="canonical_dlc_select_copy">보유한 사본을 선택하여 DLC를 확인하세요.</string>
+    <string name="canonical_dlc_loading">DLC 정보를 불러오는 중…</string>
+    <string name="canonical_dlc_empty">이 사본에 등록된 DLC가 없습니다.</string>
+    <string name="canonical_dlc_unavailable">이 사본의 DLC 정보를 사용할 수 없습니다.</string>
+    <string name="canonical_dlc_partial_catalog">일부 DLC 정보를 불러오지 못했습니다.</string>
+    <string name="canonical_dlc_partial_ownership">보유 정보가 불완전합니다. 확인되지 않은 라이선스는 알 수 없음으로 유지됩니다.</string>
+    <string name="canonical_dlc_product">제품 %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

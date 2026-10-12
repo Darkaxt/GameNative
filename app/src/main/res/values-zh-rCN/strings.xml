@@ -3012,4 +3012,14 @@
     <string name="support_files_listing_sending">正在发送 %1$s 的列表</string>
     <string name="support_files_listing_sent">列表已发送（%1$d 项）</string>
     <string name="support_files_listing_failed">无法发送 %1$s 的列表。%2$s</string>
+    <string name="canonical_dlc_owned">已拥有</string>
+    <string name="canonical_dlc_not_owned">未拥有</string>
+    <string name="canonical_dlc_select_copy">选择已拥有的副本以查看其DLC。</string>
+    <string name="canonical_dlc_loading">正在加载DLC信息…</string>
+    <string name="canonical_dlc_empty">此副本没有列出的DLC。</string>
+    <string name="canonical_dlc_unavailable">此副本的DLC信息不可用。</string>
+    <string name="canonical_dlc_partial_catalog">部分DLC详情无法加载。</string>
+    <string name="canonical_dlc_partial_ownership">所有权信息不完整；缺失的许可证仍显示为未知。</string>
+    <string name="canonical_dlc_product">产品 %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

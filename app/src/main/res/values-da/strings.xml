@@ -2878,4 +2878,14 @@
     <string name="support_files_listing_sending">Sender oversigten over %1$s</string>
     <string name="support_files_listing_sent">Oversigt sendt (%1$d elementer)</string>
     <string name="support_files_listing_failed">Oversigten over %1$s kunne ikke sendes. %2$s</string>
+    <string name="canonical_dlc_owned">Ejet</string>
+    <string name="canonical_dlc_not_owned">Ikke ejet</string>
+    <string name="canonical_dlc_select_copy">Vælg en ejet kopi for at se dens DLC.</string>
+    <string name="canonical_dlc_loading">Indlæser DLC-oplysninger…</string>
+    <string name="canonical_dlc_empty">Ingen DLC angivet for denne kopi.</string>
+    <string name="canonical_dlc_unavailable">DLC-oplysninger er ikke tilgængelige for denne kopi.</string>
+    <string name="canonical_dlc_partial_catalog">Nogle DLC-oplysninger kunne ikke indlæses.</string>
+    <string name="canonical_dlc_partial_ownership">Ejerskabsoplysningerne er ufuldstændige; manglende licenser forbliver ukendte.</string>
+    <string name="canonical_dlc_product">Produkt %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

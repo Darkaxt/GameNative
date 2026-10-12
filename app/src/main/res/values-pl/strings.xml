@@ -3034,4 +3034,14 @@
     <string name="support_files_listing_sending">Wysyłanie listy %1$s</string>
     <string name="support_files_listing_sent">Lista wysłana (elementy: %1$d)</string>
     <string name="support_files_listing_failed">Nie udało się wysłać listy %1$s. %2$s</string>
+    <string name="canonical_dlc_owned">Posiadane</string>
+    <string name="canonical_dlc_not_owned">Nieposiadane</string>
+    <string name="canonical_dlc_select_copy">Wybierz posiadaną kopię, aby zobaczyć jej DLC.</string>
+    <string name="canonical_dlc_loading">Wczytywanie informacji o DLC…</string>
+    <string name="canonical_dlc_empty">Brak DLC na liście dla tej kopii.</string>
+    <string name="canonical_dlc_unavailable">Informacje o DLC są niedostępne dla tej kopii.</string>
+    <string name="canonical_dlc_partial_catalog">Nie udało się wczytać niektórych szczegółów DLC.</string>
+    <string name="canonical_dlc_partial_ownership">Informacje o posiadaniu są niepełne; brakujące licencje pozostają nieznane.</string>
+    <string name="canonical_dlc_product">Produkt %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

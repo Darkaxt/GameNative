@@ -2958,4 +2958,14 @@ https://gamenative.app
     <string name="support_files_listing_sending">Отправка списка %1$s</string>
     <string name="support_files_listing_sent">Список отправлен (элементов: %1$d)</string>
     <string name="support_files_listing_failed">Не удалось отправить список %1$s. %2$s</string>
+    <string name="canonical_dlc_owned">Приобретено</string>
+    <string name="canonical_dlc_not_owned">Не приобретено</string>
+    <string name="canonical_dlc_select_copy">Выберите приобретённую копию для просмотра её DLC.</string>
+    <string name="canonical_dlc_loading">Загрузка сведений о DLC…</string>
+    <string name="canonical_dlc_empty">Для этой копии DLC не указаны.</string>
+    <string name="canonical_dlc_unavailable">Сведения о DLC недоступны для этой копии.</string>
+    <string name="canonical_dlc_partial_catalog">Не удалось загрузить некоторые сведения о DLC.</string>
+    <string name="canonical_dlc_partial_ownership">Сведения о владении неполны; отсутствующие лицензии остаются неизвестными.</string>
+    <string name="canonical_dlc_product">Продукт %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

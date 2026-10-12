@@ -43,6 +43,10 @@ import app.gamenative.library.canonical.OwnedCopyOperation
 import app.gamenative.library.canonical.OwnedCopySummary
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.OwnedCopyRouteResult
+import app.gamenative.library.dlc.DlcItem
+import app.gamenative.library.dlc.DlcOwnership
+import app.gamenative.library.dlc.DlcState
+import app.gamenative.ui.model.DlcUiState
 import app.gamenative.library.community.DiscussionSectionState
 import app.gamenative.library.discovery.SteamReviewSummary
 import app.gamenative.ui.model.ReviewSummaryState
@@ -525,6 +529,43 @@ class CanonicalDetailActionsTest {
         composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
     }
 
+    @Test
+    fun libraryHostBindsOnlyCurrentAvailableExactDlcCopies() {
+        val original = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS))
+        val hidden = original.copies.single().copy(key = original.copies.single().key.copy(stableSourceId = "99"), isHidden = true)
+        val unavailable = original.copies.single().copy(key = original.copies.single().key.copy(stableSourceId = "100"),
+            unavailableReason = app.gamenative.library.canonical.CopyUnavailableReason.SOURCE_READ_FAILED)
+        val bound = mutableListOf<Pair<List<OwnedCopyKey>, Boolean>>()
+        screen(original.copy(copies = original.copies + hidden + unavailable), mutableListOf(),
+            onBindDlcCopies = { keys, offline -> bound += keys to offline })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.runOnIdle { assertEquals(listOf(original.copies.map { it.key } to false), bound) }
+    }
+
+    @Test
+    fun libraryHostForwardsNativeDlcRowsAndExactSelectionWithoutRoutingActions() {
+        val original = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS))
+        val first = original.copies.single().key
+        val second = first.copy(stableSourceId = "99")
+        val copies = original.copies + original.copies.single().copy(key = second, nativeTitle = "Synthetic Deluxe edition")
+        val selected = mutableListOf<OwnedCopyKey>()
+        val operations = mutableListOf<OwnedCopyOperation>()
+        var retries = 0
+        screen(original.copy(copies = copies), operations, detailState = GameDetailState.Unavailable(null),
+            dlcUiState = DlcUiState(first, DlcState.Content(first, listOf(DlcItem("43", "Native expansion", DlcOwnership.OWNED)), true, false)),
+            onSelectDlcCopy = { selected += it }, onRetryDlc = { retries++ })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+        composeRule.onNodeWithTag("canonical-dlc-item:43").assertExists()
+        composeRule.onNodeWithTag("canonical-dlc-copy:1").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.onNodeWithTag("canonical-dlc-retry").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        composeRule.runOnIdle {
+            assertEquals(listOf(second), selected)
+            assertEquals(1, retries)
+            assertEquals(emptyList<OwnedCopyOperation>(), operations)
+        }
+    }
+
     private fun transitionedFamily(deluxe: CanonicalLibraryCard): CanonicalLibraryCard {
         val id = CanonicalGameId.parse("22222222-2222-2222-2222-222222222222")
         val copy = deluxe.copies.single().copy(key = deluxe.copies.single().key.copy(stableSourceId = "43"), nativeTitle = "Fixture Game")
@@ -562,6 +603,10 @@ class CanonicalDetailActionsTest {
         discussionState: DiscussionSectionState = DiscussionSectionState.Idle,
         liveDiscussionState: State<DiscussionSectionState>? = null,
         reviewSummaryState: ReviewSummaryState = ReviewSummaryState.Idle,
+        dlcUiState: DlcUiState = DlcUiState(),
+        onBindDlcCopies: (List<OwnedCopyKey>, Boolean) -> Unit = { _, _ -> },
+        onSelectDlcCopy: (OwnedCopyKey) -> Unit = {},
+        onRetryDlc: () -> Unit = {},
         onCloseThread: () -> Boolean = { false },
         expectedExplicitKey: OwnedCopyKey? = null,
         liveCanonicalCards: State<List<CanonicalLibraryCard>>? = null,
@@ -618,6 +663,10 @@ class CanonicalDetailActionsTest {
                     onPreviousTab = {},
                     onNextTab = {},
                     gameDetailState = detailState,
+                    dlcUiState = dlcUiState,
+                    onBindDlcCopies = onBindDlcCopies,
+                    onSelectDlcCopy = onSelectDlcCopy,
+                    onRetryDlc = onRetryDlc,
                     onClearCanonicalDetail = onClearDetail,
                     discussionState = liveDiscussionState?.value ?: discussionState,
                     reviewSummaryState = reviewSummaryState,

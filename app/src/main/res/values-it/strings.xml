@@ -2999,4 +2999,14 @@
     <string name="support_files_listing_sending">Invio dell\'elenco di %1$s</string>
     <string name="support_files_listing_sent">Elenco inviato (%1$d elementi)</string>
     <string name="support_files_listing_failed">Impossibile inviare l\'elenco di %1$s. %2$s</string>
+    <string name="canonical_dlc_owned">Posseduto</string>
+    <string name="canonical_dlc_not_owned">Non posseduto</string>
+    <string name="canonical_dlc_select_copy">Seleziona una copia posseduta per vedere i suoi DLC.</string>
+    <string name="canonical_dlc_loading">Caricamento delle informazioni sui DLC…</string>
+    <string name="canonical_dlc_empty">Nessun DLC elencato per questa copia.</string>
+    <string name="canonical_dlc_unavailable">Le informazioni sui DLC non sono disponibili per questa copia.</string>
+    <string name="canonical_dlc_partial_catalog">Impossibile caricare alcuni dettagli dei DLC.</string>
+    <string name="canonical_dlc_partial_ownership">Le informazioni sul possesso sono incomplete; le licenze mancanti restano sconosciute.</string>
+    <string name="canonical_dlc_product">Prodotto %1$s</string>
+    <string name="canonical_dlc_copy_label">%1$s · %2$s · %3$s</string>
 </resources>

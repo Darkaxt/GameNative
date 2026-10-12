@@ -113,6 +113,8 @@ import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.enums.SortOption
 import app.gamenative.ui.internal.fakeAppInfo
 import app.gamenative.ui.model.CanonicalCopyChangeResult
+import app.gamenative.ui.model.DlcUiState
+import app.gamenative.ui.model.DlcViewModel
 import app.gamenative.ui.model.GameDetailViewModel
 import app.gamenative.ui.model.ReviewSummaryState
 import app.gamenative.ui.model.LibraryViewModel
@@ -177,6 +179,8 @@ fun HomeLibraryScreen(
     isSteamConnected: Boolean = false,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val dlcViewModel = hiltViewModel<DlcViewModel>()
+    val dlcUiState by dlcViewModel.state.collectAsStateWithLifecycle()
     val gameDetailState by detailViewModel.state.collectAsStateWithLifecycle()
     val reviewSummaryState by detailViewModel.reviewSummaryState.collectAsStateWithLifecycle()
     val reviewState by detailViewModel.reviewState.collectAsStateWithLifecycle()
@@ -250,6 +254,10 @@ fun HomeLibraryScreen(
         onRetryReviewSummary = { appId -> detailViewModel.loadReviewSummary(appId, isOffline, force = true) },
         onOpenCanonicalDetail = detailViewModel::load,
         onRetryCanonicalDetail = detailViewModel::retry,
+        dlcUiState = dlcUiState,
+        onBindDlcCopies = dlcViewModel::bindCopies,
+        onSelectDlcCopy = dlcViewModel::select,
+        onRetryDlc = dlcViewModel::retry,
         reviewState = reviewState,
         reviewQuery = reviewQuery,
         onLoadReviews = { appId -> detailViewModel.loadReviews(appId, isOffline) },
@@ -262,7 +270,10 @@ fun HomeLibraryScreen(
         onRefreshDiscussions = { detailViewModel.refreshDiscussions(isOffline) },
         onLoadMoreDiscussions = detailViewModel::loadMoreDiscussions,
         onCloseDiscussionThread = detailViewModel::closeDiscussionThread,
-        onClearCanonicalDetail = detailViewModel::clearDetail,
+        onClearCanonicalDetail = {
+            detailViewModel.clearDetail()
+            dlcViewModel.clear()
+        },
         steamMatchState = steamMatchState,
         steamMatchQuery = steamMatchQuery,
         onOpenSteamMatch = steamMatchViewModel::openMatch,
@@ -355,6 +366,10 @@ internal fun LibraryScreenContent(
     onRetryReviewSummary: (Int) -> Unit = {},
     onOpenCanonicalDetail: (CanonicalGameId) -> Unit = {},
     onRetryCanonicalDetail: () -> Unit = {},
+    dlcUiState: DlcUiState = DlcUiState(),
+    onBindDlcCopies: (List<OwnedCopyKey>, Boolean) -> Unit = { _, _ -> },
+    onSelectDlcCopy: (OwnedCopyKey) -> Unit = {},
+    onRetryDlc: () -> Unit = {},
     reviewState: ReviewSectionState = ReviewSectionState.Idle,
     reviewQuery: SteamReviewQuery = SteamReviewQuery(),
     onLoadReviews: (Int) -> Unit = {},
@@ -1694,6 +1709,10 @@ internal fun LibraryScreenContent(
                         onOpenCanonicalDetail(selectedCanonicalCard.canonicalId)
                     }
                 }
+                val dlcKeys = selectedCanonicalCard.copies.filter { !it.isHidden && it.unavailableReason == null }.map { it.key }
+                LaunchedEffect(selectedCanonicalCard.canonicalId, dlcKeys, isOffline) {
+                    onBindDlcCopies(dlcKeys, isOffline)
+                }
                 val mutableSteamMatchCopies = selectedCanonicalCard.copies.filter { copy ->
                     copy.source != GameSource.STEAM
                 }
@@ -1726,6 +1745,10 @@ internal fun LibraryScreenContent(
                 ) { sourceDetails ->
                     CanonicalGameDetailScreen(
                         state = gameDetailState,
+                        dlcState = dlcUiState.detail,
+                        selectedDlcCopy = dlcUiState.selectedCopy,
+                        onSelectDlcCopy = onSelectDlcCopy,
+                        onRetryDlc = onRetryDlc,
                         sourceDetails = sourceDetails,
                         sourceOptionsRequestId = sourceOptionsRequestId,
                         reviewSummaryState = reviewSummaryState,

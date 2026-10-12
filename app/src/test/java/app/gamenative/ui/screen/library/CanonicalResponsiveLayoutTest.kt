@@ -46,6 +46,13 @@ class CanonicalResponsiveLayoutTest {
     @get:Rule(order = 1) val composeRule = createComposeRule()
 
     @Test
+    fun detailsExposeIndividualDlcSectionRatherThanOnlyAggregateCount() {
+        screen()
+        tab("DETAILS")
+        composeRule.onNodeWithTag("canonical-detail-dlc").assertExists()
+    }
+
+    @Test
     fun wideDetailsKeepCompactFactsBesideTheWiderTechnicalColumn() {
         screen()
         tab("DETAILS")
