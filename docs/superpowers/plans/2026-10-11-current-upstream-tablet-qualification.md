@@ -138,6 +138,20 @@ Reuse `.github/workflows/app-release-signed.yml`'s fork-only `validation-candida
 
 Independent download verification must match GitHub run head/branch/event/conclusion, package `app.gamenative.darkaxt`,43/rc17, sole pinned v2 signer, exact APK/mapping/schema hashes and committed official download prebuilts. Native rebuilding U05 is not claimed. Evidence root `D:/Temp/gamenative-q1-20261012`; artifact output is registered in transaction `32c9a9995319db0b8b9aa643bb5c7561` and retained through acceptance. Only after exact host/artifact readiness request fresh Samsung permission/ownership; no ADB beforehand. Parent IN_PROGRESS, remaining ledger requirements unchanged.
 
+### Q1 exact signed candidate — VERIFIED, not live acceptance
+
+Artifact-only GitHub run `38212954798` completed successfully from exact source `d6075fea4acc3ff01b5ea17e5bca71988f8cdcf7`; `validation-candidate` succeeded and normal `build` was skipped. Fresh official state immediately before dispatch remained integrated `c78519cd9ab25f48f42b1528bd9b027f5c468403`. No release/tag/master/origin writes occurred.
+
+Downloaded only `gamenative-side-by-side-validation-d6075fea4acc3ff01b5ea17e5bca71988f8cdcf7`. Independent local verification passed:
+
+- Package `app.gamenative.darkaxt`,43 / `1.2.0-rc17`, min26/target28, APK Signature Scheme v2 and sole pinned persistent certificate `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`.
+- APK SHA256 `4909325d0e5b7ee0dd25e10cb252626dae2c5ceb5ae17ce5aed74da4b2c50282`; mapping SHA256 `d5876acb4b198ebbbaee48e7a7f9382fd0bf4c59e9cb76f706c8ede39b908fb6`.
+- Schema31 SHA256 `b6e246f8eb208a9ccd3dcacde09e523dace6764aa62bc9b741ddfa1941d37236` and schema32 SHA256 `e3cf80de98bc83725a2f5f64ae1eb82ecdfeb8e52cd232c615ba4a14be68d837` match exact committed sources/provenance.
+- Both packaged `libgndownload.so` bytes match exact committed official prebuilts: arm64 `4d758a6a3daa8cd4509f7f047ffcf0427226ae06428abe025161ef6e4ac51695`, armv7 `c58041f4ce6c083fcc51b9fd406d4cd335d9910728a3a587410b28049f64b5ce`. U05 fresh native source rebuilding remains open.
+- Receipt `D:/Temp/gamenative-q1-20261012/candidate-d6075fea4acc-verification.json`; APK `D:/Temp/gamenative-q1-20261012/artifacts/gamenative-side-by-side.apk`. Artifacts remain registered/retained through acceptance. CI and download watchdogs were canceled at terminal events.
+
+Q1 host/artifact readiness is verified. Parent IN_PROGRESS; the concrete next action is fresh explicit thread/session Samsung permission, then exclusive coordination and the bounded signed acceptance below. No Android command, device lease, account probe or live acceptance occurred in this batch. Do not infer permission from CI completion or the ended rc16 session.
+
 ### Q1 downstream signed acceptance checklist (not device authority)
 
 After fresh explicit Samsung permission and current exclusive ownership only:
