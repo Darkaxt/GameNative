@@ -1,6 +1,6 @@
 # Community loading and native comments runtime cross-check — 2026-10-12
 
-**Status:** HOST_VERIFIED, inline only; parent IN_PROGRESS. Initial body correction passed51/51 per flavor; native comments passed72/72 per flavor. Final integrated43-suite qualification passed436/436 per flavor, zero failures/errors/skips, including real-Main native comments and closure cancellation. Both earlier checkpoints executed both Android-test Kotlin compilations; final integrated compilation tasks were UP-TO-DATE. Publication and signed/live acceptance remain pending. No Android authority is inferred.
+**Status:** HOST_VERIFIED, inline only; parent IN_PROGRESS. Initial body correction passed51/51 per flavor; native comments passed72/72 per flavor. Final integrated43-suite qualification passed436/436 per flavor, zero failures/errors/skips, including real-Main native comments and closure cancellation. Both earlier checkpoints executed both Android-test Kotlin compilations; final integrated compilation tasks were UP-TO-DATE. The qualified feature checkpoint is published at `e6e36ffcc19fae192ec2854f9200e028d66bf6f1`, verified by fresh remote SHA. Signed/live acceptance remains pending. No Android authority is inferred.
 
 **Authority:** `../specs/2026-08-08-steam-resolution-community-visible-core-design.md`, §§4–5, 7–8, 9.3 and V1/V2/C1/C2/C4/A1. Existing feature-branch publication authorization applies; no master/tag/release/origin or upstream interaction.
 
