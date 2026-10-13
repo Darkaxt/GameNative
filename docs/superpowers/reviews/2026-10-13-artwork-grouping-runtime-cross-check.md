@@ -48,3 +48,17 @@ Modern production-decoder/native-host matcher results: GOG/Epic90/113 inliers/ma
 No current host ART1–ART7 implementation/verification/publication blocker remains. Qualified source checkpoint `9ac6f226` is published and remote-verified; the stopped tablet's sole cause/live acceptance and broader parent priorities remain unclaimed. The old standalone portrait/pHash POC is historical, API-incompatible evidence and is not admitted as passing current-module verification. Transactional cleanup removed only expendable runtime/bytecode-cache output (521,261,601 bytes) and the completed build's opaque heap dump (5,363,479,436 bytes); all source, native build outputs, runners, test XML, failure receipts and logs were retained. The public provenance JSON received only parsed-value-identical CRLF→LF normalization after qualification; qualified code and image bytes are unchanged.
 
 No optional optimization/hardening/refactor, new grouping UI or later-priority feature is assigned by this cross-check. Live testing remains STOPPED. Opaque heap dumps and local build logs are excluded from commits/uploads.
+
+## Subsequently authorized signed testing APK — 2026-10-14
+
+The user's request for an actual testing binary authorized artifact preparation after the source-only closure above; it did not resume device testing. Existing artifact-only workflow run [38472575134](https://github.com/Darkaxt/GameNative/actions/runs/38472575134) succeeded at exact commit `3a8e1016355a2cbb446e0cb81d9d21ed43667ace` (qualified application source `9ac6f226` plus documentation-only reconciliation). Its validation-candidate job succeeded; normal release job was skipped. Original artifact `11853731124` was downloaded to `D:/Temp/gamenative-artwork-apk-38472575134`; no replacement build, version change, tag or release was created.
+
+Independent local verification of the downloaded `gamenative-side-by-side.apk` established:
+
+- APK SHA256 `1400e2bb50b75ad0bb9184e5408a7b22dea28989ff0e760e56ba9209343ced9c`, actual file size594,236,258 bytes; exact workflow provenance matched.
+- Local SDK35 `apksigner` verified APK Signature Scheme v2 and the sole persistent fork certificate SHA256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`.
+- Local `aapt` verified package `app.gamenative.darkaxt`, version43 / `1.2.0-rc17`, minSDK26/targetSDK28. Downloaded R8 mapping and committed schemas31/32 matched their provenance hashes.
+- ZIP payload inspection found OpenCV JNI and selected shared C++ for both ARM ABIs, with exact byte sizes/hashes equal to the native merge evidence above. Consequently its retained unchanged-byte API26 static import proof applies to the actual signed payload, not merely debug outputs. Both packaged `libgndownload.so` files match provenance and committed source.
+- Actual release DEX retained OpenCV `Core`, `Mat`, `ORB`, `BFMatcher` and `Calib3d` wrapper classes. This is R8 packaging evidence, not Android runtime execution.
+
+APK, provenance, mapping and signature/identity files are deliverables and are retained. No Android/ADB, installation, live acceptance or FPS verification occurred. Signed binary preparation is complete; stopped live acceptance and the broader parent remain open.
