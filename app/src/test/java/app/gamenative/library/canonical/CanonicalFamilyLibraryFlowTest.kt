@@ -16,9 +16,14 @@ import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.data.canonical.StoreMatchEntity
 import app.gamenative.db.PluviaDatabase
-import app.gamenative.library.canonical.artwork.ArtworkFingerprint
-import app.gamenative.library.canonical.artwork.ArtworkFingerprintSource
-import app.gamenative.library.canonical.artwork.ArtworkFixtures
+import app.gamenative.library.canonical.artwork.ArtworkFeatureCache
+import app.gamenative.library.canonical.artwork.ArtworkFeatureFixtures
+import app.gamenative.library.canonical.artwork.ArtworkFeatureMatcher
+import app.gamenative.library.canonical.artwork.ArtworkFeatureSource
+import app.gamenative.library.canonical.artwork.ArtworkFeatures
+import app.gamenative.library.canonical.artwork.ArtworkReference
+import app.gamenative.library.metadata.MetadataClock
+import org.junit.rules.TemporaryFolder
 import app.gamenative.library.canonical.catalog.ResolutionWorkerTestApplication
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntime
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeAdapter
@@ -56,12 +61,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.junit.rules.TimeoutRule
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest = Config.NONE, application = ResolutionWorkerTestApplication::class)
+@Config(manifest = Config.NONE, application = ResolutionWorkerTestApplication::class, sdk = [29])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CanonicalFamilyLibraryFlowTest {
     @get:Rule val timeout = TimeoutRule.seconds(30)
+    @get:Rule val temporary = TemporaryFolder()
+    private val evidenceDirectory by lazy { temporary.newFolder() }
     private lateinit var db: PluviaDatabase
     private lateinit var registry: OwnedCopyRuntimeRegistry
     private val runtimes = ConcurrentHashMap<OwnedCopyKey, OwnedCopyRuntimeResult>()
@@ -73,6 +82,9 @@ class CanonicalFamilyLibraryFlowTest {
 
     @Before
     fun setUp() {
+        // Prepare this source's fixture data before the shared-flow deadline, including cold host JNI/graphics startup.
+        ArtworkFeatureFixtures.artwork()
+        ArtworkFeatureFixtures.artwork("dredge-epic.jpg")
         db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PluviaDatabase::class.java)
             .allowMainThreadQueries().build()
         registry = OwnedCopyRuntimeRegistry(GameSource.entries.map { source -> Adapter(source) }.toSet(),
@@ -84,12 +96,17 @@ class CanonicalFamilyLibraryFlowTest {
 
     @Test
     fun actualRoomLibraryFlowPublishesOneFamilyWithoutChangingMemberCatalogOrMatches() = runFlowTest {
-        seed()
+        seedMember(1, firstKey, "Harbour adventure")
+        seedMember(2, secondKey, "Collector bonus pack")
+        db.canonicalGameDao().update(db.canonicalGameDao().get(id(2).value)!!.copy(appType = CanonicalAppType.DLC, developerKey = "Other studio"))
         val repository = repository()
         val before = db.canonicalLibraryDao().observePresentGames().first()
         val family = repository.observeCards().first { it.size == 1 }.single()
         assertEquals(mapOf(firstKey to id(1), secondKey to id(2)), family.copyCanonicalIds)
         assertEquals(mapOf(id(1) to 42, id(2) to 43), family.memberSteamAppIds)
+        for (member in listOf(id(1), id(2))) {
+            assertEquals(family, CanonicalCardLookup.resolve(listOf(family), CanonicalCardKey.Grouped(member)))
+        }
         assertEquals(before, db.canonicalLibraryDao().observePresentGames().first())
         assertFalse(family.copies.any { it.source == GameSource.STEAM })
         assertEquals(setOf(GameSource.GOG, GameSource.EPIC), family.ownedSources)
@@ -111,17 +128,16 @@ class CanonicalFamilyLibraryFlowTest {
     }
 
     @Test
-    fun familyAfterThirtyMemberBudgetIsNotPermanentlySkipped() = runFlowTest {
+    fun allThirtyTwoMetadataDistinctOwnersOfTheSameArtworkProgressWithoutAMemberBudget() = runFlowTest {
         for (group in 0L..15L) {
-            val title = "Fixture Game ${group.toString().padStart(2, '0')}"
+            val title = "Distinct product ${group.toString().padStart(2, '0')}"
             seedMember(group * 2 + 1, key(group * 2 + 1, GameSource.GOG), title)
-            seedMember(group * 2 + 2, key(group * 2 + 2, GameSource.EPIC), "$title Deluxe")
+            seedMember(group * 2 + 2, key(group * 2 + 2, GameSource.EPIC), "Other product $group")
         }
         val before = db.canonicalLibraryDao().observePresentGames().first()
-        val families = withTimeoutOrNull(3_000) { repository().observeCards().first { it.size == 16 } }
-        assertTrue("All 16 families must progress, not only the first 30 members", families != null)
-        assertTrue(requireNotNull(families).all { it.isPresentationFamily && it.copies.size == 2 })
-        assertEquals(32, families.flatMap { it.copies }.map { it.key }.distinct().size)
+        val family = repository().observeCards().first { it.size == 1 && it.single().copies.size == 32 }.single()
+        assertTrue(family.isPresentationFamily)
+        assertEquals(32, family.copies.map { it.key }.distinct().size)
         assertEquals(before, db.canonicalLibraryDao().observePresentGames().first())
     }
 
@@ -173,7 +189,9 @@ class CanonicalFamilyLibraryFlowTest {
         val repository = repository()
         withCards(repository) { channel ->
             next(channel) { it.size == 1 }
-            images.action = { url -> fingerprint(distinct = url.endsWith("2.jpg")) }
+            images.action = { url -> fingerprint(distinct = url.contains("2.jpg")) }
+            val current = (runtimes.getValue(secondKey) as OwnedCopyRuntimeResult.Available).copy
+            runtimes[secondKey] = OwnedCopyRuntimeResult.Available(current.copy(originalArtworkUrl = "https://cdn1.epicgames.com/changed-2.jpg"))
             invalidations.emit(Unit)
             val raw = next(channel) { it.size == 2 }
             assertEquals(setOf(id(1), id(2)), raw.map { it.canonicalId }.toSet())
@@ -187,11 +205,11 @@ class CanonicalFamilyLibraryFlowTest {
         seed()
         val repository = repository()
         val entered = CompletableDeferred<Unit>()
-        var cleaned = false
+        val cleaned = CompletableDeferred<Unit>()
         images.action = { url ->
             if (url.endsWith("2.jpg")) {
                 entered.complete(Unit)
-                try { awaitCancellation() } finally { cleaned = true }
+                try { awaitCancellation() } finally { cleaned.complete(Unit) }
             } else fingerprint()
         }
         withCards(repository) { channel ->
@@ -201,7 +219,9 @@ class CanonicalFamilyLibraryFlowTest {
             val current = next(channel) { it.sumOf { card -> card.copies.size } == 1 }.single()
             assertEquals(id(2), current.canonicalId)
             assertEquals(secondKey, current.copies.single().key)
-            assertTrue(cleaned)
+            // Raw membership renders before the asynchronous worker's cleanup completes.
+            cleaned.await()
+            assertTrue(channel.tryReceive().getOrNull()?.any { it.isPresentationFamily } != true)
             assertEquals(mapOf(secondKey to id(2)), current.copyCanonicalIds)
             assertEquals(mapOf(id(2) to 43), current.memberSteamAppIds)
             assertFalse(current.isPresentationFamily)
@@ -276,6 +296,36 @@ class CanonicalFamilyLibraryFlowTest {
     }
 
     @Test
+    fun mixedProductTypesCannotHideArtworkFamilyFromExistingSharedGameFilter() = runFlowTest {
+        seed()
+        val first = db.canonicalGameDao().get(id(1).value)!!
+        db.canonicalGameDao().update(first.copy(appType = CanonicalAppType.DLC))
+        val native = (runtimes.getValue(firstKey) as OwnedCopyRuntimeResult.Available).copy
+        runtimes[firstKey] = OwnedCopyRuntimeResult.Available(native.copy(appType = CanonicalAppType.DLC))
+        app.gamenative.PrefManager.init(ApplicationProvider.getApplicationContext())
+        val family = repository().observeCards().first { it.size == 1 }.single()
+        assertEquals(CanonicalAppType.DLC, family.appType)
+        assertEquals(mapOf(id(1) to CanonicalAppType.DLC, id(2) to CanonicalAppType.GAME), family.memberAppTypes)
+        assertEquals(setOf(firstKey, secondKey), family.copies.map { it.key }.toSet())
+        val state = app.gamenative.ui.data.LibraryState(
+            appInfoSortType = java.util.EnumSet.of(app.gamenative.ui.enums.AppFilter.GAME),
+            currentTab = app.gamenative.ui.enums.LibraryTab.ALL,
+            showSteamInLibrary = true, showGOGInLibrary = true, showEpicInLibrary = true,
+            showAmazonInLibrary = true, showCustomGamesInLibrary = true,
+            selectedSteamCollectionIds = emptySet(), selectedCuratedListIds = emptySet(), steamReviewMinimum = null,
+        )
+        for (tab in listOf(app.gamenative.ui.enums.LibraryTab.ALL, app.gamenative.ui.enums.LibraryTab.GOG,
+            app.gamenative.ui.enums.LibraryTab.EPIC)) {
+            val page = app.gamenative.ui.model.CanonicalLibraryFilter.project(
+                cards = listOf(family), state = state.copy(currentTab = tab), paginationPage = 0, pageSize = 50,
+                promotion = null, showRecommendations = false, compatibility = { null },
+            )
+            assertEquals("Artwork family must retain its GAME member in $tab", 1, page.totalCount)
+            assertEquals(app.gamenative.ui.data.LibraryCardIdentity.Canonical(family.key), page.cards.single().identity)
+        }
+    }
+
+    @Test
     fun actualSearchAndSourceFiltersRetainOneFamilyAndTheSameDetailRoute() = runFlowTest {
         seed()
         app.gamenative.PrefManager.init(ApplicationProvider.getApplicationContext())
@@ -306,7 +356,8 @@ class CanonicalFamilyLibraryFlowTest {
     private fun repository(): CanonicalLibraryRepository {
         val constructor = CanonicalLibraryRepository::class.java.constructors.singleOrNull { it.parameterCount == 6 }
         assertTrue("Shared canonical library flow must consume native family evidence", constructor != null)
-        val producer = CanonicalFamilyArtworkCorroborator(images, registry::resolve)
+        val producer = CanonicalFamilyArtworkCorroborator(images,
+            ArtworkFeatureCache(evidenceDirectory, MetadataClock { 100L }), ArtworkFeatureMatcher(), registry::resolve)
         return constructor!!.newInstance(db.canonicalLibraryDao(), registry, NoOpCanonicalLibraryDiagnosticSink,
             mockk<app.gamenative.library.discovery.GameFacetRepository>(relaxed = true), SystemMetadataLocaleProvider(), producer)
             as CanonicalLibraryRepository
@@ -377,15 +428,16 @@ class CanonicalFamilyLibraryFlowTest {
         }
     }
 
-    private fun fingerprint(distinct: Boolean = false) = requireNotNull(ArtworkFingerprint.fromArgb(192, 288, ArtworkFixtures.cover(192, 288, distinct)))
-    private inner class Images : ArtworkFingerprintSource {
+    private fun fingerprint(distinct: Boolean = false) = ArtworkFeatureFixtures.artwork(if (distinct) "portal2.jpg" else "dredge-gog.jpg")
+    private inner class Images : ArtworkFeatureSource {
         val requests = mutableListOf<String>()
-        var action: suspend (String) -> ArtworkFingerprint? = { fingerprint() }
-        override suspend fun original(source: GameSource, raw: String, steamAppId: Int?): ArtworkFingerprint? {
-            assertFalse("Image acquisition must stay outside Room transactions", db.inTransaction())
-            requests += raw
-            return action(raw)
+        var action: suspend (String) -> ArtworkFeatures? = { url ->
+            ArtworkFeatureFixtures.artwork(if (url.contains("2.jpg")) "dredge-epic.jpg" else "dredge-gog.jpg")
         }
-        override suspend fun candidate(steamAppId: Int, raw: String): ArtworkFingerprint? = throw AssertionError("No catalog candidate image in family projection")
+        override suspend fun original(reference: ArtworkReference): ArtworkFeatures? {
+            assertFalse("Image acquisition must stay outside Room transactions", db.inTransaction())
+            requests += reference.url
+            return action(reference.url)
+        }
     }
 }

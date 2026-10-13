@@ -39,7 +39,25 @@ class ArtworkImageProvider internal constructor(client: OkHttpClient, private va
     override suspend fun candidate(steamAppId: Int, raw: String): ArtworkFingerprint? =
         fetch(policy.candidateUrl(steamAppId, raw)) { policy.candidateUrl(steamAppId, it) }
 
-    private suspend fun fetch(initial: HttpUrl?, validate: (String) -> HttpUrl?): ArtworkFingerprint? {
+    internal suspend fun grouping(reference: ArtworkReference): EncodedArtwork? = fetchBytes(
+        policy.groupingUrl(reference.source, reference.url, reference.steamAppId),
+    ) { policy.groupingUrl(reference.source, it, reference.steamAppId) }
+
+    internal data class EncodedArtwork(val bytes: ByteArray, val mimeType: String)
+
+    private suspend fun fetch(initial: HttpUrl?, validate: (String) -> HttpUrl?): ArtworkFingerprint? =
+        withTimeoutOrNull(20_000) {
+            val encoded = fetchBytes(initial, validate) ?: return@withTimeoutOrNull null
+            withContext(Dispatchers.Default) {
+                ensureActive()
+                val result = try { ArtworkImageDecoder.decode(encoded.bytes, encoded.mimeType) }
+                    catch (_: IllegalArgumentException) { null }
+                ensureActive()
+                result
+            }
+        }
+
+    private suspend fun fetchBytes(initial: HttpUrl?, validate: (String) -> HttpUrl?): EncodedArtwork? {
         val firstUrl = initial ?: return null
         return withTimeoutOrNull(20_000) {
             var url = firstUrl
@@ -49,16 +67,7 @@ class ArtworkImageProvider internal constructor(client: OkHttpClient, private va
                         if (hop == 2) return@withTimeoutOrNull null
                         url = validate(result.url.toString()) ?: return@withTimeoutOrNull null
                     }
-                    is ImageResponse.Bytes -> return@withTimeoutOrNull withContext(Dispatchers.Default) {
-                        ensureActive()
-                        val fingerprint = try {
-                            ArtworkImageDecoder.decode(result.bytes, result.mimeType)
-                        } catch (_: IllegalArgumentException) {
-                            null
-                        }
-                        ensureActive()
-                        fingerprint
-                    }
+                    is ImageResponse.Bytes -> return@withTimeoutOrNull EncodedArtwork(result.bytes, result.mimeType)
                     ImageResponse.Unavailable -> return@withTimeoutOrNull null
                 }
             }

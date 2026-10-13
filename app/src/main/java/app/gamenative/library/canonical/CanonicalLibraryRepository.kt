@@ -23,15 +23,14 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.Collections
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
@@ -44,19 +43,15 @@ class CanonicalLibraryRepository @Inject constructor(
     private val diagnostics: CanonicalLibraryDiagnosticSink,
     private val gameFacetRepository: GameFacetRepository,
     private val localeProvider: MetadataLocaleProvider,
-    private val familyArtwork: CanonicalFamilyArtworkCorroborator? = null,
+    private val familyArtwork: CanonicalFamilyArtworkCorroborator,
 ) {
     fun observeCards(): Flow<List<CanonicalLibraryCard>> = combine(
         dao.observePresentGames().map(::freezeAggregates),
         runtimeRegistry.invalidations().onStart { emit(Unit) },
     ) { aggregates, _ -> aggregates }
         .mapLatest(::assembleDiagnosed)
-        .flatMapLatest { cards ->
-            flow {
-                emit(cards)
-                familyArtwork?.let { emitAll(it.projectBatches(cards)) }
-            }
-        }
+        .let(familyArtwork::observe)
+        .flowOn(Dispatchers.Default)
         .buffer(0)
         .distinctUntilChanged()
 
@@ -300,6 +295,7 @@ class CanonicalLibraryRepository @Inject constructor(
                 isHidden = runtime.isHidden,
                 isVrOnly = runtime.isVrOnly,
                 isVrSupported = runtime.isVrSupported,
+                originalArtwork = CanonicalFamilyArtworkCorroborator.artworkReferences(runtime),
             )
         } else {
             val unavailable = checkNotNull(entry.unavailable)

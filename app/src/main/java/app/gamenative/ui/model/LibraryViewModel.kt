@@ -283,7 +283,11 @@ internal object CanonicalLibraryFilter {
         val tagMode = state.discoveryFilters.tagMatchMode
         val beforeCollections = cards.asSequence()
             .filter { card ->
-                val inTypeBucket = card.appType in appTypes && card.copies.any { !it.isVrOnly }
+                val inTypeBucket = card.copies.any { copy ->
+                    val member = card.copyCanonicalIds[copy.key] ?: card.canonicalId
+                    val type = card.memberAppTypes[member] ?: card.appType
+                    type in appTypes && !copy.isVrOnly
+                }
                 val inVrBucket = state.appInfoSortType.contains(AppFilter.VR) &&
                     card.copies.any { it.isVrOnly || it.isVrSupported }
                 inTypeBucket || inVrBucket

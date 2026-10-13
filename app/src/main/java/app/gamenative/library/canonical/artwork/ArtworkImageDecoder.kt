@@ -5,9 +5,15 @@ import android.graphics.BitmapFactory
 
 object ArtworkImageDecoder {
     const val MAX_ENCODED_BYTES = 2_097_152
+    internal data class Pixels(val width: Int, val height: Int, val argb: IntArray)
 
     @JvmStatic
-    fun decode(bytes: ByteArray, mimeType: String): ArtworkFingerprint? {
+    fun decode(bytes: ByteArray, mimeType: String): ArtworkFingerprint? =
+        pixels(bytes, mimeType, 512, 768)?.let { ArtworkFingerprint.fromArgb(it.width, it.height, it.argb) }
+
+    internal fun featurePixels(bytes: ByteArray, mimeType: String): Pixels? = pixels(bytes, mimeType, 768, 768)
+
+    private fun pixels(bytes: ByteArray, mimeType: String, maximumWidth: Int, maximumHeight: Int): Pixels? {
         if (bytes.size > MAX_ENCODED_BYTES || !hasSupportedSignature(bytes, mimeType)) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -15,7 +21,7 @@ object ArtworkImageDecoder {
             bounds.outWidth.toLong() * bounds.outHeight > ArtworkFingerprint.MAX_PIXELS
         ) return null
         var sampleSize = 1
-        while (bounds.outWidth / sampleSize > 512 || bounds.outHeight / sampleSize > 768) sampleSize *= 2
+        while (bounds.outWidth / sampleSize > maximumWidth || bounds.outHeight / sampleSize > maximumHeight) sampleSize *= 2
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -27,13 +33,13 @@ object ArtworkImageDecoder {
             if (pixelCount > ArtworkFingerprint.MAX_PIXELS || bitmap.width < 64 || bitmap.height < 64) return null
             val pixels = IntArray(pixelCount.toInt())
             bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-            ArtworkFingerprint.fromArgb(bitmap.width, bitmap.height, pixels)
+            Pixels(bitmap.width, bitmap.height, pixels)
         } finally {
             bitmap.recycle()
         }
     }
 
-    private fun hasSupportedSignature(bytes: ByteArray, mimeType: String): Boolean = when (mimeType) {
+    internal fun hasSupportedSignature(bytes: ByteArray, mimeType: String): Boolean = when (mimeType) {
         "image/jpeg" -> bytes.size >= 3 && (bytes[0].toInt() and 255) == 255 &&
             (bytes[1].toInt() and 255) == 216 && (bytes[2].toInt() and 255) == 255
         "image/png" -> bytes.size >= 8 && bytes.take(8) == listOf(-119, 80, 78, 71, 13, 10, 26, 10).map(Int::toByte)

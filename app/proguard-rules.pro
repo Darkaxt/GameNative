@@ -50,6 +50,9 @@
 -dontwarn horizon.**
 -dontwarn com.meta.horizon.**
 
+# OpenCV's generated Java wrappers use JNI names; its AAR does not provide consumer rules.
+-keep class org.opencv.** { *; }
+
 # Samsung Performance SDK (bundled stub jar, referenced by powercontrol Samsung driver)
 -keep class com.samsung.sdk.sperf.** { *; }
 -dontwarn com.samsung.sdk.sperf.**

@@ -245,6 +245,7 @@ android {
         jniLibs {
             // Preserve the official download prebuilt bytes; another LLVM strip rewrites the ELF.
             keepDebugSymbols += "**/libgndownload.so"
+            pickFirsts += "**/libc++_shared.so"
             // 'extractNativeLibs' was not enough to keep the jniLibs and
             // the libs went missing after adding on-demand feature delivery
             useLegacyPackaging = true
@@ -444,6 +445,9 @@ android {
 tasks.withType<Test>().configureEach {
     val isolatedTmpDir = layout.buildDirectory.dir("test-tmp/$name").get().asFile
     systemProperty("java.io.tmpdir", isolatedTmpDir.absolutePath)
+    providers.environmentVariable("GAMENATIVE_ARTWORK_JNI_DIR").orNull?.let {
+        systemProperty("java.library.path", it)
+    }
     doFirst {
         isolatedTmpDir.deleteRecursively()
         check(isolatedTmpDir.mkdirs() || isolatedTmpDir.isDirectory) {
@@ -457,6 +461,7 @@ tasks.withType<Test>().configureEach {
 
 dependencies {
     implementation(libs.material)
+    implementation("org.opencv:opencv:4.14.0")
 
     // Chrome Custom Tabs for GOG OAuth
     implementation("androidx.browser:browser:1.8.0")

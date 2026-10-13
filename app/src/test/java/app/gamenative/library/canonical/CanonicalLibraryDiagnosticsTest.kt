@@ -11,6 +11,8 @@ import app.gamenative.diagnostics.DiagnosticReportHeader
 import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.ActionSelectionPolicy
+import app.gamenative.library.canonical.artwork.ArtworkFeatures
+import app.gamenative.library.canonical.artwork.ArtworkMatch
 import java.io.File
 import kotlin.reflect.KClass
 import kotlinx.serialization.json.Json
@@ -63,6 +65,8 @@ class CanonicalLibraryDiagnosticsTest {
                 "routeFailed",
                 "revalidationFailed",
                 "routeSucceeded",
+                "artworkCompared",
+                "artworkUnavailable",
             ),
             methods.keys,
         )
@@ -74,6 +78,9 @@ class CanonicalLibraryDiagnosticsTest {
             ActionSelectionPolicy::class.java,
             CanonicalPublicFailure::class.java,
             ActionFailureReason::class.java,
+            ArtworkPairDigest::class.java,
+            ArtworkMatch::class.java,
+            ArtworkEvidenceFailure::class.java,
             KClass::class.java,
         )
         methods.values.flatten().forEach { parameterType ->
@@ -121,6 +128,12 @@ class CanonicalLibraryDiagnosticsTest {
             GameSource.GOG,
             object : IllegalStateException(forbidden.exceptionMessage) {}::class,
         )
+        diagnostics.artworkCompared(
+            ArtworkPairDigest.from(features("c".repeat(64)), features("b".repeat(64))),
+            ArtworkMatch(true, Int.MAX_VALUE, -4, Double.NaN, 0.24, 8, Double.POSITIVE_INFINITY),
+            Long.MAX_VALUE,
+        )
+        diagnostics.artworkUnavailable(GameSource.EPIC, ArtworkEvidenceFailure.ORIGINAL_UNAVAILABLE)
 
         val events = FeatureDiagnostics.recent()
         val report = DiagnosticReportBuilder.build(
@@ -133,7 +146,7 @@ class CanonicalLibraryDiagnosticsTest {
             events = events,
         )
 
-        assertEquals(9, events.size)
+        assertEquals(11, events.size)
         assertTrue(report.contains("Upload: manual export only"))
         forbidden.allPrivateValues.forEach { privateValue ->
             assertFalse("Private value reached manual export: $privateValue", report.contains(privateValue))
@@ -149,6 +162,9 @@ class CanonicalLibraryDiagnosticsTest {
             "canonical_count",
             "copy_count",
             "error_type",
+            "match_method",
+            "public_content_id",
+            "confidence",
         )
         events.forEach { event ->
             assertTrue(event.attributes.keys.all(exactAllowedAttributes::contains))
@@ -161,9 +177,26 @@ class CanonicalLibraryDiagnosticsTest {
         assertEquals("1500", projected.attributes.getValue("copy_count"))
         assertEquals(86_400_000L, projected.durationMs)
         assertEquals("0", events[4].attributes.getValue("result_count"))
-        assertEquals("UNKNOWN_EXCEPTION", events.last().attributes.getValue("error_type"))
+        assertEquals("UNKNOWN_EXCEPTION", events[8].attributes.getValue("error_type"))
+        assertEquals("ORB_V1", events[9].attributes.getValue("match_method"))
+        assertEquals("${"b".repeat(16)}/${"c".repeat(16)}", events[9].attributes.getValue("public_content_id"))
+        assertEquals("1000000", events[9].attributes.getValue("result_count"))
+        assertEquals("inliers=0;ratio=0;area=240;cells=8;error=0", events[9].attributes.getValue("confidence"))
+        assertEquals(86_400_000L, events[9].durationMs)
+        assertEquals("ORIGINAL_UNAVAILABLE", events[10].attributes.getValue("reason"))
         assertNull(events[1].durationMs)
         assertTrue(DiagnosticAttribute.entries.any { it.wireName == "selection_policy" })
+    }
+
+    @Test
+    fun `artwork pair diagnostic identity cannot admit arbitrary private strings`() {
+        val left = features("c".repeat(64))
+        val right = features("b".repeat(64))
+        assertEquals("${"b".repeat(16)}/${"c".repeat(16)}", ArtworkPairDigest.from(left, right).value)
+        assertEquals(ArtworkPairDigest.from(left, right).value, ArtworkPairDigest.from(right, left).value)
+        ForbiddenFixture().allPrivateValues.filterNot(ArtworkFeatures.HASH::matches).forEach { raw ->
+            assertTrue(runCatching { ArtworkPairDigest.from(features(raw), right) }.exceptionOrNull() is IllegalArgumentException)
+        }
     }
 
     @Test
@@ -178,6 +211,8 @@ class CanonicalLibraryDiagnosticsTest {
             OwnedCopyOperation.PLAY,
         )
     }
+
+    private fun features(hash: String) = ArtworkFeatures(hash, 64, 64, FloatArray(48) { 0.5f }, ByteArray(24 * 32))
 
     private fun featureDiagnosticsStore(): DiagnosticLogStore? = storeField.get(null) as DiagnosticLogStore?
 

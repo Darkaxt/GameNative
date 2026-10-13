@@ -6,13 +6,11 @@ import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.OwnedCopyKey
-import app.gamenative.library.canonical.artwork.ArtworkFingerprint
 import app.gamenative.library.canonical.catalog.SteamCatalogNormalization
 import java.util.Collections
 
 /** Presentation only: original artwork is supplied independently, and no catalog or copy identity is reassigned. */
 object CanonicalGameFamilyProjection {
-    internal const val MAX_FAMILY_MEMBERS = 10
     private val editionSuffix = Regex(
         "\\s+(?:deluxe|definitive|enhanced|ultimate|remastered|redux|complete|anniversary|" +
             "director s cut|final cut|game of the year)(?: edition| version)?$",
@@ -20,30 +18,41 @@ object CanonicalGameFamilyProjection {
 
     fun project(
         cards: List<CanonicalLibraryCard>,
-        artworks: Map<CanonicalGameId, ArtworkFingerprint>,
-        developerKeys: Map<CanonicalGameId, Set<String>>,
+        verifiedArtwork: Set<Pair<CanonicalGameId, CanonicalGameId>>,
     ): List<CanonicalLibraryCard> {
-        val eligible = cards.filter(::eligible)
-            .groupBy { familyTitleKey(it.displayName) }
-        val families = linkedMapOf<CanonicalGameId, CanonicalLibraryCard>()
+        if (cards.map { it.canonicalId }.distinct().size != cards.size ||
+            cards.flatMap { it.copies }.map { it.key }.let { it.distinct().size != it.size }
+        ) return cards
+        val admitted = cards.filter(::eligible).associateBy { it.canonicalId }
+        val neighbours = hashMapOf<CanonicalGameId, MutableSet<CanonicalGameId>>()
+        for ((left, right) in verifiedArtwork) {
+            if (left == right || left !in admitted || right !in admitted) continue
+            neighbours.getOrPut(left, ::linkedSetOf).add(right)
+            neighbours.getOrPut(right, ::linkedSetOf).add(left)
+        }
+        val families = arrayListOf<CanonicalLibraryCard>()
         val grouped = hashSetOf<CanonicalGameId>()
-        for ((title, unsorted) in eligible.toSortedMap()) {
-            if (title.isBlank() || unsorted.size !in 2..MAX_FAMILY_MEMBERS) continue
-            val members = unsorted.sortedWith(
-                compareBy<CanonicalLibraryCard> { if (SteamCatalogNormalization.titleKey(it.displayName) == title) 0 else 1 }
-                    .thenBy { if (it.steamAppId != null) 0 else 1 }
+        for (root in neighbours.keys.sortedBy { it.value }) {
+            if (root in grouped) continue
+            val component = linkedSetOf<CanonicalGameId>()
+            val pending = ArrayDeque<CanonicalGameId>().apply { add(root) }
+            while (pending.isNotEmpty()) {
+                val next = pending.removeFirst()
+                if (!component.add(next)) continue
+                neighbours[next].orEmpty().sortedBy { it.value }.forEach(pending::addLast)
+            }
+            if (component.size < 2) continue
+            val members = component.map(admitted::getValue).sortedWith(
+                compareBy<CanonicalLibraryCard> {
+                    if (SteamCatalogNormalization.titleKey(it.displayName) == familyTitleKey(it.displayName)) 0 else 1
+                }.thenBy { if (it.steamAppId != null) 0 else 1 }
                     .thenBy { if (GameSource.STEAM in it.ownedSources) 0 else 1 }
                     .thenBy { it.canonicalId.value },
             )
-            if (members.map { it.canonicalId }.distinct().size != members.size) continue
-            val copies = members.flatMap { it.copies }
-            if (copies.map { it.key }.distinct().size != copies.size) continue
-            if (!pairwiseCorroborated(members, artworks, developerKeys)) continue
-            val family = family(members)
-            families[family.canonicalId] = family
-            grouped += members.map { it.canonicalId }
+            families += family(members)
+            grouped += component
         }
-        return freezeList((cards.filterNot { it.canonicalId in grouped } + families.values)
+        return freezeList((cards.filterNot { it.canonicalId in grouped } + families)
             .sortedBy { it.key.stableComposeKey() })
     }
 
@@ -58,7 +67,7 @@ object CanonicalGameFamilyProjection {
 
     internal fun eligible(card: CanonicalLibraryCard): Boolean =
         card.key is CanonicalCardKey.Grouped && card.key.canonicalId == card.canonicalId &&
-            card.appType == CanonicalAppType.GAME && card.copies.isNotEmpty() && !card.familyGroupingSuppressed &&
+            card.copies.isNotEmpty() && !card.familyGroupingSuppressed &&
             card.memberSteamAppIds.size <= 1 && validMemberBindings(card) &&
             card.copies.none { copy ->
                 copy.unavailableReason != null ||
@@ -73,49 +82,24 @@ object CanonicalGameFamilyProjection {
             (card.copyCanonicalIds.keys == keys && card.copyCanonicalIds.values.all { it == card.canonicalId })
     }
 
-    private fun pairwiseCorroborated(
-        members: List<CanonicalLibraryCard>,
-        artworks: Map<CanonicalGameId, ArtworkFingerprint>,
-        developerKeys: Map<CanonicalGameId, Set<String>>,
-    ): Boolean {
-        val parties = members.associate { card ->
-            card.canonicalId to developerKeys[card.canonicalId].orEmpty()
-                .map(SteamCatalogNormalization::developerKey).filter(String::isNotBlank).toSet()
-        }
-        for (index in members.indices) {
-            val left = members[index].canonicalId
-            val original = artworks[left] ?: return false
-            if (!original.corroborates(original)) return false
-            for (other in members.drop(index + 1)) {
-                val right = other.canonicalId
-                val candidate = artworks[right] ?: return false
-                if (!original.corroborates(candidate)) return false
-                val leftParties = parties.getValue(left)
-                val rightParties = parties.getValue(right)
-                if (leftParties.isNotEmpty() && rightParties.isNotEmpty() && leftParties.intersect(rightParties).isEmpty()) {
-                    return false
-                }
-            }
-        }
-        return true
-    }
-
     private fun family(members: List<CanonicalLibraryCard>): CanonicalLibraryCard {
         val anchor = members.first()
         val copies = members.flatMap { it.copies }.sortedWith(
             compareBy<OwnedCopySummary> { sourceRank(it.source) }
                 .thenBy { it.key.accountScope.value }.thenBy { it.key.stableSourceId },
-        ).map { it.copy(capabilities = freezeSet(it.capabilities)) }
+        ).map { it.copy(capabilities = freezeSet(it.capabilities), originalArtwork = freezeList(it.originalArtwork)) }
         val keys = copies.mapTo(hashSetOf()) { it.key }
         val preferences = members.mapNotNull { it.preferredCopy }.filter(keys::contains).distinct()
         val copyCanonicalIds = linkedMapOf<OwnedCopyKey, CanonicalGameId>()
         val memberSteamAppIds = linkedMapOf<CanonicalGameId, Int?>()
+        val memberAppTypes = linkedMapOf<CanonicalGameId, CanonicalAppType>()
         val genreLabels = linkedMapOf<String, String>()
         for (member in members) {
             member.copies.forEach { copy ->
                 copyCanonicalIds[copy.key] = member.copyCanonicalIds[copy.key] ?: member.canonicalId
             }
             memberSteamAppIds.putAll(member.memberSteamAppIds.ifEmpty { mapOf(member.canonicalId to member.steamAppId) })
+            memberAppTypes[member.canonicalId] = member.appType
             member.genreLabels.toSortedMap().forEach { (key, value) -> genreLabels.putIfAbsent(key, value) }
         }
         return anchor.copy(
@@ -130,6 +114,7 @@ object CanonicalGameFamilyProjection {
             tagIds = freezeSet(members.flatMap { it.tagIds }.sorted()),
             copyCanonicalIds = freezeMap(copyCanonicalIds),
             memberSteamAppIds = freezeMap(memberSteamAppIds),
+            memberAppTypes = freezeMap(memberAppTypes),
             memberPreferences = freezeMap(members.flatMap { it.memberPreferences.entries }.associate { it.key to it.value }),
         )
     }

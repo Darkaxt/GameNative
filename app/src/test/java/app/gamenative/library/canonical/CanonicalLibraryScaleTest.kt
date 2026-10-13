@@ -273,9 +273,12 @@ class CanonicalLibraryScaleTest {
                 playHistoryDao = history,
                 diagnostics = mockk(relaxed = true),
             )
+            val artwork = mockk<CanonicalFamilyArtworkCorroborator> {
+                every { observe(any()) } answers { firstArg() }
+            }
             return CanonicalLibraryRepository(
                 dao, registry, diagnostics, mockk<GameFacetRepository>(relaxed = true),
-                app.gamenative.library.metadata.SystemMetadataLocaleProvider(),
+                app.gamenative.library.metadata.SystemMetadataLocaleProvider(), artwork,
             )
         }
     }

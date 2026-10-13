@@ -48,7 +48,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -1101,7 +1104,7 @@ class CanonicalLibraryRepositoryTest {
         )
     }
 
-    private fun harness(
+    private fun TestScope.harness(
         aggregates: List<CanonicalLibraryAggregate>,
         results: Map<OwnedCopyKey, OwnedCopyRuntimeResult>,
     ): Harness {
@@ -1112,13 +1115,13 @@ class CanonicalLibraryRepositoryTest {
         )
     }
 
-    private fun repository(
+    private fun TestScope.repository(
         aggregateFlow: Flow<List<CanonicalLibraryAggregate>>,
         adapters: Collection<OwnedCopyRuntimeAdapter>,
         diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
     ): CanonicalLibraryRepository = repository(RecordingDao(aggregateFlow), adapters, diagnostics)
 
-    private fun repository(
+    private fun TestScope.repository(
         dao: CanonicalLibraryDao,
         adapters: Collection<OwnedCopyRuntimeAdapter>,
         diagnostics: CanonicalLibraryDiagnosticSink = mockk(relaxed = true),
@@ -1130,7 +1133,14 @@ class CanonicalLibraryRepositoryTest {
             history,
             mockk(relaxed = true),
         )
-        return CanonicalLibraryRepository(dao, registry, diagnostics, mockk(relaxed = true), SystemMetadataLocaleProvider())
+        // This metadata-only owner keeps upstream work on the scheduler drained by runCurrent().
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val artwork = mockk<CanonicalFamilyArtworkCorroborator> {
+            every { observe(any()) } answers {
+                firstArg<Flow<List<CanonicalLibraryCard>>>().flowOn(dispatcher)
+            }
+        }
+        return CanonicalLibraryRepository(dao, registry, diagnostics, mockk(relaxed = true), SystemMetadataLocaleProvider(), artwork)
     }
 
     private fun completeAdapters(

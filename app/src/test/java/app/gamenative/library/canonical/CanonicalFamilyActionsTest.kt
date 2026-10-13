@@ -20,9 +20,13 @@ import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.ActionSelectionPolicy
 import app.gamenative.library.canonical.action.OwnedCopyActionRouter
 import app.gamenative.library.canonical.action.OwnedCopyRouteResult
-import app.gamenative.library.canonical.artwork.ArtworkFingerprint
-import app.gamenative.library.canonical.artwork.ArtworkFingerprintSource
-import app.gamenative.library.canonical.artwork.ArtworkFixtures
+import app.gamenative.library.canonical.artwork.ArtworkFeatureCache
+import app.gamenative.library.canonical.artwork.ArtworkFeatureFixtures
+import app.gamenative.library.canonical.artwork.ArtworkFeatureMatcher
+import app.gamenative.library.canonical.artwork.ArtworkFeatureSource
+import app.gamenative.library.canonical.artwork.ArtworkReference
+import app.gamenative.library.metadata.MetadataClock
+import org.junit.rules.TemporaryFolder
 import app.gamenative.library.canonical.catalog.ResolutionWorkerTestApplication
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntime
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
@@ -52,10 +56,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.junit.rules.TimeoutRule
 
 @RunWith(RobolectricTestRunner::class)
-@Config(manifest = Config.NONE, application = ResolutionWorkerTestApplication::class)
+@Config(manifest = Config.NONE, application = ResolutionWorkerTestApplication::class, sdk = [29])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CanonicalFamilyActionsTest {
     @get:Rule val timeout = TimeoutRule.seconds(30)
     private lateinit var db: PluviaDatabase
@@ -65,9 +71,11 @@ class CanonicalFamilyActionsTest {
     private val runtimes = linkedMapOf<OwnedCopyKey, OwnedCopyRuntimeResult>()
     private val firstKey = key(1)
     private val secondKey = key(2)
-    private val originals = object : ArtworkFingerprintSource {
-        override suspend fun original(source: GameSource, raw: String, steamAppId: Int?) = fingerprint()
-        override suspend fun candidate(steamAppId: Int, raw: String): ArtworkFingerprint? = throw AssertionError("No family candidate images")
+    @get:Rule val temporary = TemporaryFolder()
+    private val evidenceDirectory by lazy { temporary.newFolder() }
+    private val originals = object : ArtworkFeatureSource {
+        override suspend fun original(reference: ArtworkReference) = ArtworkFeatureFixtures.artwork(
+            if (reference.url.endsWith("2.jpg")) "dredge-epic.jpg" else "dredge-gog.jpg")
     }
 
     @Before
@@ -252,7 +260,8 @@ class CanonicalFamilyActionsTest {
 
     private fun repository() = CanonicalLibraryRepository(db.canonicalLibraryDao(), registry,
         NoOpCanonicalLibraryDiagnosticSink, mockk(relaxed = true), SystemMetadataLocaleProvider(),
-        CanonicalFamilyArtworkCorroborator(originals, registry::resolve))
+        CanonicalFamilyArtworkCorroborator(originals, ArtworkFeatureCache(evidenceDirectory, MetadataClock { 100L }),
+            ArtworkFeatureMatcher(), registry::resolve))
     private suspend fun family() = repository().observeCards().first { it.size == 1 }.single()
     private suspend fun preferenceKey(index: Int) = db.canonicalPreferenceDao().get(id(index).value)?.preferredCopyKeyOrNull()
     private fun id(index: Int) = CanonicalGameId.parse(UUID(0, index.toLong()).toString())
@@ -308,5 +317,4 @@ class CanonicalFamilyActionsTest {
     private suspend fun invokePreference(method: java.lang.reflect.Method, vararg args: Any?): Unit = suspendCoroutineUninterceptedOrReturn { continuation ->
         try { method.invoke(preferences, *args, continuation) } catch (failure: InvocationTargetException) { throw failure.targetException }
     }
-    private fun fingerprint() = requireNotNull(ArtworkFingerprint.fromArgb(192, 288, ArtworkFixtures.cover(192, 288)))
 }

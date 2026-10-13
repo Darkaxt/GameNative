@@ -8,6 +8,7 @@ import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.library.canonical.artwork.ArtworkReference
 import java.security.MessageDigest
 
 sealed interface CanonicalCardKey {
@@ -82,6 +83,7 @@ data class OwnedCopySummary(
     val isHidden: Boolean = false,
     val isVrOnly: Boolean = false,
     val isVrSupported: Boolean = false,
+    val originalArtwork: List<ArtworkReference> = emptyList(),
 )
 
 data class CanonicalCardArtwork(
@@ -116,6 +118,7 @@ data class CanonicalLibraryCard(
     val artworkFallback: CanonicalCardArtwork? = null,
     val copyCanonicalIds: Map<OwnedCopyKey, CanonicalGameId> = emptyMap(),
     val memberSteamAppIds: Map<CanonicalGameId, Int?> = emptyMap(),
+    val memberAppTypes: Map<CanonicalGameId, CanonicalAppType> = emptyMap(),
     val memberPreferences: Map<CanonicalGameId, CanonicalGamePreferenceEntity?> = emptyMap(),
     val familyGroupingSuppressed: Boolean = false,
 ) {

@@ -9,9 +9,6 @@ import app.gamenative.data.canonical.MatchConfidence
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.data.canonical.OwnedCopyKey
-import app.gamenative.library.canonical.artwork.ArtworkFingerprint
-import app.gamenative.library.canonical.artwork.ArtworkFixtures
-import java.lang.reflect.InvocationTargetException
 import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,9 +17,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.Timeout
 
+/** Projection consumes already-verified visual relationships; extraction/geometry have separate owning tests. */
 class CanonicalGameFamilyProjectionTest {
     @get:Rule val timeout = Timeout.seconds(10)
-    private val original = fingerprint(192, 288)
 
     @Test
     fun sharedOriginalArtworkGroupsEditionsWithoutReassigningCatalogOrCopyIdentity() {
@@ -35,8 +32,8 @@ class CanonicalGameFamilyProjectionTest {
         assertEquals(setOf(GameSource.GOG, GameSource.EPIC), family.ownedSources)
         assertFalse(family.copies.any { it.source == GameSource.STEAM })
         assertEquals(mapOf(base.copies.single().key to base.canonicalId,
-            deluxe.copies.single().key to deluxe.canonicalId), copyCanonicalIds(family))
-        assertEquals(mapOf(base.canonicalId to 42, deluxe.canonicalId to 43), memberSteamAppIds(family))
+            deluxe.copies.single().key to deluxe.canonicalId), family.copyCanonicalIds)
+        assertEquals(mapOf(base.canonicalId to 42, deluxe.canonicalId to 43), family.memberSteamAppIds)
         assertEquals(42, base.steamAppId)
         assertEquals(43, deluxe.steamAppId)
     }
@@ -46,53 +43,22 @@ class CanonicalGameFamilyProjectionTest {
         val base = card(2, "Fixture Game")
         val deluxe = card(1, "Fixture Game Deluxe", GameSource.EPIC)
         val first = project(listOf(base, deluxe)).single()
-        val recreated = project(listOf(deluxe.copy(), base.copy())).single()
-        assertEquals(first, recreated)
+        assertEquals(first, project(listOf(deluxe.copy(), base.copy())).single())
         assertEquals(base.canonicalId, first.canonicalId)
         assertEquals(CanonicalCardKey.Grouped(base.canonicalId), first.key)
     }
 
     @Test
-    fun resizedIndependentUsableArtworkCanCorroborateAnEditionFamily() {
-        val cards = listOf(card(1, "Fixture Game"), card(2, "Fixture Game Deluxe", GameSource.EPIC))
-        val resized = fingerprint(128, 192)
-        assertTrue(original.corroborates(resized))
-        assertEquals(1, project(cards, mapOf(cards[0].canonicalId to original, cards[1].canonicalId to resized)).size)
+    fun missingVerificationLeavesIndependentCardsEvenWithIdenticalMetadata() {
+        val cards = listOf(card(1, "Same name"), card(2, "Same name", GameSource.EPIC))
+        assertEquals(2, CanonicalGameFamilyProjection.project(cards, emptySet()).size)
     }
 
     @Test
-    fun missingDistinctOrInvalidArtworkLeavesIndependentCards() {
-        val cards = listOf(card(1, "Fixture Game"), card(2, "Fixture Game Deluxe", GameSource.EPIC))
-        val second = cards[1].canonicalId
-        val cases = listOf(
-            mapOf(cards[0].canonicalId to original),
-            mapOf(cards[0].canonicalId to original, second to original.copy(bits = original.bits xor 0xFFFL)),
-            mapOf(cards[0].canonicalId to original, second to original.copy(algorithmVersion = 99)),
-        )
-        cases.forEach { assertEquals(2, project(cards, it).size) }
-    }
-
-    @Test
-    fun dlcAndUnknownTypesCannotJoinAGameFamilyDespiteSharedArtwork() {
-        for (type in listOf(CanonicalAppType.DLC, CanonicalAppType.UNKNOWN)) {
-            val cards = listOf(card(1, "Fixture Game"), card(2, "Fixture Game Deluxe", GameSource.EPIC).copy(appType = type))
-            assertEquals(2, project(cards).size)
+    fun unrelatedTitlesAndEditionPrefixesDoNotVetoVerifiedBackgrounds() {
+        for (name in listOf("Fixture Game 2", "Deluxe Fixture Game", "Complete Fixture Game", "Redux Fixture Game", "Different product")) {
+            assertEquals(1, project(listOf(card(1, "Fixture Game"), card(2, name, GameSource.EPIC))).size)
         }
-    }
-
-    @Test
-    fun sequelAndActualEditionTitlePrefixesDoNotBecomeEditionAliases() {
-        for (name in listOf("Fixture Game 2", "Deluxe Fixture Game", "Complete Fixture Game", "Redux Fixture Game")) {
-            assertEquals(2, project(listOf(card(1, "Fixture Game"), card(2, name, GameSource.EPIC))).size)
-        }
-    }
-
-    @Test
-    fun knownDeveloperContradictionPreventsArtworkOnlyGrouping() {
-        val cards = listOf(card(1, "Fixture Game"), card(2, "Fixture Game Deluxe", GameSource.EPIC))
-        assertEquals(2, project(cards, developers = mapOf(
-            cards[0].canonicalId to setOf("fixture studio"), cards[1].canonicalId to setOf("other studio"),
-        )).size)
     }
 
     @Test
@@ -100,25 +66,22 @@ class CanonicalGameFamilyProjectionTest {
         val base = card(1, "Fixture Game")
         val second = card(2, "Fixture Game Deluxe", GameSource.EPIC)
         val separated = second.copy(copies = listOf(second.copies.single().copy(
-            matchMethod = MatchMethod.MANUAL, confidence = MatchConfidence.REJECTED,
-            decisionSource = MatchDecisionSource.USER,
+            matchMethod = MatchMethod.MANUAL, confidence = MatchConfidence.REJECTED, decisionSource = MatchDecisionSource.USER,
         )))
         val result = project(listOf(base, separated))
         assertEquals(2, result.size)
         assertTrue(result.any { it.copies.single().confidence == MatchConfidence.REJECTED })
+        assertEquals(2, project(listOf(base, second.copy(familyGroupingSuppressed = true))).size)
     }
 
     @Test
-    fun similarityIsNotTransitivelyExpandedThroughAnIntermediateEdition() {
-        val cards = listOf(card(1, "Fixture Game"), card(2, "Fixture Game Deluxe", GameSource.EPIC),
-            card(3, "Fixture Game Deluxe Version"))
-        val middle = original.copy(bits = original.bits xor 0x3FL)
-        val last = original.copy(bits = original.bits xor 0xFFFL)
-        assertTrue(original.corroborates(middle))
-        assertTrue(middle.corroborates(last))
-        assertFalse(original.corroborates(last))
-        assertEquals(3, project(cards, mapOf(cards[0].canonicalId to original,
-            cards[1].canonicalId to middle, cards[2].canonicalId to last)).size)
+    fun stronglyVerifiedPartialOverlapsResolveThroughTheExistingFamilyGraph() {
+        val cards = listOf(card(1, "Left crop"), card(2, "Whole artwork"), card(3, "Right crop"))
+        val verified = setOf(cards[0].canonicalId to cards[1].canonicalId, cards[1].canonicalId to cards[2].canonicalId)
+        val family = CanonicalGameFamilyProjection.project(cards, verified).single()
+        assertEquals(3, family.copies.size)
+        assertEquals(cards.map { it.canonicalId }.toSet(), family.memberSteamAppIds.keys)
+        assertEquals(family, CanonicalGameFamilyProjection.project(cards.reversed(), verified.reversed().toSet()).single())
     }
 
     @Test
@@ -127,16 +90,14 @@ class CanonicalGameFamilyProjectionTest {
         val deluxe = card(2, "Fixture Game Deluxe", GameSource.EPIC)
         val preferredBase = base.copy(preferredCopy = base.copies.single().key)
         assertEquals(preferredBase.preferredCopy, project(listOf(preferredBase, deluxe)).single().preferredCopy)
-        val preferredDeluxe = deluxe.copy(preferredCopy = deluxe.copies.single().key)
-        assertEquals(null, project(listOf(preferredBase, preferredDeluxe)).single().preferredCopy)
+        assertEquals(null, project(listOf(preferredBase, deluxe.copy(preferredCopy = deluxe.copies.single().key))).single().preferredCopy)
     }
 
     @Test
     fun independentCopyCardIsNeverFoldedIntoAnAutomaticFamily() {
         val base = card(1, "Fixture Game")
         val deluxe = card(2, "Fixture Game Deluxe", GameSource.EPIC)
-        val independent = deluxe.copy(key = CanonicalCardKey.Independent(deluxe.copies.single().key))
-        assertEquals(2, project(listOf(base, independent)).size)
+        assertEquals(2, project(listOf(base, deluxe.copy(key = CanonicalCardKey.Independent(deluxe.copies.single().key)))).size)
     }
 
     @Test
@@ -148,7 +109,7 @@ class CanonicalGameFamilyProjectionTest {
         assertEquals(setOf("fixture-install-1", "fixture-install-2"), family.copies.map { it.installPath }.toSet())
         assertEquals(setOf(101L, 102L), family.copies.map { it.installedSizeBytes }.toSet())
         assertTrue(family.copies.all { it.isInstalled && OwnedCopyOperation.PLAY in it.capabilities })
-        assertEquals(setOf(base.canonicalId, deluxe.canonicalId), copyCanonicalIds(family).values.toSet())
+        assertEquals(setOf(base.canonicalId, deluxe.canonicalId), family.copyCanonicalIds.values.toSet())
     }
 
     @Test
@@ -159,10 +120,9 @@ class CanonicalGameFamilyProjectionTest {
         val family = project(listOf(base.copy(copies = mutableCopies), deluxe)).single()
         mutableCopies.clear()
         assertEquals(2, family.copies.size)
-        val members = copyCanonicalIds(family) as MutableMap<OwnedCopyKey, CanonicalGameId>
-        val failure = runCatching { members.clear() }.exceptionOrNull()
-        assertTrue("Published family member identities must be immutable", failure is UnsupportedOperationException)
-        assertEquals(2, copyCanonicalIds(family).size)
+        val members = family.copyCanonicalIds as MutableMap<OwnedCopyKey, CanonicalGameId>
+        assertTrue(runCatching { members.clear() }.exceptionOrNull() is UnsupportedOperationException)
+        assertEquals(2, family.copyCanonicalIds.size)
     }
 
     @Test
@@ -170,8 +130,7 @@ class CanonicalGameFamilyProjectionTest {
         val base = card(1, "Fixture Game", steamAppId = 42)
         val deluxe = card(2, "Fixture Game Deluxe", GameSource.EPIC, steamAppId = 43)
         val cases = listOf(
-            base.copy(copyCanonicalIds = mapOf(base.copies.single().key to deluxe.canonicalId),
-                memberSteamAppIds = mapOf(base.canonicalId to 42)),
+            base.copy(copyCanonicalIds = mapOf(base.copies.single().key to deluxe.canonicalId), memberSteamAppIds = mapOf(base.canonicalId to 42)),
             base.copy(memberSteamAppIds = mapOf(base.canonicalId to 43)),
             base.copy(memberSteamAppIds = mapOf(deluxe.canonicalId to 42)),
             base.copy(copyCanonicalIds = mapOf(deluxe.copies.single().key to base.canonicalId)),
@@ -179,47 +138,47 @@ class CanonicalGameFamilyProjectionTest {
         cases.forEach { assertEquals(2, project(listOf(it, deluxe)).size) }
     }
 
-    @Suppress("UNCHECKED_CAST")
-    private fun project(
-        cards: List<CanonicalLibraryCard>,
-        artworks: Map<CanonicalGameId, ArtworkFingerprint> = cards.associate { it.canonicalId to original },
-        developers: Map<CanonicalGameId, Set<String>> = emptyMap(),
-    ): List<CanonicalLibraryCard> {
-        val type = runCatching { Class.forName("app.gamenative.library.canonical.CanonicalGameFamilyProjection") }.getOrNull()
-        assertTrue("Missing deterministic game-family projection boundary", type != null)
-        val method = type!!.methods.singleOrNull { it.name == "project" && it.parameterCount == 3 }
-        assertTrue("Family projection must consume independent artwork and party evidence", method != null)
-        return try {
-            method!!.invoke(type.getField("INSTANCE").get(null), cards, artworks, developers) as List<CanonicalLibraryCard>
-        } catch (failure: InvocationTargetException) {
-            throw failure.targetException
+    @Test
+    fun strongArtworkGroupsUnrelatedTitlesAndConflictingCatalogIdentities() {
+        val left = card(1, "Harbour adventure", steamAppId = 42)
+        val right = card(2, "Collector bonus pack", GameSource.EPIC, steamAppId = 999)
+        val result = project(listOf(left, right))
+        assertEquals(1, result.size)
+        assertEquals(setOf(left.canonicalId, right.canonicalId), result.single().memberSteamAppIds.keys)
+        assertEquals(setOf(42, 999), result.single().memberSteamAppIds.values.toSet())
+        assertEquals(listOf(left, right).flatMap { it.copies }.toSet(), result.single().copies.toSet())
+    }
+
+    @Test
+    fun strongArtworkGroupsEveryProductTypeWithoutGrantingAnExecutionIdentity() {
+        for (type in CanonicalAppType.entries) {
+            val left = card(1, "Fixture Game", installed = true)
+            val right = card(2, "Fixture Game Deluxe", GameSource.EPIC).copy(appType = type)
+            val result = project(listOf(left, right))
+            assertEquals("Product type $type must not veto verified artwork", 1, result.size)
+            assertEquals(setOf(left.copies.single().key, right.copies.single().key), result.single().copies.map { it.key }.toSet())
+            assertEquals(left.copies.single(), result.single().copies.single { it.key == left.copies.single().key })
         }
     }
 
-    @Suppress("UNCHECKED_CAST")
-    private fun copyCanonicalIds(card: CanonicalLibraryCard): Map<OwnedCopyKey, CanonicalGameId> =
-        requiredProperty(card, "getCopyCanonicalIds") as Map<OwnedCopyKey, CanonicalGameId>
-
-    @Suppress("UNCHECKED_CAST")
-    private fun memberSteamAppIds(card: CanonicalLibraryCard): Map<CanonicalGameId, Int?> =
-        requiredProperty(card, "getMemberSteamAppIds") as Map<CanonicalGameId, Int?>
-
-    private fun requiredProperty(card: CanonicalLibraryCard, getter: String): Any {
-        val method = card.javaClass.methods.singleOrNull { it.name == getter && it.parameterCount == 0 }
-        assertTrue("Family presentation must retain exact member identity: $getter", method != null)
-        return requireNotNull(method!!.invoke(card))
+    @Test
+    fun visualFamiliesAreNotLimitedToMetadataBucketSize() {
+        val cards = (1L..12L).map { card(it, "Distinct product $it") }
+        val result = project(cards)
+        assertEquals(1, result.size)
+        assertEquals(12, result.single().copies.size)
+        assertEquals(cards.map { it.canonicalId }.toSet(), result.single().memberSteamAppIds.keys)
     }
 
-    private fun fingerprint(width: Int, height: Int) =
-        requireNotNull(ArtworkFingerprint.fromArgb(width, height, ArtworkFixtures.cover(width, height)))
+    private fun project(cards: List<CanonicalLibraryCard>): List<CanonicalLibraryCard> {
+        val verified = cards.indices.flatMap { left -> (left + 1 until cards.size).map { right ->
+            cards[left].canonicalId to cards[right].canonicalId
+        } }.toSet()
+        return CanonicalGameFamilyProjection.project(cards, verified)
+    }
 
-    private fun card(
-        index: Long,
-        name: String,
-        source: GameSource = GameSource.GOG,
-        steamAppId: Int? = null,
-        installed: Boolean = false,
-    ): CanonicalLibraryCard {
+    private fun card(index: Long, name: String, source: GameSource = GameSource.GOG,
+        steamAppId: Int? = null, installed: Boolean = false): CanonicalLibraryCard {
         val canonicalId = CanonicalGameId.parse(UUID(0, index).toString())
         val stableId = if (source == GameSource.EPIC) EpicStableSourceId.encode("fixture-namespace", "fixture-$index") else "$index"
         val key = OwnedCopyKey(AccountScope("2".repeat(64)), source, stableId)
@@ -234,10 +193,10 @@ class CanonicalGameFamilyProjectionTest {
             decisionCandidateSteamAppId = steamAppId, decisionResolverVersion = CURRENT_RESOLVER_VERSION, decisionRevision = 100,
         )
         return CanonicalLibraryCard(
-            key = CanonicalCardKey.Grouped(canonicalId), canonicalId = canonicalId, displayName = name,
-            appType = CanonicalAppType.GAME, iconUrl = "", capsuleImageUrl = "", headerImageUrl = "", heroImageUrl = "",
-            gridHeroImageScale = 1f, aliases = setOf(name), ownedSources = setOf(source), copies = listOf(copy),
-            preferredCopy = null, steamCollectionAppIds = emptySet(), isShared = false, steamAppId = steamAppId,
+            key = CanonicalCardKey.Grouped(canonicalId), canonicalId = canonicalId, displayName = name, appType = CanonicalAppType.GAME,
+            iconUrl = "", capsuleImageUrl = "", headerImageUrl = "", heroImageUrl = "", gridHeroImageScale = 1f,
+            aliases = setOf(name), ownedSources = setOf(source), copies = listOf(copy), preferredCopy = null,
+            steamCollectionAppIds = emptySet(), isShared = false, steamAppId = steamAppId,
         )
     }
 }

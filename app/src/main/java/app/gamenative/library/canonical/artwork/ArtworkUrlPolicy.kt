@@ -25,6 +25,19 @@ class ArtworkUrlPolicy internal constructor(
         return url
     }
 
+    fun groupingUrl(source: GameSource, raw: String, steamAppId: Int?): HttpUrl? {
+        if (source != GameSource.STEAM) return originalUrl(source, raw, steamAppId)
+        val id = steamAppId?.takeIf { it > 0 } ?: return null
+        val url = publicUrl(source, raw) ?: return null
+        val root = listOf("/steam/apps/$id/", "/store_item_assets/steam/apps/$id/")
+            .firstOrNull(url.encodedPath::startsWith) ?: return null
+        val asset = url.encodedPath.removePrefix(root)
+        if (!GROUPING_STEAM_ASSET.matches(asset)) return null
+        if (url.querySize != 0 && (url.querySize != 1 || url.queryParameterNames != setOf("t") ||
+                url.queryParameter("t")?.matches(TIMESTAMP) != true)) return null
+        return url
+    }
+
     fun candidateUrl(steamAppId: Int, raw: String): HttpUrl? {
         if (steamAppId <= 0) return null
         val url = publicUrl(GameSource.STEAM, raw) ?: return null
@@ -54,11 +67,13 @@ class ArtworkUrlPolicy internal constructor(
         private val IMAGE_PATH = Regex("/[^?#]*\\.(?:png|jpe?g|webp)", RegexOption.IGNORE_CASE)
         private val TIMESTAMP = Regex("[0-9]{1,20}")
         private val STEAM_ASSETS = setOf("library_600x900.jpg", "library_600x900_2x.jpg", "header.jpg")
+        private val GROUPING_STEAM_ASSET = Regex("(?:[a-fA-F0-9-]{32,36}/)?(?:header|library_hero|library_600x900|library_600x900_2x)\\.jpg")
 
         @JvmField
         val Default = ArtworkUrlPolicy(
             hostsBySource = mapOf(
-                GameSource.GOG to setOf("images.gog.com", "images.gog-statics.com"),
+                GameSource.GOG to setOf("images.gog.com", "images.gog-statics.com",
+                    "images-1.gog-statics.com", "images-2.gog-statics.com", "images-3.gog-statics.com", "images-4.gog-statics.com"),
                 GameSource.EPIC to setOf("cdn1.epicgames.com", "cdn2.unrealengine.com", "cdn.unrealengine.com"),
                 GameSource.AMAZON to setOf("m.media-amazon.com", "images-na.ssl-images-amazon.com"),
                 GameSource.STEAM to setOf(

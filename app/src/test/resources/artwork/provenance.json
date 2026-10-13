@@ -1,0 +1,47 @@
+{
+  "scope": "Public original card-generator artwork. Source identities are not account ownership. Host ImageIO pixels are not Android BitmapFactory parity.",
+  "images": [
+    {
+      "file": "dredge-gog.jpg",
+      "url": "https://images-3.gog-statics.com/f9a9116a2daac1825518785a055a6b9ae4141b9f1d39b02a1bd51718edab586f_glx_logo_2x.jpg",
+      "sha256": "9a74c095564831399373db2c5c7e1cc93956f2fec2638996bcf6587ab58ba0ff",
+      "acquisition": "retained original public asset; no screenshot/crop/UI overlay"
+    },
+    {
+      "file": "dredge-epic.jpg",
+      "url": "https://cdn1.epicgames.com/spt-assets/068f920aa2e3477db96c60a00aebf8a3/dredge-1k3u5.jpg",
+      "sha256": "d48843c16672681e6cf4b97074cf3a08f80f32984dc9dbf337efefebd7b0e06e",
+      "acquisition": "retained original public asset; no screenshot/crop/UI overlay"
+    },
+    {
+      "file": "dredge-steam.jpg",
+      "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1562430/header.jpg",
+      "sha256": "dd7c7f754ab3b964b2c23537b03321e46012c5aa5c53fbce8f4c49b944ed681f",
+      "acquisition": "retained original public asset; no screenshot/crop/UI overlay"
+    },
+    {
+      "file": "portal2.jpg",
+      "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/620/header.jpg",
+      "sha256": "41d535fcc9663ba118cd808a9637547c3458869a52f0b541a211b60113c86faa",
+      "acquisition": "public Steam original header, unauthenticated"
+    },
+    {
+      "file": "dome-keeper.jpg",
+      "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1637320/header.jpg",
+      "sha256": "a5cf61b3511665234103390a58de901ef0fc7e3f6d477fc8b13b070fcd1b9b91",
+      "acquisition": "public Steam original header, unauthenticated"
+    },
+    {
+      "file": "loop-hero.jpg",
+      "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1282730/header.jpg",
+      "sha256": "e47e0b677033958cdccf3c3596a55e2ac2e670e50919215981edd9d17d6c0a73",
+      "acquisition": "public Steam original header, unauthenticated"
+    },
+    {
+      "file": "dave-the-diver.jpg",
+      "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1868140/header.jpg",
+      "sha256": "b00e81230968aca51699bdf5f43458ec7a911b1fc78ef32cae39643e482988c1",
+      "acquisition": "public Steam original header, unauthenticated"
+    }
+  ]
+}

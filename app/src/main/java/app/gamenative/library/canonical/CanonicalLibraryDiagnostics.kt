@@ -8,12 +8,35 @@ import app.gamenative.diagnostics.DiagnosticOutcome
 import app.gamenative.diagnostics.FeatureDiagnostics
 import app.gamenative.library.canonical.action.ActionFailureReason
 import app.gamenative.library.canonical.action.ActionSelectionPolicy
+import app.gamenative.library.canonical.artwork.ArtworkFeatures
+import app.gamenative.library.canonical.artwork.ArtworkMatch
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.reflect.KClass
 import kotlinx.coroutines.CancellationException
 
+enum class ArtworkEvidenceFailure {
+    NATIVE_COPY_UNAVAILABLE,
+    ORIGINAL_UNAVAILABLE,
+    STALE_NATIVE_COPY,
+    NATIVE_MATCHER_UNAVAILABLE,
+}
+
+class ArtworkPairDigest private constructor(val value: String) {
+    companion object {
+        fun from(left: ArtworkFeatures, right: ArtworkFeatures): ArtworkPairDigest {
+            require(ArtworkFeatures.HASH.matches(left.contentHash) && ArtworkFeatures.HASH.matches(right.contentHash))
+            val hashes = listOf(left.contentHash, right.contentHash).sorted()
+            return ArtworkPairDigest("${hashes[0].take(16)}/${hashes[1].take(16)}")
+        }
+    }
+}
+
 interface CanonicalLibraryDiagnosticSink {
+    fun artworkCompared(images: ArtworkPairDigest, result: ArtworkMatch, elapsedMs: Long) = Unit
+
+    fun artworkUnavailable(source: GameSource, reason: ArtworkEvidenceFailure) = Unit
+
     fun cardsProjected(
         resultCount: Int,
         canonicalCount: Int,
@@ -90,6 +113,35 @@ internal object NoOpCanonicalLibraryDiagnosticSink : CanonicalLibraryDiagnosticS
 
 @Singleton
 class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibraryDiagnosticSink {
+    override fun artworkCompared(images: ArtworkPairDigest, result: ArtworkMatch, elapsedMs: Long) = record(
+        area = DiagnosticArea.MATCHING,
+        name = DiagnosticEventName.MATCH_RESOLUTION,
+        outcome = when {
+            !result.completed -> DiagnosticOutcome.UNAVAILABLE
+            result.accepted -> DiagnosticOutcome.SUCCEEDED
+            else -> DiagnosticOutcome.SKIPPED
+        },
+        durationMs = elapsedMs.boundedDuration(),
+        attributes = mapOf(
+            DiagnosticAttribute.MATCH_METHOD to "ORB_V1",
+            DiagnosticAttribute.PUBLIC_CONTENT_ID to images.value,
+            DiagnosticAttribute.RESULT_COUNT to result.matches.boundedCount(),
+            DiagnosticAttribute.CONFIDENCE to "inliers=${result.inliers.boundedCount()};ratio=${result.inlierRatio.thousandths()};" +
+                "area=${result.coverage.thousandths()};cells=${result.occupiedCells.boundedCount()};error=${result.meanError.thousandths()}",
+        ),
+    )
+
+    override fun artworkUnavailable(source: GameSource, reason: ArtworkEvidenceFailure) = record(
+        area = DiagnosticArea.MATCHING,
+        name = DiagnosticEventName.MATCH_RESOLUTION,
+        outcome = DiagnosticOutcome.UNAVAILABLE,
+        attributes = mapOf(
+            DiagnosticAttribute.MATCH_METHOD to "ORB_V1",
+            DiagnosticAttribute.SOURCE to source.name,
+            DiagnosticAttribute.REASON to reason.name,
+        ),
+    )
+
     override fun cardsProjected(
         resultCount: Int,
         canonicalCount: Int,
@@ -231,6 +283,8 @@ class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibrar
             // Diagnostics are best effort and must not affect library or action behavior.
         }
     }
+
+    private fun Double.thousandths(): String = if (isFinite()) (coerceIn(0.0, 1_000.0) * 1_000).toInt().toString() else "0"
 
     private fun Int.boundedCount(): String = coerceIn(0, MAX_COUNT).toString()
 
