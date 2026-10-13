@@ -1,6 +1,6 @@
 # Artwork-first canonical grouping runtime cross-check
 
-Status: HOST_VERIFIED; qualified feature-branch publication pending. One focused cross-check for G1 / specification §9.4 ART1–ART7; no device or candidate authority. The broader parent remains IN_PROGRESS. Historical failed/live/POC evidence is unchanged.
+Status: HOST_VERIFIED_AND_PUBLISHED. Integrated source checkpoint `9ac6f22611fbfe88b06e13be1a5b88034a1f5d41` was pushed to `fork/sync/official-2026-10-03` and independently matched by fresh `git ls-remote`. One focused cross-check for G1 / specification §9.4 ART1–ART7; no device or candidate authority. The broader parent remains IN_PROGRESS. Historical failed/live/POC evidence is unchanged.
 
 ## Production integration
 
@@ -45,6 +45,6 @@ Modern production-decoder/native-host matcher results: GOG/Epic90/113 inliers/ma
 | ART6 | Baseline usable while artwork blocks, metadata/stat liveness, changed-art/manual/native-membership fences, cancellation/retirement and timeout cleanup passed. Serialized off-Main native work; at most64 visual candidates, bounded descriptor/cache/index budgets. No Android FPS claim. |
 | ART7 | Mandatory Hilt repository owner and actual shared VM collector remain the production route. Real originals flow through Room → existing family/shared search/filter/detail/Copies/native-action paths with deterministic restart membership; complete affected436-case identities per flavor and actual compilation/merge/native proof above. Host component success alone is not used as integrated acceptance. |
 
-No current host ART1–ART7 implementation/verification blocker remains. Qualified feature-branch publication is still pending; the stopped tablet's sole cause/live acceptance and broader parent priorities remain unclaimed. The old standalone portrait/pHash POC is historical, API-incompatible evidence and is not admitted as passing current-module verification.
+No current host ART1–ART7 implementation/verification/publication blocker remains. Qualified source checkpoint `9ac6f226` is published and remote-verified; the stopped tablet's sole cause/live acceptance and broader parent priorities remain unclaimed. The old standalone portrait/pHash POC is historical, API-incompatible evidence and is not admitted as passing current-module verification. Transactional cleanup removed only expendable runtime/bytecode-cache output (521,261,601 bytes) and the completed build's opaque heap dump (5,363,479,436 bytes); all source, native build outputs, runners, test XML, failure receipts and logs were retained. The public provenance JSON received only parsed-value-identical CRLF→LF normalization after qualification; qualified code and image bytes are unchanged.
 
 No optional optimization/hardening/refactor, new grouping UI or later-priority feature is assigned by this cross-check. Live testing remains STOPPED. Opaque heap dumps and local build logs are excluded from commits/uploads.
