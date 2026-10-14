@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_debug_focused_diagnostics_title">Focused game diagnostics</string>
+    <string name="settings_debug_focused_diagnostics_description">Capture a game’s resolution, original artwork, comparisons and grouping separately from library-wide noise. Enable before reproducing; the setting survives app restart. Starting a new capture replaces the previous focused log, not the general diagnostics. Maximum 8 MiB; capture pauses when full.</string>
+    <string name="settings_debug_focused_diagnostics_filter">Game title contains</string>
+    <string name="settings_debug_focused_diagnostics_hint">For example, DREDGE</string>
+    <string name="settings_debug_focused_diagnostics_disabled">Capture stopped; retained records can still be exported</string>
+    <string name="settings_debug_focused_diagnostics_active">Capturing: %1$s</string>
+    <string name="settings_debug_focused_diagnostics_full">Capture full — export it, then start a new capture</string>
+    <string name="settings_debug_focused_diagnostics_failures">Capture unavailable or incomplete — check the exported failure status</string>
+    <string name="settings_debug_focused_diagnostics_start">Start new capture</string>
+    <string name="settings_debug_focused_diagnostics_stop">Stop capture</string>
+    <string name="settings_debug_focused_diagnostics_export">Export focused capture</string>
+    <string name="settings_debug_focused_diagnostics_close">Close</string>
+    <string name="settings_debug_focused_diagnostics_config_failed">Failed to change focused capture</string>
+</resources>

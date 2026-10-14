@@ -136,6 +136,8 @@ class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibrar
             put(DiagnosticAttribute.PUBLIC_TITLE, game.publicTitle)
             put(DiagnosticAttribute.SOURCE, game.source.name)
             put(DiagnosticAttribute.CORRELATION_ID, game.correlationId)
+            put(DiagnosticAttribute.INITIAL_MATCH_METHOD, game.initialMatchMethod.name)
+            put(DiagnosticAttribute.INITIAL_MATCH_CONFIDENCE, game.initialMatchConfidence.name)
             if (observation.stage != ArtworkTraceStage.FAMILY_PUBLISHED) {
                 put(DiagnosticAttribute.STAGE, observation.stage.name)
                 put(DiagnosticAttribute.REASON, observation.stage.name)

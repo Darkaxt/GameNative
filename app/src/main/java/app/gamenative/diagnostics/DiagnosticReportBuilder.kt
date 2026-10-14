@@ -17,17 +17,24 @@ internal data class DiagnosticReportHeader(
 object DiagnosticReportBuilder {
     private val json = Json { encodeDefaults = true }
 
-    fun build(context: Context, eventLimit: Int = 1_000): String {
+    fun build(context: Context, eventLimit: Int = 1_000): String = build(
+        header = header(context),
+        events = FeatureDiagnostics.recent(eventLimit),
+        gameStates = FeatureDiagnostics.currentGameStates(),
+        focused = FeatureDiagnostics.focusedCaptureReport(),
+    )
+
+    fun buildFocused(context: Context): String = build(
+        header = header(context), events = emptyList(), focused = FeatureDiagnostics.focusedCaptureReport(),
+    )
+
+    private fun header(context: Context): DiagnosticReportHeader {
         val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-        return build(
-            header = DiagnosticReportHeader(
-                appVersion = "${packageInfo.versionName} (${PackageInfoCompat.getLongVersionCode(packageInfo)})",
-                buildFlavor = BuildConfig.FLAVOR,
-                device = "${Build.MANUFACTURER} ${Build.MODEL}",
-                androidVersion = Build.VERSION.RELEASE,
-            ),
-            events = FeatureDiagnostics.recent(eventLimit),
-            gameStates = FeatureDiagnostics.currentGameStates(),
+        return DiagnosticReportHeader(
+            appVersion = "${packageInfo.versionName} (${PackageInfoCompat.getLongVersionCode(packageInfo)})",
+            buildFlavor = BuildConfig.FLAVOR,
+            device = "${Build.MANUFACTURER} ${Build.MODEL}",
+            androidVersion = Build.VERSION.RELEASE,
         )
     }
 
@@ -35,6 +42,7 @@ object DiagnosticReportBuilder {
         header: DiagnosticReportHeader,
         events: List<DiagnosticEvent>,
         gameStates: List<DiagnosticEvent> = emptyList(),
+        focused: FocusedDiagnosticCaptureReport? = null,
     ): String = buildString {
         appendLine("GameNative feature diagnostic report")
         appendLine("App: ${header.appVersion}")
@@ -48,5 +56,14 @@ object DiagnosticReportBuilder {
         appendLine()
         appendLine("Current-process game states (merged snapshots, not chronological history): ${gameStates.size}")
         gameStates.forEach { event -> appendLine(json.encodeToString(event)) }
+        focused?.let { capture ->
+            appendLine()
+            appendLine("Focused diagnostic capture")
+            appendLine("Available: ${capture.state.available}; enabled: ${capture.state.enabled}; full: ${capture.state.full}")
+            appendLine("Write/read failures: ${capture.state.writeFailures}")
+            appendLine("Retention: complete retained history; ${capture.maxBytes} byte limit; pauses when full")
+            appendLine("Events: ${capture.events.size}; raw filter is not exported")
+            capture.events.forEach { event -> appendLine(json.encodeToString(event)) }
+        }
     }
 }

@@ -12,6 +12,8 @@ object FeatureDiagnostics {
 
     @Volatile
     private var store: DiagnosticLogStore? = null
+    @Volatile
+    private var focusedCapture: FocusedDiagnosticCapture? = null
     private val gameStates = linkedMapOf<String, DiagnosticEvent>()
     private const val MAX_GAME_STATES = 8_192
 
@@ -28,6 +30,12 @@ object FeatureDiagnostics {
             return
         }
         store = initializedStore
+        focusedCapture = try {
+            FocusedDiagnosticCapture(
+                File(context.filesDir, "diagnostics/focused"),
+                context.getSharedPreferences("focused-diagnostics", Context.MODE_PRIVATE),
+            )
+        } catch (_: Exception) { null }
         record(
             area = DiagnosticArea.APP,
             name = DiagnosticEventName.APP_STARTED,
@@ -73,6 +81,7 @@ object FeatureDiagnostics {
             attributes = DiagnosticRedactor.sanitize(attributes),
         )
         retainGameState(event)
+        focusedCapture?.record(event)
         return try {
             activeStore.append(event)
             true
@@ -135,16 +144,27 @@ object FeatureDiagnostics {
         }
     }
 
+    fun focusedCaptureState(): FocusedDiagnosticCaptureState = focusedCapture?.state()
+        ?: FocusedDiagnosticCaptureState(available = false)
+
+    fun startFocusedCapture(title: String): Boolean = focusedCapture?.start(title) ?: false
+
+    fun stopFocusedCapture(): Boolean = focusedCapture?.stop() ?: false
+
+    internal fun focusedCaptureReport(): FocusedDiagnosticCaptureReport = focusedCapture?.report()
+        ?: FocusedDiagnosticCaptureReport(focusedCaptureState(), emptyList(), 8L * 1024L * 1024L)
+
     @Synchronized
     fun clear(): Boolean {
         gameStates.clear()
         val activeStore = store ?: return false
-        return try {
+        val cleared = try {
             activeStore.clear()
             true
         } catch (error: Exception) {
             Timber.tag("FeatureDiagnostics").w(error, "Unable to clear diagnostics")
             false
         }
+        return (focusedCapture?.clear() ?: true) && cleared
     }
 }

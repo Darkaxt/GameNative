@@ -22,6 +22,13 @@ class DiagnosticLogStore(
 
     @Synchronized
     fun append(event: DiagnosticEvent) {
+        appendRecord(event, allowRotation = true)
+    }
+
+    @Synchronized
+    internal fun appendIfFits(event: DiagnosticEvent): Boolean = appendRecord(event, allowRotation = false)
+
+    private fun appendRecord(event: DiagnosticEvent, allowRotation: Boolean): Boolean {
         val safeEvent = event.copy(
             attributes = DiagnosticRedactor.sanitizePersisted(event.attributes),
         )
@@ -30,23 +37,29 @@ class DiagnosticLogStore(
         val current = file(0)
         val needsSeparator = current.hasUnterminatedFinalRecord()
         val appendBytes = lineBytes + if (needsSeparator) NEWLINE_BYTES else 0
+        if (!allowRotation && current.length() + appendBytes > maxFileBytes) return false
         if (current.exists() && current.length() + appendBytes > maxFileBytes) {
             rotate()
             current.appendText(line, Charsets.UTF_8)
         } else {
             current.appendText(if (needsSeparator) "\n$line" else line, Charsets.UTF_8)
         }
+        return true
     }
 
     @Synchronized
-    fun recent(limit: Int): List<DiagnosticEvent> {
+    internal fun bytesOnDisk(): Long = (0 until maxFiles).sumOf { file(it).length() }
+
+    @Synchronized
+    fun recent(limit: Int, onUnreadableRecord: (() -> Unit)? = null): List<DiagnosticEvent> {
         if (limit <= 0) return emptyList()
         return (0 until maxFiles)
             .asSequence()
             .map(::file)
             .filter(File::exists)
             .flatMap { it.readLines(Charsets.UTF_8).asReversed().asSequence() }
-            .mapNotNull { line -> runCatching { json.decodeFromString<DiagnosticEvent>(line) }.getOrNull() }
+            .mapNotNull { line -> runCatching { json.decodeFromString<DiagnosticEvent>(line) }
+                .onFailure { onUnreadableRecord?.invoke() }.getOrNull() }
             .take(limit)
             .toList()
             .asReversed()

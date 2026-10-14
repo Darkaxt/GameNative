@@ -2,16 +2,25 @@ package app.gamenative.library.canonical
 
 import app.gamenative.data.GameSource
 import app.gamenative.data.canonical.CanonicalGameId
+import app.gamenative.data.canonical.MatchConfidence
+import app.gamenative.data.canonical.MatchMethod
 import app.gamenative.library.canonical.artwork.ArtworkFeatures
 import app.gamenative.library.canonical.artwork.ArtworkReference
 import app.gamenative.library.canonical.artwork.ArtworkUrlPolicy
 
-class ArtworkGameTrace private constructor(val publicTitle: String, val source: GameSource, val correlationId: String) {
+class ArtworkGameTrace private constructor(
+    val publicTitle: String,
+    val source: GameSource,
+    val correlationId: String,
+    val initialMatchMethod: MatchMethod,
+    val initialMatchConfidence: MatchConfidence,
+) {
     companion object {
         internal fun from(card: CanonicalLibraryCard, generation: Long, ordinal: Int): ArtworkGameTrace? {
             val copy = card.copies.firstOrNull { it.source != GameSource.CUSTOM_GAME && it.nativeTitle.isNotBlank() }
                 ?: return null
-            return ArtworkGameTrace(copy.nativeTitle.take(120), copy.source, "$generation-$ordinal")
+            return ArtworkGameTrace(copy.nativeTitle.take(120), copy.source, "$generation-$ordinal",
+                copy.matchMethod, copy.confidence)
         }
     }
 }

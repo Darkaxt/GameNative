@@ -4,6 +4,7 @@ import java.security.MessageDigest
 
 object DiagnosticRedactor {
     private const val MAX_VALUE_LENGTH = 120
+    private const val MAX_PUBLIC_URL_LENGTH = 4_096
 
     private val alwaysForbiddenPatterns = listOf(
         Regex("(?i)(?:/storage/|/sdcard/|/data/user/)"),
@@ -62,6 +63,7 @@ object DiagnosticRedactor {
         ) {
             return "[redacted]"
         }
-        return singleLine.take(MAX_VALUE_LENGTH)
+        val limit = if (attribute == DiagnosticAttribute.PUBLIC_URL) MAX_PUBLIC_URL_LENGTH else MAX_VALUE_LENGTH
+        return singleLine.take(limit)
     }
 }

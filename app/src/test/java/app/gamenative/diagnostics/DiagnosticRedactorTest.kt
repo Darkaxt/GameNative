@@ -89,6 +89,18 @@ class DiagnosticRedactorTest {
     }
 
     @Test
+    fun completePublicOriginalAddressSurvivesTheGenericScalarLimitWhileSecretsRemainRedacted() {
+        val original = "https://images.gog-statics.com/" + "a".repeat(64) + "_product_tile_304_2x.jpg?namespace=gamesdb"
+        val result = DiagnosticRedactor.sanitize(mapOf(DiagnosticAttribute.PUBLIC_URL to original))
+        assertEquals(original, result["public_url"])
+        val huge = "https://images.gog-statics.com/" + "a".repeat(5_000) + ".jpg"
+        assertEquals(4_096, DiagnosticRedactor.sanitize(mapOf(DiagnosticAttribute.PUBLIC_URL to huge))["public_url"]?.length)
+        assertEquals("[redacted]", DiagnosticRedactor.sanitize(mapOf(
+            DiagnosticAttribute.PUBLIC_URL to "$huge?access_token=synthetic-secret"))["public_url"])
+        assertEquals(120, DiagnosticRedactor.sanitize(mapOf(DiagnosticAttribute.PUBLIC_TITLE to "x".repeat(200)))["public_title"]?.length)
+    }
+
+    @Test
     fun `correlation id is stable short and does not expose input`() {
         val raw = "steam:76561198000000000:620"
         val first = DiagnosticRedactor.correlationId(raw)

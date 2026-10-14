@@ -109,6 +109,23 @@ class ArtworkGroupingTraceTest {
         } finally { FeatureDiagnostics.clear(); field.set(null, previous) }
     }
 
+    @Test fun generationStartNativeReviewStateIsVisibleWithoutANewCatalogAttempt() {
+        val field = FeatureDiagnostics::class.java.getDeclaredField("store").apply { isAccessible = true }
+        val previous = field.get(null)
+        try {
+            field.set(null, DiagnosticLogStore(temporary.newFolder()))
+            FeatureDiagnostics.clear()
+            val card = cards.first().copy(copies = cards.first().copies.map {
+                it.copy(matchMethod = MatchMethod.EXACT_METADATA, confidence = MatchConfidence.REVIEW_REQUIRED)
+            })
+            val game = requireNotNull(ArtworkGameTrace.from(card, 1, 0))
+            FeatureCanonicalLibraryDiagnostics().artworkState(game, ArtworkTraceObservation.of(ArtworkTraceStage.QUEUED))
+            val attributes = FeatureDiagnostics.currentGameStates().single().attributes
+            assertEquals(mapOf("initial_match_method" to "EXACT_METADATA", "initial_match_confidence" to "REVIEW_REQUIRED"),
+                attributes.filterKeys { it.startsWith("initial_match_") })
+        } finally { FeatureDiagnostics.clear(); field.set(null, previous) }
+    }
+
     @Test fun perGameExportDoesNotAttachAvailableOriginalEvidenceToLaterUnavailableOriginal() = runTest {
         val originalA = ArtworkReference(GameSource.GOG, url("available-a"))
         val unavailableB = ArtworkReference(GameSource.GOG, url("unavailable-b"))
@@ -153,14 +170,15 @@ class ArtworkGroupingTraceTest {
         verify(exactly = 1) { matcher.compare(any(), any()) }
 
         withTraceExport { states, report ->
-            val ids = cards.map { card ->
+            val ids = cards.mapIndexed { index, card ->
                 val originals = states.filter {
                     it.attributes["public_title"] == card.copies.single().nativeTitle &&
-                        it.attributes["public_url"] == prefix.take(120)
+                        it.attributes["public_url"] == originalUrls[index]
                 }
-                assertTrue("Public original URL must remain visible", originals.isNotEmpty())
+                assertTrue("Complete public original URL must remain visible", originals.isNotEmpty())
+                assertTrue(report.contains(originalUrls[index]))
                 val ids = originals.mapNotNull { it.attributes["public_url_id"] }.toSet()
-                assertEquals("Each original requires a digest independent of its truncated display URL", 1, ids.size)
+                assertEquals("Each complete original requires its own public URL digest", 1, ids.size)
                 ids.single().also {
                     assertTrue(it.isNotBlank())
                     assertNotEquals("[redacted]", it)

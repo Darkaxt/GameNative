@@ -74,6 +74,8 @@ enum class DiagnosticAttribute(val wireName: String) {
     CANONICAL_COUNT("canonical_count"),
     COPY_COUNT("copy_count"),
     MATCH_METHOD("match_method"),
+    INITIAL_MATCH_METHOD("initial_match_method"),
+    INITIAL_MATCH_CONFIDENCE("initial_match_confidence"),
     CONFIDENCE("confidence"),
     PROVIDER("provider"),
     STEAM_APP_ID("steam_app_id"),

@@ -1,5 +1,6 @@
 package app.gamenative.ui.screen.settings
 
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +23,7 @@ import androidx.compose.ui.res.stringResource
 import app.gamenative.CrashHandler
 import app.gamenative.diagnostics.DiagnosticReportBuilder
 import app.gamenative.diagnostics.FeatureDiagnostics
+import app.gamenative.diagnostics.FocusedDiagnosticCaptureState
 import coil.annotation.ExperimentalCoilApi
 import coil.imageLoader
 import app.gamenative.R
@@ -92,6 +94,12 @@ fun SettingsGroupDebug() {
     var enableCanonicalPublicLibrary by rememberSaveable {
         mutableStateOf(if (isPreview) false else PrefManager.canonicalPublicLibraryEnabled)
     }
+    var showFocusedCapture by remember { mutableStateOf(false) }
+    var focusedCaptureBusy by remember { mutableStateOf(false) }
+    var focusedCaptureState by remember { mutableStateOf(
+        if (isPreview) FocusedDiagnosticCaptureState() else FeatureDiagnostics.focusedCaptureState()
+    ) }
+
     var enableBox86Logs by rememberSaveable { mutableStateOf(
         if (isPreview) false else WinlatorPrefManager.getBoolean("enable_box86_64_logs", false)
     ) }
@@ -136,16 +144,16 @@ fun SettingsGroupDebug() {
         }
     }
 
-    val saveFeatureDiagnostics = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/plain"),
-    ) { resultUri ->
+    fun exportDiagnostics(resultUri: Uri?, focusedOnly: Boolean) {
         resultUri?.let { uri ->
             scope.launch {
                 try {
                     withContext(Dispatchers.IO) {
                         val outputStream = checkNotNull(context.contentResolver.openOutputStream(uri))
                         outputStream.use {
-                            it.write(DiagnosticReportBuilder.build(context).toByteArray(Charsets.UTF_8))
+                            val report = if (focusedOnly) DiagnosticReportBuilder.buildFocused(context)
+                                else DiagnosticReportBuilder.build(context)
+                            it.write(report.toByteArray(Charsets.UTF_8))
                         }
                     }
                     SnackbarManager.show(context.getString(R.string.settings_debug_feature_diagnostics_exported))
@@ -154,6 +162,41 @@ fun SettingsGroupDebug() {
                 }
             }
         }
+    }
+    val saveFeatureDiagnostics = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { exportDiagnostics(it, focusedOnly = false) }
+    val saveFocusedDiagnostics = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { exportDiagnostics(it, focusedOnly = true) }
+
+    fun configureFocusedCapture(title: String?) {
+        if (focusedCaptureBusy) return
+        focusedCaptureBusy = true
+        scope.launch {
+            try {
+                val success = withContext(Dispatchers.IO) {
+                    if (title == null) FeatureDiagnostics.stopFocusedCapture()
+                    else FeatureDiagnostics.startFocusedCapture(title)
+                }
+                focusedCaptureState = FeatureDiagnostics.focusedCaptureState()
+                if (!success) SnackbarManager.show(context.getString(R.string.settings_debug_focused_diagnostics_config_failed))
+            } finally { focusedCaptureBusy = false }
+        }
+    }
+
+    if (showFocusedCapture) {
+        FocusedDiagnosticCaptureDialog(
+            state = focusedCaptureState,
+            busy = focusedCaptureBusy,
+            onStart = { configureFocusedCapture(it) },
+            onStop = { configureFocusedCapture(null) },
+            onExport = {
+                showFocusedCapture = false
+                saveFocusedDiagnostics.launch("gamenative_focused_diagnostics_${CrashHandler.timestamp}.txt")
+            },
+            onDismiss = { showFocusedCapture = false },
+        )
     }
 
     if (showLogcatDialog && latestCrashFile != null) {
@@ -222,6 +265,15 @@ fun SettingsGroupDebug() {
         )
         SettingsMenuLink(
             colors = settingsTileColors(),
+            title = { Text(stringResource(R.string.settings_debug_focused_diagnostics_title)) },
+            subtitle = { FocusedDiagnosticCaptureStatus(focusedCaptureState) },
+            onClick = {
+                if (!isPreview) focusedCaptureState = FeatureDiagnostics.focusedCaptureState()
+                showFocusedCapture = true
+            },
+        )
+        SettingsMenuLink(
+            colors = settingsTileColors(),
             title = { Text(text = stringResource(R.string.settings_debug_clear_feature_diagnostics_title)) },
             subtitle = { Text(text = stringResource(R.string.settings_debug_clear_feature_diagnostics_subtitle)) },
             onClick = {
@@ -231,6 +283,7 @@ fun SettingsGroupDebug() {
                     } else {
                         R.string.settings_debug_feature_diagnostics_clear_failed
                     }
+                    focusedCaptureState = FeatureDiagnostics.focusedCaptureState()
                     SnackbarManager.show(context.getString(message))
                 }
             },
