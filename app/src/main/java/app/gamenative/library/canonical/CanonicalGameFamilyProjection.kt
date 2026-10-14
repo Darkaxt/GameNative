@@ -9,7 +9,7 @@ import app.gamenative.data.canonical.OwnedCopyKey
 import app.gamenative.library.canonical.catalog.SteamCatalogNormalization
 import java.util.Collections
 
-/** Presentation only: original artwork is supplied independently, and no catalog or copy identity is reassigned. */
+/** Presentation only: full-title and verified-artwork relationships never reassign catalog or copy identities. */
 object CanonicalGameFamilyProjection {
     private val editionSuffix = Regex(
         "\\s+(?:deluxe|definitive|enhanced|ultimate|remastered|redux|complete|anniversary|" +
@@ -24,8 +24,13 @@ object CanonicalGameFamilyProjection {
             cards.flatMap { it.copies }.map { it.key }.let { it.distinct().size != it.size }
         ) return cards
         val admitted = cards.filter(::eligible).associateBy { it.canonicalId }
+        val titleEdges = admitted.values.groupBy { SteamCatalogNormalization.titleKey(it.displayName) }
+            .filterKeys(String::isNotBlank).values.flatMap { members ->
+                val root = members.first().canonicalId
+                members.drop(1).map { root to it.canonicalId }
+            }
         val neighbours = hashMapOf<CanonicalGameId, MutableSet<CanonicalGameId>>()
-        for ((left, right) in verifiedArtwork) {
+        for ((left, right) in verifiedArtwork + titleEdges) {
             if (left == right || left !in admitted || right !in admitted) continue
             neighbours.getOrPut(left, ::linkedSetOf).add(right)
             neighbours.getOrPut(right, ::linkedSetOf).add(left)

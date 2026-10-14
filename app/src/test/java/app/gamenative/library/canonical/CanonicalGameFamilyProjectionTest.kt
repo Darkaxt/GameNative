@@ -17,7 +17,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.Timeout
 
-/** Projection consumes already-verified visual relationships; extraction/geometry have separate owning tests. */
+/** Projection consumes full-title and verified visual relationships; extraction/geometry have separate owning tests. */
 class CanonicalGameFamilyProjectionTest {
     @get:Rule val timeout = Timeout.seconds(10)
 
@@ -49,9 +49,47 @@ class CanonicalGameFamilyProjectionTest {
     }
 
     @Test
-    fun missingVerificationLeavesIndependentCardsEvenWithIdenticalMetadata() {
-        val cards = listOf(card(1, "Same name"), card(2, "Same name", GameSource.EPIC))
-        assertEquals(2, CanonicalGameFamilyProjection.project(cards, emptySet()).size)
+    fun exactFullTitlesGroupWithoutArtworkWhilePreservingEveryMemberIdentity() {
+        val cards = listOf(card(1, "Same name", steamAppId = 42, installed = true),
+            card(2, "Same name", GameSource.EPIC, steamAppId = 99, installed = true))
+        val family = CanonicalGameFamilyProjection.project(cards, emptySet()).single()
+        assertEquals(cards.flatMap { it.copies }.toSet(), family.copies.toSet())
+        assertEquals(mapOf(cards[0].canonicalId to 42, cards[1].canonicalId to 99), family.memberSteamAppIds)
+        assertEquals(cards.associate { it.copies.single().key to it.canonicalId }, family.copyCanonicalIds)
+        assertEquals(family, CanonicalGameFamilyProjection.project(cards.reversed().map { it.copy() }, emptySet()).single())
+    }
+
+    @Test
+    fun titleFallbackUsesFullNormalizedNamesNotEditionBasesOrFuzzyTokens() {
+        val base = card(1, "  Harbour & Adventure™ ")
+        val same = card(2, "HARBOUR and ADVENTURE", GameSource.EPIC)
+        assertEquals(1, CanonicalGameFamilyProjection.project(listOf(base, same), emptySet()).size)
+        for (title in listOf("Harbour and Adventure Deluxe", "Harbour and Adventure 2", "Adventure Harbour")) {
+            assertEquals(title, 2, CanonicalGameFamilyProjection.project(listOf(base, card(2, title)), emptySet()).size)
+        }
+        assertEquals(2, CanonicalGameFamilyProjection.project(listOf(card(1, "™"), card(2, "  ")), emptySet()).size)
+    }
+
+    @Test
+    fun titleFallbackCannotDefeatManualSeparationIndependentCardsOrMalformedBindings() {
+        val base = card(1, "Same title")
+        val same = card(2, "Same title", GameSource.EPIC)
+        val excluded = listOf(
+            same.copy(familyGroupingSuppressed = true),
+            same.copy(copies = listOf(same.copies.single().copy(matchMethod = MatchMethod.MANUAL,
+                confidence = MatchConfidence.REJECTED, decisionSource = MatchDecisionSource.USER))),
+            same.copy(key = CanonicalCardKey.Independent(same.copies.single().key)),
+            same.copy(copyCanonicalIds = mapOf(same.copies.single().key to base.canonicalId)),
+        )
+        excluded.forEach { assertEquals(2, CanonicalGameFamilyProjection.project(listOf(base, it), emptySet()).size) }
+    }
+
+    @Test
+    fun titleAndVerifiedArtworkEdgesUseOneFamilyGraph() {
+        val cards = listOf(card(1, "Same title"), card(2, "Same title", GameSource.EPIC), card(3, "Different art title"))
+        val family = CanonicalGameFamilyProjection.project(cards, setOf(cards[1].canonicalId to cards[2].canonicalId)).single()
+        assertEquals(cards.flatMap { it.copies }.toSet(), family.copies.toSet())
+        assertEquals(cards.map { it.canonicalId }.toSet(), family.memberSteamAppIds.keys)
     }
 
     @Test
