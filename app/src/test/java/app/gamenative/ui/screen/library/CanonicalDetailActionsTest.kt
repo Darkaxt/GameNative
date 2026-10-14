@@ -83,6 +83,18 @@ class CanonicalDetailActionsTest {
     }
 
     @Test
+    fun uninstalledUnmatchedDetailAlwaysExposesExplainAggregationOutsideSourceOptions() {
+        val operations = mutableListOf<OwnedCopyOperation>()
+        screen(card(emptySet(), installed = false), operations, detailState = GameDetailState.Unavailable(null))
+
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("canonical-detail-options").assertDoesNotExist()
+        composeRule.onNodeWithText("Explain aggregation").assertIsDisplayed().assertIsEnabled()
+        composeRule.runOnIdle { assertEquals(emptyList<OwnedCopyOperation>(), operations) }
+    }
+
+    @Test
     fun installedOptionsReplaceSeparateCopiesAndSourceDetailsButtons() {
         val card = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS))
         val operations = mutableListOf<OwnedCopyOperation>()
