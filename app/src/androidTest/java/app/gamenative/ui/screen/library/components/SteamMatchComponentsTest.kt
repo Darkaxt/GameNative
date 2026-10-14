@@ -65,6 +65,23 @@ class SteamMatchComponentsTest {
     }
 
     @Test
+    fun rateLimitedStatusReportsDeferredRatherThanFailedOrChecked() {
+        composeRule.setContent {
+            PluviaTheme {
+                SteamResolutionStatus(
+                    state = SteamMatchUiState(progress = SteamResolutionProgress(total = 136, deferred = 136, retryAfterMs = 120_000)),
+                    onReviewMatches = {}, onRetry = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("steam-resolution-deferred").assertIsDisplayed()
+        composeRule.onNodeWithText("Steam is rate limited. 136 entries deferred; retries respect the server cooldown.").assertIsDisplayed()
+        composeRule.onNodeWithText("0 / 136 checked · 0 failed").assertIsDisplayed()
+        composeRule.onNodeWithTag("steam-resolution-review").assertIsNotEnabled()
+        composeRule.onNodeWithTag("steam-resolution-retry").assertIsEnabled()
+    }
+
+    @Test
     fun missingKeyOffersOfficialSetupAndHidesResolverActions() {
         var getKeyClicks = 0
         var enterKeyClicks = 0

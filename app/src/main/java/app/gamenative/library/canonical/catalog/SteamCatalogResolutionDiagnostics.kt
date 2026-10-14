@@ -17,6 +17,8 @@ data class SteamResolutionDiagnosticEvent(
     val total: Int,
     val failed: Int,
     val errorType: String? = null,
+    val publicTitle: String? = null,
+    val deferred: Int = 0,
 )
 
 fun interface SteamCatalogResolutionDiagnosticSink {
@@ -38,7 +40,13 @@ class FeatureSteamCatalogResolutionDiagnostics @Inject constructor() :
                 outcome = event.result.diagnosticOutcome(),
                 attributes = buildMap {
                     event.source?.let { put(DiagnosticAttribute.SOURCE, it.name) }
+                    put(DiagnosticAttribute.OPERATION, "STEAM_CATALOG_RESOLUTION")
+                    event.publicTitle?.let { put(DiagnosticAttribute.PUBLIC_TITLE, it) }
                     put(DiagnosticAttribute.CONFIDENCE, event.result.diagnosticCategory())
+                    put(DiagnosticAttribute.DEFERRED_COUNT, event.deferred.boundedCount())
+                    (event.result as? SteamResolutionItemResult.RateLimited)?.let {
+                        put(DiagnosticAttribute.RETRY_AFTER_MS, it.retryAfterMs.coerceAtLeast(0L).toString())
+                    }
                     put(DiagnosticAttribute.RESULT_COUNT, event.completed.boundedCount())
                     put(DiagnosticAttribute.CANONICAL_COUNT, event.total.boundedCount())
                     event.errorType?.let { put(DiagnosticAttribute.ERROR_TYPE, it) }
@@ -57,6 +65,7 @@ class FeatureSteamCatalogResolutionDiagnostics @Inject constructor() :
         SteamResolutionItemResult.ReviewRequired -> DiagnosticOutcome.DEFERRED
         SteamResolutionItemResult.ExpectedStateChanged -> DiagnosticOutcome.SKIPPED
         SteamResolutionItemResult.ProviderUnavailable -> DiagnosticOutcome.UNAVAILABLE
+        is SteamResolutionItemResult.RateLimited -> DiagnosticOutcome.DEFERRED
     }
 
     private fun SteamResolutionItemResult.diagnosticCategory(): String = when (this) {
@@ -73,6 +82,7 @@ class FeatureSteamCatalogResolutionDiagnostics @Inject constructor() :
         }
         SteamResolutionItemResult.ExpectedStateChanged -> "EXPECTED_STATE_CHANGED"
         SteamResolutionItemResult.ProviderUnavailable -> "PROVIDER_UNAVAILABLE"
+        is SteamResolutionItemResult.RateLimited -> "RATE_LIMIT_DEFERRED"
     }
 
     private fun Int.boundedCount(): String = coerceIn(0, MAX_COUNT).toString()

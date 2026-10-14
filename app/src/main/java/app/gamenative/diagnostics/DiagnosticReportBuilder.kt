@@ -27,12 +27,14 @@ object DiagnosticReportBuilder {
                 androidVersion = Build.VERSION.RELEASE,
             ),
             events = FeatureDiagnostics.recent(eventLimit),
+            gameStates = FeatureDiagnostics.currentGameStates(),
         )
     }
 
     internal fun build(
         header: DiagnosticReportHeader,
         events: List<DiagnosticEvent>,
+        gameStates: List<DiagnosticEvent> = emptyList(),
     ): String = buildString {
         appendLine("GameNative feature diagnostic report")
         appendLine("App: ${header.appVersion}")
@@ -43,5 +45,8 @@ object DiagnosticReportBuilder {
         appendLine("Upload: manual export only")
         appendLine()
         events.forEach { event -> appendLine(json.encodeToString(event)) }
+        appendLine()
+        appendLine("Current-process game states (merged snapshots, not chronological history): ${gameStates.size}")
+        gameStates.forEach { event -> appendLine(json.encodeToString(event)) }
     }
 }

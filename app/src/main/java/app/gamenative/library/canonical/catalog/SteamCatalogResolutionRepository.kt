@@ -19,6 +19,7 @@ import app.gamenative.library.canonical.EpicCatalogFallbackWriter
 import app.gamenative.library.canonical.ExpectedMatchState
 import app.gamenative.library.canonical.SteamCatalogDecisionWriter
 import app.gamenative.library.canonical.artwork.ArtworkUrlPolicy
+import app.gamenative.library.discovery.SteamReviewSummarySource
 import app.gamenative.library.metadata.EpicCmsCatalogException
 import app.gamenative.library.metadata.EpicCmsCatalogRequest
 import app.gamenative.library.metadata.EpicCmsCatalogSource
@@ -51,6 +52,8 @@ data class SteamResolutionProgress(
     val autoAccepted: Int = 0,
     val needsReview: Int = 0,
     val unmatched: Int = 0,
+    val deferred: Int = 0,
+    val retryAfterMs: Long = 0L,
 )
 
 enum class EpicPresentationOutcome {
@@ -70,6 +73,7 @@ sealed interface SteamResolutionItemResult {
 
     data object ExpectedStateChanged : SteamResolutionItemResult
     data object ProviderUnavailable : SteamResolutionItemResult
+    data class RateLimited(val retryAfterMs: Long) : SteamResolutionItemResult
 }
 
 @Singleton
@@ -89,6 +93,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private val db: PluviaDatabase,
     private val resumeScheduler: SteamCatalogResumeScheduler,
     private val artworkCorroborator: SteamCatalogArtworkCorroborator? = null,
+    private val reviewSummarySource: SteamReviewSummarySource? = null,
 ) {
     private val resolutionDao = db.steamCatalogResolutionDao()
     private val scanMutex = Mutex()
@@ -245,17 +250,29 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             (if (match.evidenceReleaseYear != null) 1 else 0)
 
     private suspend fun resolveSerially(attempts: List<ResolutionAttempt>) {
-        attempts.forEachIndexed { index, attempt ->
-            resolveAndRecord(attempt)
+        for ((index, attempt) in attempts.withIndex()) {
+            val resolution = resolveAndRecord(attempt)
+            if (resolution.result is SteamResolutionItemResult.RateLimited) {
+                val progress = mutableProgress.value
+                attempts.drop(index + 1).forEach { deferred -> diagnostics.recordSafely(
+                    SteamResolutionDiagnosticEvent(resolution.result, deferred.match.source,
+                        progress.completed, progress.total, progress.failed, RATE_LIMIT_EXHAUSTED,
+                        publicTitle = deferred.match.publicTitle(), deferred = progress.deferred),
+                ) }
+                break
+            }
             if (index + 1 < attempts.size) delay(AUTOMATIC_ITEM_INTERVAL_MS)
         }
     }
 
-    private suspend fun resolveAndRecord(attempt: ResolutionAttempt) {
+    private suspend fun resolveAndRecord(attempt: ResolutionAttempt): ItemResolution {
         val resolution = try {
             resolve(attempt)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: SteamRateLimitExhaustedException) {
+            // Leave this lease and the remaining batch PENDING for the existing durable worker.
+            ItemResolution(SteamResolutionItemResult.RateLimited(error.retryAfterMs), RATE_LIMIT_EXHAUSTED)
         } catch (error: Exception) {
             publishAttempt(attempt, SteamCatalogResolutionStatus.FAILED) { CanonicalGuardedMutationResult.APPLIED }
             ItemResolution(
@@ -263,7 +280,8 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 errorType = error.diagnosticCategory(),
             )
         }
-        updateProgress(attempt.match.source, resolution)
+        updateProgress(attempt.match.source, resolution, attempt.match.publicTitle())
+        return resolution
     }
 
     private suspend fun resolve(attempt: ResolutionAttempt): ItemResolution {
@@ -274,7 +292,23 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         val fetched = fetchCandidates(match.evidenceDisplayName, locale)
         val rejected = resolutionDao.getRejectedSteamAppIds(match.accountScope, match.source, match.stableSourceId).toSet()
         val candidates = candidatePolicy.rankCandidates(evidence, fetched.candidates.filterNot { it.steamAppId in rejected })
-        if (fetched.incomplete) {
+        val ownedSteamAppIds = candidates.filter {
+            db.steamAppDao().findOwnedApp(it.steamAppId) != null
+        }.mapTo(mutableSetOf()) { it.steamAppId }
+        val sameName = candidatePolicy.sameNameFinalists(evidence, candidates, ownedSteamAppIds)
+        val reviewCounts = linkedMapOf<Int, Int>()
+        if (sameName.size > 1) for (candidate in sameName) {
+            val cached = db.canonicalGameDao().findBySteamAppId(candidate.steamAppId)?.steamReviewCount
+            val count = cached?.coerceIn(0L, Int.MAX_VALUE.toLong())?.toInt() ?: try {
+                reviewSummarySource?.fetch(candidate.steamAppId)?.totalReviews
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: SteamRateLimitExhaustedException) {
+                throw error
+            } catch (_: Exception) { null }
+            count?.takeIf { it >= 0 }?.let { reviewCounts[candidate.steamAppId] = it }
+        }
+        if (fetched.incomplete && sameName.isEmpty()) {
             val selected = candidates.firstOrNull()
                 ?: throw SteamCatalogCandidateFetchException()
             return publishAttempt(attempt, SteamCatalogResolutionStatus.FAILED, candidates) {
@@ -288,8 +322,9 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 errorType = requireNotNull(fetched.incompleteReason),
             )
         }
-        val artworkAppIds = artworkCorroborator?.corroborate(expected.key, evidence, candidates).orEmpty()
-        return when (val decision = candidatePolicy.evaluate(evidence, candidates, artworkAppIds)) {
+        val artworkAppIds = if (sameName.isNotEmpty()) emptySet() else
+            artworkCorroborator?.corroborate(expected.key, evidence, candidates).orEmpty()
+        return when (val decision = candidatePolicy.evaluate(evidence, candidates, artworkAppIds, ownedSteamAppIds, reviewCounts)) {
             is CatalogDecision.AutoAccept -> {
                 val selected = candidates.first { it.steamAppId == decision.steamAppId }
                 val mutation = publishAttempt(attempt, SteamCatalogResolutionStatus.AUTO_ACCEPTED, candidates) {
@@ -637,10 +672,14 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
     private suspend fun updateProgress(
         source: GameSource,
         resolution: ItemResolution,
+        publicTitle: String? = null,
     ) = progressMutex.withLock {
         val previous = mutableProgress.value
+        val rateLimit = resolution.result as? SteamResolutionItemResult.RateLimited
         val next = previous.copy(
-            completed = previous.completed + 1,
+            completed = previous.completed + if (rateLimit == null) 1 else 0,
+            deferred = if (rateLimit != null) previous.total - previous.completed else previous.deferred,
+            retryAfterMs = rateLimit?.retryAfterMs ?: previous.retryAfterMs,
             failed = previous.failed + if (
                 resolution.result == SteamResolutionItemResult.ProviderUnavailable
             ) {
@@ -679,6 +718,8 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
                 total = next.total,
                 failed = next.failed,
                 errorType = resolution.errorType,
+                publicTitle = publicTitle,
+                deferred = next.deferred,
             ),
         )
     }
@@ -701,6 +742,9 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
             SteamResolutionItemResult.ExpectedStateChanged
         },
     )
+
+    private fun StoreMatchEntity.publicTitle(): String? =
+        evidenceDisplayName.takeIf { source != GameSource.CUSTOM_GAME && it.isNotBlank() }
 
     private fun StoreMatchEntity.sourceEvidence() = SourceCatalogEvidence(
         title = evidenceDisplayName,
@@ -759,7 +803,7 @@ class SteamCatalogResolutionRepository @Inject internal constructor(
         const val MAX_QUERY_FAN_OUT = 3
         const val MAX_VALIDATED_HITS = 5
         const val MAX_VISIBLE_CANDIDATES = 5
-        const val AUTOMATIC_ITEM_INTERVAL_MS = 350L
+        const val AUTOMATIC_ITEM_INTERVAL_MS = 2_000L
         const val STORE_SEARCH_UNAVAILABLE = "STORE_SEARCH_UNAVAILABLE"
         const val APP_DETAILS_UNAVAILABLE = "APP_DETAILS_UNAVAILABLE"
         const val SEARCH_INCOMPLETE = "SEARCH_INCOMPLETE"

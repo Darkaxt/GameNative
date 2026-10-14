@@ -1,20 +1,19 @@
 package app.gamenative.library.discovery
 
 import app.gamenative.utils.Net
+import app.gamenative.library.metadata.SteamStoreRequestGate
 import app.gamenative.library.metadata.SteamHttpRetryExecutor
+import app.gamenative.library.metadata.awaitSteamResponse
 import app.gamenative.library.metadata.sanitizeSteamText
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -44,7 +43,7 @@ class SteamReviewSummaryProvider internal constructor(
     private val retryExecutor: SteamHttpRetryExecutor = SteamHttpRetryExecutor(),
 ) : SteamReviewSummarySource {
     @Inject
-    constructor() : this(
+    constructor(gate: SteamStoreRequestGate) : this(
         client = Net.http.newBuilder()
             .cookieJar(CookieJar.NO_COOKIES)
             .followRedirects(false)
@@ -54,6 +53,7 @@ class SteamReviewSummaryProvider internal constructor(
         allowedHosts = setOf(STEAM_STORE_HOST),
         requireHttps = true,
         allowedPorts = setOf(443),
+        retryExecutor = SteamHttpRetryExecutor(storeGate = gate),
     )
 
     override suspend fun fetch(steamAppId: Int): SteamReviewSummary {
@@ -80,7 +80,7 @@ class SteamReviewSummaryProvider internal constructor(
         val expectedPath = initialRequest.url.encodedPath
         repeat(MAX_NETWORK_HOPS) {
             if (!isAllowedSummaryUrl(request.url, expectedPath)) throw SteamReviewSummaryUnavailable()
-            val response = retryExecutor.execute { client.newCall(request).awaitSteamReviewResponse() }
+            val response = retryExecutor.execute { client.newCall(request).awaitSteamResponse() }
             if (!isAllowedSummaryUrl(response.request.url, expectedPath)) {
                 response.close()
                 throw SteamReviewSummaryUnavailable()
@@ -189,22 +189,3 @@ private data class SteamReviewQuerySummary(
 )
 
 private class SteamReviewSummaryUnavailable : IOException("Steam review summary unavailable")
-
-private suspend fun Call.awaitSteamReviewResponse(): Response = suspendCancellableCoroutine { continuation ->
-    continuation.invokeOnCancellation { cancel() }
-    enqueue(
-        object : Callback {
-            override fun onFailure(call: Call, error: IOException) {
-                if (continuation.isActive) continuation.resumeWith(Result.failure(error))
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                if (continuation.isActive) {
-                    continuation.resumeWith(Result.success(response))
-                } else {
-                    response.close()
-                }
-            }
-        },
-    )
-}

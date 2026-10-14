@@ -101,6 +101,13 @@ internal fun SteamResolutionStatus(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (state.progress.deferred > 0) {
+                Text(
+                    text = stringResource(R.string.steam_resolution_deferred, state.progress.deferred),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("steam-resolution-deferred"),
+                )
+            }
             if (state.isScanning && state.progress.total > 0) {
                 LinearProgressIndicator(
                     progress = {

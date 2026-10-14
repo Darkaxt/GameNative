@@ -42,12 +42,12 @@ class SteamCatalogProvider internal constructor(
     private val retryExecutor: SteamHttpRetryExecutor,
 ) : SteamCatalogDataSource, SteamCatalogRecordSource {
     @Inject
-    constructor() : this(
+    constructor(gate: SteamStoreRequestGate) : this(
         client = Net.http.newBuilder().followRedirects(false).followSslRedirects(false).build(),
         apiEndpoint = DEFAULT_ENDPOINT.toHttpUrl(),
         urlPolicy = SteamUrlPolicy(),
         clock = MetadataClock(System::currentTimeMillis),
-        retryExecutor = SteamHttpRetryExecutor(),
+        retryExecutor = SteamHttpRetryExecutor(storeGate = gate),
     )
 
     override suspend fun fetch(
@@ -343,10 +343,10 @@ internal suspend fun Call.awaitSteamResponse(): Response = suspendCancellableCor
             }
 
             override fun onResponse(call: Call, response: Response) {
-                if (continuation.isActive) {
-                    continuation.resumeWith(Result.success(response))
-                } else {
-                    response.close()
+                // Cancellation may win after resume but before dispatch; the receiver never owns
+                // the response in that case, so its body must be closed by the continuation.
+                continuation.resume(response) { _, undeliveredResponse, _ ->
+                    undeliveredResponse.close()
                 }
             }
         },

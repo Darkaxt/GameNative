@@ -122,6 +122,60 @@ class SteamMatchViewModelTest {
     }
 
     @Test
+    fun rateLimitedProgressPropagatesDeferredRetryHintWithoutCompletingOrFailingPendingItems() = runTest(scheduler) {
+        val source = match(1, GameSource.GOG)
+        aggregates.value = listOf(aggregate(game(1), source))
+        val viewModel = viewModel()
+        runCurrent()
+        viewModel.openMatch(source.key())
+        val picker = viewModel.state.value.picker
+        val coverage = viewModel.state.value.coverage
+        val beforeDeferral = SteamResolutionProgress(
+            completed = 3,
+            total = 6,
+            failed = 1,
+            autoAccepted = 1,
+            needsReview = 1,
+        )
+        scanning.value = true
+        progress.value = beforeDeferral
+        runCurrent()
+        assertEquals(beforeDeferral, viewModel.state.value.progress)
+        assertEquals(true, viewModel.state.value.isScanning)
+
+        val deferred = beforeDeferral.copy(deferred = 3, retryAfterMs = 45_000L)
+        progress.value = deferred
+        runCurrent()
+
+        assertEquals(deferred, viewModel.state.value.progress)
+        assertEquals(3, viewModel.state.value.progress.completed)
+        assertEquals(1, viewModel.state.value.progress.failed)
+        assertEquals(3, viewModel.state.value.progress.deferred)
+        assertEquals(45_000L, viewModel.state.value.progress.retryAfterMs)
+
+        // Ending the batch or updating unrelated UI state must not erase durable pending progress.
+        scanning.value = false
+        keyRequired.value = true
+        aggregates.value = listOf(aggregate(game(1).copy(updatedAt = 2), source))
+        runCurrent()
+        assertEquals(false, viewModel.state.value.isScanning)
+        assertEquals(true, viewModel.state.value.keyRequired)
+        assertEquals(deferred, viewModel.state.value.progress)
+        assertEquals(coverage, viewModel.state.value.coverage)
+        assertEquals(picker, viewModel.state.value.picker)
+
+        // A resumed repository batch replaces the old hint rather than retaining stale deferral.
+        val resumed = SteamResolutionProgress(total = 3)
+        progress.value = resumed
+        scanning.value = true
+        runCurrent()
+        assertEquals(resumed, viewModel.state.value.progress)
+        assertEquals(true, viewModel.state.value.isScanning)
+        coVerify(exactly = 0) { repository.scanAutomatically() }
+        coVerify(exactly = 0) { repository.retryAutomatically() }
+    }
+
+    @Test
     fun savedOrDeletedKeyRefreshesTheReadyResolver() = runTest(scheduler) {
         aggregates.value = listOf(aggregate(game(1), match(1, GameSource.GOG)))
         readiness.markSucceeded()

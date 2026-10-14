@@ -45,6 +45,37 @@ class CachedArtworkFeatureSourceTest {
     private fun bytes(name: String) = requireNotNull(javaClass.getResourceAsStream("/artwork/$name")).use { it.readBytes() }
     private fun test(body: suspend () -> Unit) = runTest { withContext(Dispatchers.Default) { body() } }
 
+    @Test fun acquisitionSnapshotsExplainHttpFailureAndFeatureCacheReuseByApprovedOriginal() = test {
+        val diagnostics = app.gamenative.diagnostics.FeatureDiagnostics
+        val field = diagnostics::class.java.getDeclaredField("store").apply { isAccessible = true }
+        val previous = field.get(null)
+        try {
+            field.set(null, app.gamenative.diagnostics.DiagnosticLogStore(temporary.newFolder()))
+            diagnostics.clear()
+            val cache = ArtworkFeatureCache(temporary.newFolder(), clock)
+            val source = source(cache)
+            val image = requireNotNull(source.original(reference))
+            assertEquals("FEATURES_READY", diagnostics.currentGameStates().single().attributes["stage"])
+            assertEquals(image.contentHash.take(16), diagnostics.currentGameStates().single().attributes["public_content_id"])
+            assertEquals("200", diagnostics.currentGameStates().single().attributes["http_status"])
+            requireNotNull(source.original(reference))
+            assertEquals("DESCRIPTOR_CACHE_HIT", diagnostics.currentGameStates().single().attributes["stage"])
+            val unavailableClient = OkHttpClient.Builder().addInterceptor { chain ->
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(404).message("private response body")
+                    .body("token=synthetic-secret".toResponseBody()).build()
+            }.build()
+            val failedRef = reference.copy(url = "https://images.gog.com/missing-original.jpg")
+            assertNull(ArtworkImageProvider(unavailableClient, ArtworkUrlPolicy.Default).grouping(failedRef))
+            val failed = diagnostics.currentGameStates().last()
+            assertEquals("HTTP_UNAVAILABLE", failed.attributes["stage"])
+            assertEquals("404", failed.attributes["http_status"])
+            assertEquals(failedRef.url, failed.attributes["public_url"])
+            assertEquals(16, failed.attributes.getValue("correlation_id").length)
+            org.junit.Assert.assertFalse(failed.toString().contains("synthetic-secret"))
+            org.junit.Assert.assertFalse(failed.toString().contains("private response body"))
+        } finally { diagnostics.clear(); field.set(null, previous) }
+    }
+
     @Test fun productionTransportDecoderFeaturesAndRestartReuseTheOriginalWithoutNetwork() = test {
         val folder = temporary.newFolder()
         val cache = ArtworkFeatureCache(folder, clock)

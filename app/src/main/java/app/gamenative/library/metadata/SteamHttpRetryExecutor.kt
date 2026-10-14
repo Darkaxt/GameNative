@@ -6,14 +6,16 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 import okhttp3.Response
 
-class SteamRateLimitExhaustedException internal constructor() :
+class SteamRateLimitExhaustedException internal constructor(val retryAfterMs: Long = 60_000L) :
     IOException("Steam rate limit exhausted")
 
 internal class SteamHttpRetryExecutor(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
+    private val storeGate: SteamStoreRequestGate? = null,
 ) {
     suspend fun execute(request: suspend () -> Response): Response {
+        storeGate?.let { return it.execute(request) }
         repeat(MAX_ATTEMPTS) { attempt ->
             val response = request()
             if (response.code != HTTP_TOO_MANY_REQUESTS) return response

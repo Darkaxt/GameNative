@@ -56,7 +56,8 @@ class SteamCatalogNativeArtworkEvidenceTest {
     private lateinit var db: PluviaDatabase
     private lateinit var writer: RoomCanonicalMutationRepository
     private val canonicalId = UUID(0, 1).toString()
-    private val title = "Fixture Game"
+    private val title = "Fixture Game Ultimate Edition"
+    private val candidateTitle = "Fixture Game Definitive Edition"
     private val epicId = EpicStableSourceId.encode("fixture-namespace", "fixture-catalog")
     private val amazonId = "amzn1.adg.product.${UUID(0, 1)}"
     private var recordRequests = 0
@@ -212,7 +213,7 @@ class SteamCatalogNativeArtworkEvidenceTest {
             recordRequests++
             SteamCatalogRecord(steamAppId = appId, appType = CanonicalAppType.GAME, releaseYear = null,
                 metadata = CanonicalGameMetadata(
-                    title = title, shortDescription = null, about = null, headerImageUrl = null,
+                    title = candidateTitle, shortDescription = null, about = null, headerImageUrl = null,
                     screenshots = emptyList(), movies = emptyList(), developers = emptyList(), publishers = emptyList(),
                     releaseDate = null, platforms = setOf(GamePlatform.WINDOWS), languages = emptyList(),
                     requirements = null, features = emptyList(), achievementCount = null, dlcCount = null,

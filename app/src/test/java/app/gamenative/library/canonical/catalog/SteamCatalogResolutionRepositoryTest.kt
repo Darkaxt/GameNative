@@ -139,8 +139,8 @@ class SteamCatalogResolutionRepositoryTest {
         assertEquals(900, progress.total)
         assertEquals(900, progress.completed)
         assertEquals(0, progress.failed)
-        assertEquals(450, progress.autoAccepted)
-        assertEquals(300, progress.needsReview)
+        assertEquals(600, progress.autoAccepted)
+        assertEquals(150, progress.needsReview)
         assertEquals(150, progress.unmatched)
         assertEquals(progress.total, progress.autoAccepted + progress.needsReview + progress.unmatched)
         assertEquals(83, (progress.autoAccepted + progress.needsReview) * 100 / progress.total)
@@ -605,6 +605,31 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
+    fun `rate exhaustion pauses the batch without querying later games or failing matches`() = runTest {
+        repeat(4) { index ->
+            val game = canonical(index + 1L, steamAppId = null)
+            db.canonicalGameDao().insert(game)
+            seedMatch(match(key(GameSource.GOG, "limited-$index"), game.canonicalId, "Game $index"))
+        }
+        var calls = 0
+        val resolver = repository(SteamCatalogSearchSource { _, _ ->
+            calls++
+            throw SteamRateLimitExhaustedException()
+        })
+
+        val progress = resolver.scanAutomatically()
+
+        assertEquals("A throttled batch must not hammer the remaining games", 1, calls)
+        assertEquals(4, progress.total)
+        assertEquals(0, progress.completed)
+        assertEquals(0, progress.failed)
+        assertEquals(0, progress.unmatched)
+        assertTrue(writer.operations.isEmpty())
+        repeat(4) { index -> assertEquals("PENDING", attemptStatus(canonical(index + 1L, null).canonicalId)) }
+        assertFalse(resolver.isScanning.value)
+    }
+
+    @Test
     fun `automatic scan serializes and paces provider work while isolating item failures`() = runTest {
         repeat(4) { index ->
             val canonical = canonical(index + 1L, steamAppId = null)
@@ -641,7 +666,7 @@ class SteamCatalogResolutionRepositoryTest {
 
         assertEquals(4, calls.get())
         assertEquals(1, maxActive.get())
-        assertTrue(startTimes.zipWithNext().all { (left, right) -> right - left >= 350L })
+        assertTrue(startTimes.zipWithNext().all { (left, right) -> right - left >= 2_000L })
         assertEquals(4, progress.completed)
         assertEquals(4, progress.total)
         assertEquals(1, progress.failed)
@@ -649,7 +674,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `automatic scan validates five hits and keeps truncated discovery review only`() = runTest {
+    fun `automatic scan validates five hits and defaults to the verified same name`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         val selected = match(
             key(GameSource.EPIC, "bounded"),
@@ -686,11 +711,11 @@ class SteamCatalogResolutionRepositoryTest {
 
         assertEquals((1..5).toList(), fetched)
         assertEquals(5, repository.candidatesFor(expected(selected).key).size)
-        assertEquals(0, progress.autoAccepted)
-        assertEquals(1, progress.needsReview)
-        assertEquals(1, (writer.operations.single() as DecisionOperation.Review).steamAppId)
-        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
-        assertTrue(enrichment.calls.isEmpty())
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(0, progress.needsReview)
+        assertEquals(1, (writer.operations.single() as DecisionOperation.Accepted).steamAppId)
+        assertNull(diagnostics.events.single().errorType)
+        assertEquals(1, enrichment.calls.size)
     }
 
     @Test
@@ -751,7 +776,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `failed alias query keeps aggregated verified candidates as ranked review only`() = runTest {
+    fun `failed alias query does not block a verified same name default`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         db.canonicalGameDao().insert(canonical)
         seedMatch(
@@ -795,10 +820,10 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(1, progress.needsReview)
+        assertEquals(1, progress.autoAccepted)
         assertEquals(0, progress.failed)
-        assertEquals(84, (writer.operations.single() as DecisionOperation.Review).steamAppId)
-        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
+        assertEquals(84, (writer.operations.single() as DecisionOperation.Accepted).steamAppId)
+        assertNull(diagnostics.events.single().errorType)
     }
 
     @Test
@@ -891,7 +916,7 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `automatic scan defers to review when one exact candidate cannot be validated`() = runTest {
+    fun `automatic scan defaults to the validated exact candidate despite another unavailable hit`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         db.canonicalGameDao().insert(canonical)
         seedMatch(
@@ -920,14 +945,14 @@ class SteamCatalogResolutionRepositoryTest {
         val progress = repository.scanAutomatically()
 
         assertEquals(0, progress.failed)
-        assertEquals(1, progress.needsReview)
-        assertEquals(0, progress.autoAccepted)
-        val recorded = writer.operations.single() as DecisionOperation.Review
+        assertEquals(0, progress.needsReview)
+        assertEquals(1, progress.autoAccepted)
+        val recorded = writer.operations.single() as DecisionOperation.Accepted
         assertEquals(1, recorded.steamAppId)
     }
 
     @Test
-    fun `partial search with a verified candidate records review only`() = runTest {
+    fun `partial search with a verified same name candidate defaults automatically`() = runTest {
         val canonical = canonical(1, steamAppId = null)
         db.canonicalGameDao().insert(canonical)
         seedMatch(match(key(GameSource.GOG, "partial-search"), canonical.canonicalId, "Exact Marker"))
@@ -951,11 +976,11 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(1, progress.needsReview)
+        assertEquals(1, progress.autoAccepted)
         assertEquals(0, progress.unmatched)
         assertEquals(0, progress.failed)
-        assertTrue(writer.operations.single() is DecisionOperation.Review)
-        assertEquals("SEARCH_INCOMPLETE", diagnostics.events.single().errorType)
+        assertTrue(writer.operations.single() is DecisionOperation.Accepted)
+        assertNull(diagnostics.events.single().errorType)
     }
 
     @Test
@@ -1003,7 +1028,10 @@ class SteamCatalogResolutionRepositoryTest {
         val progress = repository.scanAutomatically()
 
         assertEquals(listOf(1), fetched)
-        assertEquals(1, progress.failed)
+        assertEquals(0, progress.failed)
+        assertEquals(0, progress.completed)
+        assertEquals(1, progress.deferred)
+        assertEquals("PENDING", attemptStatus(canonical.canonicalId))
         assertEquals(0, progress.needsReview)
         assertEquals(0, progress.unmatched)
         assertTrue(writer.operations.isEmpty())
@@ -1021,7 +1049,10 @@ class SteamCatalogResolutionRepositoryTest {
 
         val progress = repository.scanAutomatically()
 
-        assertEquals(1, progress.failed)
+        assertEquals(0, progress.failed)
+        assertEquals(0, progress.completed)
+        assertEquals(1, progress.deferred)
+        assertEquals("PENDING", attemptStatus(canonical.canonicalId))
         assertEquals(0, progress.unmatched)
         assertTrue(writer.operations.isEmpty())
         assertEquals("RATE_LIMIT_EXHAUSTED", diagnostics.events.single().errorType)
@@ -1223,10 +1254,10 @@ class SteamCatalogResolutionRepositoryTest {
     }
 
     @Test
-    fun `scan emits fixed outcome categories without private catalog text`() = runTest {
+    fun `scan exposes public titles and fixed outcomes without private identities or provider text`() = runTest {
         val specs = listOf(
             Triple(1L, "Auto Private Marker", 424242),
-            Triple(2L, "Review Private Marker", 424243),
+            Triple(2L, "Review Public Marker Ultimate Edition", 424243),
             Triple(3L, "None Private Marker", 424244),
             Triple(4L, "Fail Private Marker", 424245),
         )
@@ -1247,7 +1278,7 @@ class SteamCatalogResolutionRepositoryTest {
             records = SteamCatalogRecordSource { steamAppId, _ ->
                 when (steamAppId) {
                     424242 -> record(steamAppId, "Auto Private Marker", "Studio", 2020)
-                    424243 -> record(steamAppId, "Review Private Marker", null, null)
+                    424243 -> record(steamAppId, "Review Public Marker Definitive Edition", null, null)
                     else -> null
                 }
             },
@@ -1261,10 +1292,12 @@ class SteamCatalogResolutionRepositoryTest {
         assertEquals(1, progress.failed)
         val diagnosticText = diagnostics.events.joinToString("\n")
         specs.forEach { (_, title, appId) ->
-            assertFalse(diagnosticText.contains(title))
+            assertTrue(diagnosticText.contains(title))
             assertFalse(diagnosticText.contains(appId.toString()))
         }
         assertFalse(diagnosticText.contains("response URL"))
+        assertFalse(diagnosticText.contains(scope.value))
+        assertFalse(diagnosticText.contains("stableSourceId"))
         assertEquals(
             listOf("UNEXPECTED_FAILURE"),
             diagnostics.events.mapNotNull(SteamResolutionDiagnosticEvent::errorType),
@@ -1305,7 +1338,7 @@ class SteamCatalogResolutionRepositoryTest {
             },
             records = SteamCatalogRecordSource { steamAppId, _ ->
                 when (steamAppId) {
-                    2 -> record(steamAppId, "Partial Marker", "Studio", 2020)
+                    2 -> record(steamAppId, "Partial Marker Definitive Edition", "Studio", 2020)
                     else -> error("private app details failure")
                 }
             },
@@ -1610,17 +1643,17 @@ class SteamCatalogResolutionRepositoryTest {
     fun `resume worker retries incomplete review evidence rather than treating it as complete`() = runTest {
         val game = canonical(1, null)
         db.canonicalGameDao().insert(game)
-        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Public Game"))
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Playdead's INSIDE"))
         var complete = false
         var scheduled = 0
         val search = object : SteamCatalogSearchSource {
             override suspend fun search(query: String, locale: MetadataLocale) = searchResult(query, locale).hits
             override suspend fun searchResult(query: String, locale: MetadataLocale) = SteamCatalogSearchResult(
-                listOf(SteamStoreSearchHit(99, "Public Game", null)), complete = complete,
+                listOf(SteamStoreSearchHit(99, "INSIDE", null)), complete = complete,
             )
         }
         val resolver = repository(
-            search, SteamCatalogRecordSource { _, _ -> record(99, "Public Game", "studio", 2020) },
+            search, SteamCatalogRecordSource { _, _ -> record(99, "INSIDE", "studio", 2020) },
             resumeScheduler = SteamCatalogResumeScheduler { scheduled++ },
         )
         assertEquals(androidx.work.ListenableWorker.Result.retry(), worker(resolver).doWork())
@@ -1799,6 +1832,67 @@ class SteamCatalogResolutionRepositoryTest {
         assertEquals(completed, resolver.progress.value)
     }
 
+    @Test
+    fun `same name prefers a current native Steam license before date or popularity`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Example"))
+        db.steamAppDao().insert(app.gamenative.data.SteamApp(id = 84, packageId = 100,
+            name = "Example", type = app.gamenative.enums.AppType.game))
+        db.steamLicenseDao().insertAll(listOf(app.gamenative.data.SteamLicense(
+            packageId = 100, lastChangeNumber = 0, timeCreated = java.util.Date(), timeNextProcess = java.util.Date(),
+            minuteLimit = 0, minutesUsed = 0, paymentMethod = `in`.dragonbra.javasteam.enums.EPaymentMethod.None,
+            licenseFlags = java.util.EnumSet.of(`in`.dragonbra.javasteam.enums.ELicenseFlags.None),
+            purchaseCode = "", licenseType = `in`.dragonbra.javasteam.enums.ELicenseType.SinglePurchase,
+            territoryCode = 0, accessToken = 0L, ownerAccountId = listOf(1), masterPackageID = 0, appIds = listOf(84),
+        )))
+        val resolver = repository(
+            search = SteamCatalogSearchSource { _, _ -> listOf(42, 84).map { SteamStoreSearchHit(it, "Example", null) } },
+            records = SteamCatalogRecordSource { id, _ -> record(id, "Example", null, if (id == 42) 2020 else 2010) },
+            reviews = app.gamenative.library.discovery.SteamReviewSummarySource { throw AssertionError("No popularity request after unique owned preference") },
+        )
+        assertEquals(1, resolver.scanAutomatically().autoAccepted)
+        assertEquals(84, (writer.operations.single() as DecisionOperation.Accepted).steamAppId)
+    }
+
+    @Test
+    fun `same name popularity breaks the release tie without mistaking catalog rows for ownership`() = runTest {
+        val game = canonical(1, null)
+        db.canonicalGameDao().insert(game)
+        seedMatch(match(key(GameSource.GOG, "1"), game.canonicalId, "Example"))
+        db.steamAppDao().insert(app.gamenative.data.SteamApp(id = 42, packageId = 100,
+            name = "Example", type = app.gamenative.enums.AppType.game))
+        val requested = mutableListOf<Int>()
+        val resolver = repository(
+            search = SteamCatalogSearchSource { _, _ -> listOf(42, 84).map { SteamStoreSearchHit(it, "Example", null) } },
+            records = SteamCatalogRecordSource { id, _ -> record(id, "Example", null, 2019) },
+            reviews = app.gamenative.library.discovery.SteamReviewSummarySource { id ->
+                requested += id
+                app.gamenative.library.discovery.SteamReviewSummary(if (id == 84) 100_000 else 2)
+            },
+        )
+        assertEquals(1, resolver.scanAutomatically().autoAccepted)
+        assertEquals(listOf(42, 84), requested.sorted())
+        assertEquals(84, (writer.operations.single() as DecisionOperation.Accepted).steamAppId)
+    }
+
+    @Test
+    fun `deferred pending batch resumes after repository recreation without completed misses`() = runTest {
+        repeat(3) { index ->
+            val game = canonical(index + 1L, null)
+            db.canonicalGameDao().insert(game)
+            seedMatch(match(key(GameSource.GOG, "${index + 1}"), game.canonicalId, "Game $index"))
+        }
+        val deferred = repository(SteamCatalogSearchSource { _, _ -> throw SteamRateLimitExhaustedException(120_000) }).scanAutomatically()
+        assertEquals(3, deferred.deferred)
+        assertEquals(120_000L, deferred.retryAfterMs)
+        assertEquals(0, deferred.completed)
+        assertEquals(3, diagnostics.events.size)
+        assertTrue(diagnostics.events.all { it.result is SteamResolutionItemResult.RateLimited })
+        assertEquals(3, repository(SteamCatalogSearchSource { _, _ -> emptyList() }).scanAutomatically().unmatched)
+        repeat(3) { assertEquals("UNMATCHED", attemptStatus(canonical(it + 1L, null).canonicalId)) }
+    }
+
     private fun worker(
         resolver: SteamCatalogResolutionRepository,
         ready: Boolean = true,
@@ -1832,6 +1926,7 @@ class SteamCatalogResolutionRepositoryTest {
         },
         decisions: SteamCatalogDecisionWriter = writer,
         resumeScheduler: SteamCatalogResumeScheduler = SteamCatalogResumeScheduler {},
+        reviews: app.gamenative.library.discovery.SteamReviewSummarySource? = null,
     ) = SteamCatalogResolutionRepository(
         storeMatchDao = db.storeMatchDao(),
         searchSource = search,
@@ -1847,6 +1942,7 @@ class SteamCatalogResolutionRepositoryTest {
         clock = MetadataClock { 1_000L },
         db = db,
         resumeScheduler = resumeScheduler,
+        reviewSummarySource = reviews,
     )
 
     private suspend fun seedMatch(match: StoreMatchEntity) {

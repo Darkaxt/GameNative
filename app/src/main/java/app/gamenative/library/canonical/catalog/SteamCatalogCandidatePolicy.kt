@@ -10,7 +10,13 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
         source: SourceCatalogEvidence,
         candidates: List<SteamCatalogCandidate>,
         artworkAppIds: Set<Int> = emptySet(),
+        ownedSteamAppIds: Set<Int> = emptySet(),
+        reviewCounts: Map<Int, Int> = emptyMap(),
     ): CatalogDecision {
+        sameNameFinalists(source, candidates, ownedSteamAppIds).sortedWith(
+            compareByDescending<SteamCatalogCandidate> { reviewCounts[it.steamAppId] ?: -1 }
+                .thenBy { it.steamAppId },
+        ).firstOrNull()?.let { return CatalogDecision.AutoAccept(it.steamAppId) }
         val ranked = ranked(source, candidates, artworkAppIds).let { scored ->
             if (source.appType == CanonicalAppType.GAME) {
                 scored.filter(ScoredCandidate::typeCompatible)
@@ -28,6 +34,31 @@ class SteamCatalogCandidatePolicy @Inject constructor() {
             ambiguity.ranked
         }
         return selectDecision(decisionCandidates)
+    }
+
+    internal fun sameNameFinalists(
+        source: SourceCatalogEvidence,
+        candidates: List<SteamCatalogCandidate>,
+        ownedSteamAppIds: Set<Int> = emptySet(),
+    ): List<SteamCatalogCandidate> {
+        if (source.appType != CanonicalAppType.GAME) return emptyList()
+        val key = SteamCatalogNormalization.titleKey(source.title)
+        if (key.isEmpty()) return emptyList()
+        val exact = candidates.filter {
+            it.appType == CanonicalAppType.GAME && SteamCatalogNormalization.titleKey(it.title) == key
+        }.distinctBy { it.steamAppId }
+        val owned = exact.filter { it.steamAppId in ownedSteamAppIds }
+        val preferred = owned.ifEmpty { exact }
+        val year = source.releaseYear ?: return preferred
+        val dated = preferred.filter { it.releaseYear != null }
+        val prior = dated.filter { requireNotNull(it.releaseYear) <= year }
+        if (prior.isNotEmpty()) {
+            val closest = prior.maxOf { requireNotNull(it.releaseYear) }
+            return prior.filter { it.releaseYear == closest }
+        }
+        val distance = dated.minOfOrNull { abs(requireNotNull(it.releaseYear).toLong() - year) }
+            ?: return preferred
+        return dated.filter { abs(requireNotNull(it.releaseYear).toLong() - year) == distance }
     }
 
     fun rankCandidates(

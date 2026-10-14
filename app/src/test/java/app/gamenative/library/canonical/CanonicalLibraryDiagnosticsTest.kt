@@ -67,6 +67,7 @@ class CanonicalLibraryDiagnosticsTest {
                 "routeSucceeded",
                 "artworkCompared",
                 "artworkUnavailable",
+                "artworkState",
             ),
             methods.keys,
         )
@@ -81,6 +82,8 @@ class CanonicalLibraryDiagnosticsTest {
             ArtworkPairDigest::class.java,
             ArtworkMatch::class.java,
             ArtworkEvidenceFailure::class.java,
+            ArtworkGameTrace::class.java,
+            ArtworkTraceObservation::class.java,
             KClass::class.java,
         )
         methods.values.flatten().forEach { parameterType ->

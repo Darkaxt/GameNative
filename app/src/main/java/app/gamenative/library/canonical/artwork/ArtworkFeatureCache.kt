@@ -70,6 +70,11 @@ class ArtworkFeatureCache internal constructor(private val directory: File, priv
         }
     }
 
+    internal fun comparisonResults(): Map<Pair<String, String>, Boolean> = synchronized(lock) {
+        load()
+        pairs.mapKeys { (key, _) -> key.substringBefore('/') to key.substringAfter('/') }
+    }
+
     fun feature(content: String): ArtworkFeatures? = synchronized(lock) {
         load()
         if (!ArtworkFeatures.HASH.matches(content)) return@synchronized null

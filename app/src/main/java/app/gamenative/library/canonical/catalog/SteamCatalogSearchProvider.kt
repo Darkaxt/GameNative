@@ -1,6 +1,7 @@
 package app.gamenative.library.canonical.catalog
 
 import app.gamenative.library.metadata.MetadataLocale
+import app.gamenative.library.metadata.SteamStoreRequestGate
 import app.gamenative.library.metadata.SteamHttpRetryExecutor
 import app.gamenative.library.metadata.SteamRateLimitExhaustedException
 import app.gamenative.library.metadata.SteamUrlPolicy
@@ -65,11 +66,11 @@ class SteamStoreSearchProvider internal constructor(
     private val retryExecutor: SteamHttpRetryExecutor,
 ) : SteamCatalogSearchSource {
     @Inject
-    constructor() : this(
+    constructor(gate: SteamStoreRequestGate) : this(
         client = Net.http.newBuilder().followRedirects(false).followSslRedirects(false).build(),
         searchEndpoint = DEFAULT_ENDPOINT.toHttpUrl(),
         urlPolicy = SteamUrlPolicy(),
-        retryExecutor = SteamHttpRetryExecutor(),
+        retryExecutor = SteamHttpRetryExecutor(storeGate = gate),
     )
 
     override suspend fun search(

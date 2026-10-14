@@ -9,6 +9,55 @@ class SteamCatalogCandidatePolicyTest {
     private val policy = SteamCatalogCandidatePolicy()
 
     @Test
+    fun sameNameDredgeAutomaticallyResolvesWithoutDeveloperOrYear() {
+        assertEquals(
+            CatalogDecision.AutoAccept(1562430),
+            policy.evaluate(source("DREDGE"), listOf(candidate(1562430, "DREDGE"))),
+        )
+    }
+
+    @Test
+    fun sameNameDredgeDoesNotRequireMatchingPartyMetadata() {
+        assertEquals(
+            CatalogDecision.AutoAccept(1562430),
+            policy.evaluate(
+                source("DREDGE", developer = "Store Publisher", year = 2024),
+                listOf(candidate(1562430, "DREDGE", "Black Salt Games", 2023)),
+            ),
+        )
+    }
+
+    @Test
+    fun sameNameGamesUseClosestPriorYearWithoutPartyEvidence() {
+        assertEquals(
+            CatalogDecision.AutoAccept(12),
+            policy.evaluate(
+                source("Example", year = 2015),
+                listOf(candidate(10, "Example", year = 2010), candidate(12, "Example", year = 2012),
+                    candidate(20, "Example", year = 2020)),
+            ),
+        )
+    }
+
+    @Test
+    fun sameNameOwnedSteamGameWinsBeforeReleaseTimeAndPopularity() {
+        assertEquals(CatalogDecision.AutoAccept(84), policy.evaluate(
+            source("Example", year = 2020),
+            listOf(candidate(42, "Example", year = 2020), candidate(84, "Example", year = 2010)),
+            ownedSteamAppIds = setOf(84), reviewCounts = mapOf(42 to 100_000, 84 to 2),
+        ))
+    }
+
+    @Test
+    fun sameNamePopularityBreaksClosestReleaseTimeTie() {
+        assertEquals(CatalogDecision.AutoAccept(84), policy.evaluate(
+            source("Example", year = 2020),
+            listOf(candidate(42, "Example", year = 2019), candidate(84, "Example", year = 2019)),
+            reviewCounts = mapOf(42 to 2, 84 to 100_000),
+        ))
+    }
+
+    @Test
     fun uniqueExactCandidateWithDeveloperEvidenceAutoAccepts() {
         val result = policy.evaluate(
             source = source(title = "Example Deluxe", developer = "Studio Ltd", year = 2020),
@@ -78,7 +127,7 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun tiedClosestPriorCandidatesRequireReview() {
+    fun tiedClosestPriorCandidatesUseStableDefault() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio", year = 2015),
             candidates = listOf(
@@ -87,11 +136,11 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
-    fun ambiguityWithoutCandidateAtOrBeforeSourceYearRequiresReview() {
+    fun futureCandidatesUseClosestReleaseYear() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio", year = 2010),
             candidates = listOf(
@@ -100,11 +149,11 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
-    fun ambiguityWithoutSourceYearRequiresReview() {
+    fun missingSourceYearUsesStableDefault() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio", year = null),
             candidates = listOf(
@@ -113,17 +162,17 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
-    fun titleOnlyCandidateRequiresReview() {
+    fun titleOnlyCandidateAutomaticallyDefaults() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = null),
             candidates = listOf(candidate(42, "Example", null, null)),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
@@ -153,7 +202,7 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun marginBelowEightHundredthsRequiresScoreRankedReview() {
+    fun exactReleaseYearDefaultsDespiteSmallScoreMargin() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = 2020),
             candidates = listOf(
@@ -162,7 +211,7 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(20, 10)), result)
+        assertEquals(CatalogDecision.AutoAccept(20), result)
     }
 
     @Test
@@ -178,7 +227,7 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun reviewCandidatesAreRankedByScoreBeforeAppId() {
+    fun exactNameWinsOverUnrelatedCandidate() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = null),
             candidates = listOf(
@@ -187,11 +236,11 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(84, 42)), result)
+        assertEquals(CatalogDecision.AutoAccept(84), result)
     }
 
     @Test
-    fun equallyEligibleCandidatesRequireReview() {
+    fun equallyEligibleCandidatesUseStableDefault() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio", year = 2020),
             candidates = listOf(
@@ -200,7 +249,7 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
@@ -247,27 +296,27 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun developerConflictPreventsAutoAccept() {
+    fun sameNameOverridesDeveloperConflict() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio A", year = null),
             candidates = listOf(candidate(42, "Example", "Studio B", null)),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
-    fun matchingYearDoesNotOverrideDeveloperConflict() {
+    fun sameNameAndYearOverrideDeveloperConflict() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio A", year = 2020),
             candidates = listOf(candidate(42, "Example", "Studio B", 2020)),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
-    fun matchingYearDoesNotOverridePublisherOnlyConflict() {
+    fun sameNameOverridesPublisherOnlyConflict() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = "Studio A", year = 2020),
             candidates = listOf(
@@ -275,7 +324,7 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
@@ -301,13 +350,13 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun releaseYearGapGreaterThanOnePreventsAutoAccept() {
+    fun sameNameOverridesCrossStoreReleaseYearGap() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = 2020),
             candidates = listOf(candidate(42, "Example", null, 2022)),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test
@@ -316,7 +365,7 @@ class SteamCatalogCandidatePolicyTest {
     }
 
     @Test
-    fun reviewCandidatesRemoveDuplicateAppIdsAndUseStableOrdering() {
+    fun sameNameDefaultsRemoveDuplicateAppIds() {
         val result = policy.evaluate(
             source = source(title = "Example", developer = null, year = null),
             candidates = listOf(
@@ -326,7 +375,7 @@ class SteamCatalogCandidatePolicyTest {
             ),
         )
 
-        assertEquals(CatalogDecision.ReviewRequired(listOf(42, 84)), result)
+        assertEquals(CatalogDecision.AutoAccept(42), result)
     }
 
     @Test

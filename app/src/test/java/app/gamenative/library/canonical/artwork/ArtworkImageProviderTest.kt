@@ -2,6 +2,10 @@ package app.gamenative.library.canonical.artwork
 
 import android.app.Application
 import app.gamenative.data.GameSource
+import app.gamenative.diagnostics.DiagnosticLogStore
+import app.gamenative.diagnostics.FeatureDiagnostics
+import java.util.concurrent.CountDownLatch
+import kotlinx.coroutines.TimeoutCancellationException
 import java.io.IOException
 import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.TimeUnit
@@ -44,12 +48,14 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.junit.rules.TimeoutRule
+import org.junit.rules.TemporaryFolder
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, manifest = Config.NONE, sdk = [29])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ArtworkImageProviderTest {
     @get:Rule val timeout = TimeoutRule.seconds(30)
+    @get:Rule val temporary = TemporaryFolder()
     private lateinit var server: MockWebServer
 
     @Before
@@ -180,6 +186,53 @@ class ArtworkImageProviderTest {
         request.cancelAndJoin()
         withTimeout(2_000) { stopped.await() }
         assertTrue(request.isCancelled)
+    }
+
+    @Test
+    fun enclosingTimeoutTerminatesTheApprovedOriginalAcquisitionSnapshot() = runBlocking {
+        acquisitionTermination(timeoutRequest = true)
+    }
+
+    @Test
+    fun generationCancellationTerminatesTheApprovedOriginalAcquisitionSnapshot() = runBlocking {
+        acquisitionTermination(timeoutRequest = false)
+    }
+
+    private suspend fun acquisitionTermination(timeoutRequest: Boolean) = kotlinx.coroutines.coroutineScope {
+        val field = FeatureDiagnostics::class.java.getDeclaredField("store").apply { isAccessible = true }
+        val previous = field.get(null)
+        val arrived = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            arrived.complete(Unit)
+            check(release.await(10, TimeUnit.SECONDS))
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(404).message("test")
+                .body("".toResponseBody()).build()
+        }.build()
+        try {
+            field.set(null, DiagnosticLogStore(temporary.newFolder()))
+            FeatureDiagnostics.clear()
+            val reference = ArtworkReference(GameSource.GOG, "https://images.gog.com/termination.jpg")
+            val provider = ArtworkImageProvider(client, ArtworkUrlPolicy.Default)
+            val request = async(start = CoroutineStart.UNDISPATCHED) {
+                if (timeoutRequest) runCatching { withTimeout(2_000) { provider.grouping(reference) } }.exceptionOrNull()
+                else { provider.grouping(reference); null }
+            }
+            withTimeout(2_000) { arrived.await() }
+            if (timeoutRequest) assertTrue(request.await() is TimeoutCancellationException)
+            else { request.cancelAndJoin(); assertTrue(request.isCancelled) }
+            val state = FeatureDiagnostics.currentGameStates().single { it.attributes["operation"] == "ARTWORK_ORIGINAL" }
+            assertEquals(if (timeoutRequest) "TIMEOUT" else "CANCELLED", state.attributes["stage"])
+            assertEquals(ArtworkFeatures.hash(reference.url.toByteArray()).take(16), state.attributes["public_url_id"])
+            assertEquals(state.attributes["correlation_id"], state.attributes["public_url_id"])
+        } finally {
+            release.countDown()
+            client.dispatcher.executorService.shutdown()
+            client.dispatcher.executorService.awaitTermination(5, TimeUnit.SECONDS)
+            client.connectionPool.evictAll()
+            FeatureDiagnostics.clear()
+            field.set(null, previous)
+        }
     }
 
     private fun imageResponse() = MockResponse().setHeader("Content-Type", "image/png")

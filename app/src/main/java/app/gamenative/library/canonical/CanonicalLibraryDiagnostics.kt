@@ -24,15 +24,19 @@ enum class ArtworkEvidenceFailure {
 
 class ArtworkPairDigest private constructor(val value: String) {
     companion object {
-        fun from(left: ArtworkFeatures, right: ArtworkFeatures): ArtworkPairDigest {
-            require(ArtworkFeatures.HASH.matches(left.contentHash) && ArtworkFeatures.HASH.matches(right.contentHash))
-            val hashes = listOf(left.contentHash, right.contentHash).sorted()
+        fun from(left: ArtworkFeatures, right: ArtworkFeatures): ArtworkPairDigest = fromHashes(left.contentHash, right.contentHash)
+
+        internal fun fromHashes(left: String, right: String): ArtworkPairDigest {
+            require(ArtworkFeatures.HASH.matches(left) && ArtworkFeatures.HASH.matches(right))
+            val hashes = listOf(left, right).sorted()
             return ArtworkPairDigest("${hashes[0].take(16)}/${hashes[1].take(16)}")
         }
     }
 }
 
 interface CanonicalLibraryDiagnosticSink {
+    fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) = Unit
+
     fun artworkCompared(images: ArtworkPairDigest, result: ArtworkMatch, elapsedMs: Long) = Unit
 
     fun artworkUnavailable(source: GameSource, reason: ArtworkEvidenceFailure) = Unit
@@ -113,6 +117,50 @@ internal object NoOpCanonicalLibraryDiagnosticSink : CanonicalLibraryDiagnosticS
 
 @Singleton
 class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibraryDiagnosticSink {
+    override fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) = record(
+        area = DiagnosticArea.MATCHING,
+        name = DiagnosticEventName.GAME_RESOLUTION,
+        outcome = when (observation.stage) {
+            ArtworkTraceStage.QUEUED, ArtworkTraceStage.NATIVE_VALIDATING, ArtworkTraceStage.ORIGINAL_FETCHING -> DiagnosticOutcome.STARTED
+            ArtworkTraceStage.INELIGIBLE, ArtworkTraceStage.INVALID_MEMBERSHIP, ArtworkTraceStage.CANCELLED -> DiagnosticOutcome.SKIPPED
+            ArtworkTraceStage.NATIVE_UNAVAILABLE, ArtworkTraceStage.STALE_NATIVE_EVIDENCE,
+            ArtworkTraceStage.NO_ADMITTED_ORIGINAL, ArtworkTraceStage.ORIGINAL_UNAVAILABLE, ArtworkTraceStage.NATIVE_MATCHER_UNAVAILABLE -> DiagnosticOutcome.UNAVAILABLE
+            ArtworkTraceStage.FAILED -> DiagnosticOutcome.FAILED
+            ArtworkTraceStage.CACHE_HIT -> DiagnosticOutcome.CACHE_HIT
+            ArtworkTraceStage.COMPARED -> if (observation.matchResult == ArtworkTraceMatchResult.REJECTED)
+                DiagnosticOutcome.SKIPPED else DiagnosticOutcome.SUCCEEDED
+            else -> DiagnosticOutcome.SUCCEEDED
+        },
+        attributes = buildMap {
+            put(DiagnosticAttribute.OPERATION, "ARTWORK_TRACE")
+            put(DiagnosticAttribute.PUBLIC_TITLE, game.publicTitle)
+            put(DiagnosticAttribute.SOURCE, game.source.name)
+            put(DiagnosticAttribute.CORRELATION_ID, game.correlationId)
+            if (observation.stage != ArtworkTraceStage.FAMILY_PUBLISHED) {
+                put(DiagnosticAttribute.STAGE, observation.stage.name)
+                put(DiagnosticAttribute.REASON, observation.stage.name)
+            }
+            if (observation.stage in setOf(ArtworkTraceStage.NATIVE_UNAVAILABLE, ArtworkTraceStage.STALE_NATIVE_EVIDENCE,
+                    ArtworkTraceStage.ORIGINAL_UNAVAILABLE,
+                    ArtworkTraceStage.NATIVE_MATCHER_UNAVAILABLE, ArtworkTraceStage.FAILED)) {
+                put(DiagnosticAttribute.ERROR_TYPE, observation.stage.name)
+            }
+            observation.reference?.let {
+                put(DiagnosticAttribute.PUBLIC_URL, it.url)
+                put(DiagnosticAttribute.PUBLIC_URL_ID, ArtworkFeatures.hash(it.url.toByteArray()).take(16))
+                put(DiagnosticAttribute.PROVIDER, it.source.name)
+            }
+            observation.content?.let { put(DiagnosticAttribute.PUBLIC_CONTENT_ID, it) }
+            observation.pair?.let { put(DiagnosticAttribute.CONFIDENCE, "pair=${it.value}") }
+            observation.matchResult?.let { put(DiagnosticAttribute.MATCH_RESULT, it.name) }
+            observation.referenceCount?.let { put(DiagnosticAttribute.REFERENCE_COUNT, it.boundedCount()) }
+            observation.candidateCount?.let { put(DiagnosticAttribute.CANDIDATE_COUNT, it.boundedCount()) }
+            observation.comparisonCount?.let { put(DiagnosticAttribute.COMPARISON_COUNT, it.boundedCount()) }
+            observation.acceptedCount?.let { put(DiagnosticAttribute.ACCEPTED_COUNT, it.boundedCount()) }
+            observation.familySize?.let { put(DiagnosticAttribute.FAMILY_SIZE, it.boundedCount()) }
+        },
+    )
+
     override fun artworkCompared(images: ArtworkPairDigest, result: ArtworkMatch, elapsedMs: Long) = record(
         area = DiagnosticArea.MATCHING,
         name = DiagnosticEventName.MATCH_RESOLUTION,

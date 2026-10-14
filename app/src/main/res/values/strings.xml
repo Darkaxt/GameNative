@@ -175,6 +175,7 @@
     <string name="steam_resolution_coverage">%1$d / %2$d matched</string>
     <string name="steam_resolution_review_unmatched">%1$d need review · %2$d unmatched</string>
     <string name="steam_resolution_progress">%1$d / %2$d checked · %3$d failed</string>
+    <string name="steam_resolution_deferred">Steam is rate limited. %1$d entries deferred; retries respect the server cooldown.</string>
     <string name="steam_resolution_review_matches">Review matches</string>
     <string name="steam_resolution_retry">Retry resolution</string>
     <string name="steam_resolution_key_required">Steam Web API key required</string>

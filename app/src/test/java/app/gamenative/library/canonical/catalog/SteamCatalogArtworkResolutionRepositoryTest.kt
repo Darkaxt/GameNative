@@ -4,7 +4,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import app.gamenative.data.GOGGame
 import app.gamenative.data.GameSource
-import app.gamenative.data.LibraryItem
 import app.gamenative.data.canonical.AccountScope
 import app.gamenative.data.canonical.CanonicalAppType
 import app.gamenative.data.canonical.CanonicalGameEntity
@@ -22,10 +21,6 @@ import app.gamenative.library.canonical.CURRENT_RESOLVER_VERSION
 import app.gamenative.library.canonical.RoomCanonicalMutationRepository
 import app.gamenative.library.canonical.artwork.ArtworkFingerprint
 import app.gamenative.library.canonical.artwork.ArtworkFingerprintSource
-import app.gamenative.library.canonical.artwork.ArtworkFixtures
-import app.gamenative.library.canonical.runtime.OwnedCopyRuntime
-import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
-import app.gamenative.library.canonical.source.SourceOwnedCopyReference
 import app.gamenative.library.metadata.CanonicalGameMetadata
 import app.gamenative.library.metadata.EpicCmsCatalogSource
 import app.gamenative.library.metadata.GamePlatform
@@ -37,7 +32,6 @@ import app.gamenative.library.metadata.PcGamingWikiCurrentAvailabilitySource
 import app.gamenative.library.metadata.SteamCatalogRecord
 import app.gamenative.library.metadata.SteamCatalogRecordSource
 import java.io.IOException
-import java.lang.reflect.InvocationTargetException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +61,7 @@ class SteamCatalogArtworkResolutionRepositoryTest {
     private val key = OwnedCopyKey(AccountScope("2".repeat(64)), GameSource.GOG, "42")
     private val canonicalId = UUID(0, 1).toString()
     private val title = "Fixture Game"
+    private val aliasTitle = "Playdead's Fixture Game"
     private val originalUrl = "https://images.gog.com/fixture-cover.jpg"
     private val images = Images()
     private val recordRequests = mutableListOf<Int>()
@@ -75,6 +70,9 @@ class SteamCatalogArtworkResolutionRepositoryTest {
     private var missingRecord: Int? = null
     private var developer = ""
     private var recordsDeveloper: String? = null
+    private var recordsAppType = CanonicalAppType.GAME
+    private var recordsYear: Int? = null
+    private var recordAction: suspend () -> Unit = {}
     private var lookupCount = 0
     private val events = mutableListOf<SteamResolutionDiagnosticEvent>()
 
@@ -89,7 +87,7 @@ class SteamCatalogArtworkResolutionRepositoryTest {
     fun tearDown() = db.close()
 
     @Test
-    fun completeIndependentArtworkAcceptsExactCatalogWithoutCreatingSteamOwnership() = runRepositoryTest {
+    fun exactCatalogDefaultsAcceptWithoutArtworkOrCreatingSteamOwnership() = runRepositoryTest {
         seed()
         val original = requireNotNull(db.gogGameDao().getById("42"))
         val repository = repository()
@@ -102,43 +100,156 @@ class SteamCatalogArtworkResolutionRepositoryTest {
         assertEquals(original, db.gogGameDao().getById("42"))
         assertFalse(matches.any { it.source == GameSource.STEAM })
         assertEquals(SteamCatalogResolutionStatus.AUTO_ACCEPTED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
-        assertEquals(listOf(42), images.candidates)
-        assertTrue(lookupCount >= 2)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun unavailableArtworkRetainsReviewWithoutFailingTheCatalogAttempt() = runRepositoryTest {
+    fun normalizedSameFullEditionNameAcceptsWithoutPartyYearOrArtwork() = runRepositoryTest {
+        hits = listOf(SteamStoreSearchHit(42, "FIXTURE GAME - Definitive Edition", null))
+        seed(sourceTitle = "${title}™ – Definitive Edition")
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(0, progress.needsReview)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun unavailableArtworkDoesNotBlockSameFullNameAutomaticDefault() = runRepositoryTest {
         seed()
         images.originalAction = { throw IOException("synthetic unavailable image") }
         val progress = repository().scanAutomatically()
-        assertEquals(1, progress.needsReview)
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(0, progress.needsReview)
         assertEquals(0, progress.failed)
-        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
-        assertEquals(SteamCatalogResolutionStatus.REVIEW_REQUIRED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.AUTO_ACCEPTED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun incompleteSearchNeverUsesMatchingArtworkToAutoAccept() = runRepositoryTest {
+    fun incompleteSearchStillAcceptsValidatedSameFullNameDefault() = runRepositoryTest {
         seed()
+        complete = false
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(0, progress.needsReview)
+        assertEquals(0, progress.failed)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.AUTO_ACCEPTED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun missingOtherDetailsStillAcceptsValidatedSameFullNameDefault() = runRepositoryTest {
+        seed()
+        hits += SteamStoreSearchHit(43, title, null)
+        missingRecord = 43
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(0, progress.needsReview)
+        assertEquals(0, progress.failed)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.AUTO_ACCEPTED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun incompleteNonexactSearchNeverUsesArtworkToAutoAccept() = runRepositoryTest {
+        seed(sourceTitle = aliasTitle)
         complete = false
         val progress = repository().scanAutomatically()
         assertEquals(1, progress.needsReview)
         assertEquals(0, progress.autoAccepted)
-        assertTrue(images.originals.isEmpty())
-        assertEquals(0, lookupCount)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
         assertEquals(SteamCatalogResolutionStatus.FAILED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun missingDetailsNeverUsesPartialArtworkToAutoAccept() = runRepositoryTest {
-        seed()
+    fun missingNonexactDetailsNeverUsesPartialArtworkToAutoAccept() = runRepositoryTest {
+        seed(sourceTitle = aliasTitle)
         hits += SteamStoreSearchHit(43, title, null)
         missingRecord = 43
         val progress = repository().scanAutomatically()
         assertEquals(1, progress.needsReview)
         assertEquals(0, progress.autoAccepted)
-        assertTrue(images.originals.isEmpty())
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
         assertEquals(SteamCatalogResolutionStatus.FAILED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun nonexactAliasWithoutCorroborationRemainsReviewAndDoesNotFetchArtwork() = runRepositoryTest {
+        seed(sourceTitle = aliasTitle)
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.needsReview)
+        assertEquals(0, progress.autoAccepted)
+        assertEquals(0, progress.failed)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(42, currentMatch().candidateSteamAppId)
+        assertEquals(SteamCatalogResolutionStatus.REVIEW_REQUIRED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun corroboratedNonexactAliasStillUsesLegacyPolicyWithoutArtwork() = runRepositoryTest {
+        developer = "Fixture Studio"
+        recordsDeveloper = developer
+        recordsYear = 2020
+        seed(sourceTitle = aliasTitle, sourceYear = 2020)
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun editionMismatchCannotUseOriginalArtworkToBecomeSameNameDefault() = runRepositoryTest {
+        seed(sourceTitle = "$title Definitive Edition")
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.needsReview)
+        assertEquals(0, progress.autoAccepted)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.REVIEW_REQUIRED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun conflictingPartyOnNonexactAliasStillRequiresReviewDespiteCloseYear() = runRepositoryTest {
+        developer = "Fixture Studio"
+        recordsDeveloper = "Other Studio"
+        recordsYear = 2020
+        seed(sourceTitle = aliasTitle, sourceYear = 2020)
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.needsReview)
+        assertEquals(0, progress.autoAccepted)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.REVIEW_REQUIRED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun unknownSourceTypeCannotUseSameTitleAutomaticGameDefault() = runRepositoryTest {
+        seed(sourceAppType = CanonicalAppType.UNKNOWN)
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.needsReview)
+        assertEquals(0, progress.autoAccepted)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.REVIEW_REQUIRED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun sameTitleDlcCannotUseOriginalArtworkOrBecomeAutomaticGameDefault() = runRepositoryTest {
+        recordsAppType = CanonicalAppType.DLC
+        seed()
+        val progress = repository().scanAutomatically()
+        assertEquals(1, progress.unmatched)
+        assertEquals(0, progress.autoAccepted)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.UNMATCHED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
     }
 
     @Test
@@ -147,91 +258,96 @@ class SteamCatalogArtworkResolutionRepositoryTest {
         db.storeMatchDao().upsert(currentMatch().copy(decisionSource = MatchDecisionSource.USER))
         assertEquals(0, repository().scanAutomatically().total)
         assertTrue(recordRequests.isEmpty())
-        assertTrue(images.originals.isEmpty())
+        assertNoArtworkWork()
     }
 
+    // Exact defaults bypass image I/O, so exercise publication races at the remaining provider boundary.
     @Test
-    fun userDecisionDuringImageFetchingCannotBeOverwritten() = runRepositoryTest {
+    fun userDecisionDuringDetailsFetchingCannotBeOverwrittenBySameNameDefault() = runRepositoryTest {
         seed()
-        images.candidateAction = {
+        recordAction = {
             db.storeMatchDao().upsert(currentMatch().copy(decisionSource = MatchDecisionSource.USER, matchedAt = 200))
-            fingerprint()
         }
         val progress = repository().scanAutomatically()
-        assertEquals(1, images.candidates.size)
+        assertEquals(listOf(42), recordRequests)
         assertEquals(0, progress.autoAccepted)
         assertEquals(MatchDecisionSource.USER, currentMatch().decisionSource)
         assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
         assertNull(db.steamCatalogResolutionDao().getAttempt(canonicalId))
+        assertNoArtworkWork()
     }
 
     @Test
-    fun retiringSourceDuringImageFetchingPreventsPublication() = runRepositoryTest {
+    fun retiringSourceDuringDetailsFetchingPreventsSameNamePublication() = runRepositoryTest {
         seed()
-        images.candidateAction = {
-            db.storeMatchDao().upsert(currentMatch().copy(isPresent = false))
-            fingerprint()
-        }
+        recordAction = { db.storeMatchDao().upsert(currentMatch().copy(isPresent = false)) }
         val progress = repository().scanAutomatically()
-        assertEquals(1, images.candidates.size)
+        assertEquals(listOf(42), recordRequests)
         assertEquals(0, progress.autoAccepted)
         assertEquals(0, progress.needsReview)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
         assertNull(db.steamCatalogResolutionDao().getAttempt(canonicalId))
+        assertNoArtworkWork()
     }
 
     @Test
-    fun changedOriginalUrlDuringFetchingInvalidatesEvenBaselineCorroboration() = runRepositoryTest {
+    fun changedOriginalUrlDuringDetailsFetchingInvalidatesSameNamePublication() = runRepositoryTest {
         developer = "Fixture Studio"
         recordsDeveloper = developer
         seed()
-        images.candidateAction = {
-            changeOriginalUrl("https://images.gog.com/changed-cover.jpg")
-            fingerprint()
-        }
+        recordAction = { changeOriginalUrl("https://images.gog.com/changed-cover.jpg") }
         val progress = repository().scanAutomatically()
-        assertEquals(1, images.candidates.size)
+        assertEquals(listOf(42), recordRequests)
         assertEquals(0, progress.autoAccepted)
         assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
         assertNull(db.steamCatalogResolutionDao().getAttempt(canonicalId))
+        assertNoArtworkWork()
     }
 
     @Test
-    fun newlyAvailableOriginalArtworkReconsidersCompletedReviewAfterRepositoryRecreation() = runRepositoryTest {
-        seed(url = "")
+    fun newlyAvailableOriginalArtworkReconsidersNonexactReviewWithoutAcceptingIt() = runRepositoryTest {
+        seed(url = "", sourceTitle = aliasTitle)
         assertEquals(1, repository().scanAutomatically().needsReview)
         val before = requireNotNull(db.steamCatalogResolutionDao().getAttempt(canonicalId)).evidenceHash
+        val requests = recordRequests.size
         changeOriginalUrl(originalUrl)
-        assertEquals(1, repository().scanAutomatically().autoAccepted)
+        assertEquals(1, repository().scanAutomatically().needsReview)
         val after = requireNotNull(db.steamCatalogResolutionDao().getAttempt(canonicalId)).evidenceHash
+        assertTrue(recordRequests.size > requests)
         assertNotEquals(before, after)
         assertFalse(after.contains(originalUrl))
         assertFalse(after.contains(key.accountScope.value))
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun changedPublicArtworkUrlReconsidersCompletedUnavailableReview() = runRepositoryTest {
-        seed()
-        images.originalAction = { null }
+    fun changedPublicArtworkUrlReconsidersCompletedNonexactReview() = runRepositoryTest {
+        seed(sourceTitle = aliasTitle)
         assertEquals(1, repository().scanAutomatically().needsReview)
+        val before = requireNotNull(db.steamCatalogResolutionDao().getAttempt(canonicalId)).evidenceHash
+        val requests = recordRequests.size
         changeOriginalUrl("https://images.gog.com/new-cover.jpg")
-        images.originalAction = { fingerprint() }
         val progress = repository().scanAutomatically()
-        assertEquals("progress=$progress; virtualMs=${testScheduler.currentTime}; lookups=$lookupCount; " +
-            "originals=${images.originals.size}; candidates=${images.candidates.size}; events=$events", 1, progress.autoAccepted)
+        assertEquals(1, progress.needsReview)
+        assertEquals(0, progress.autoAccepted)
+        assertTrue(recordRequests.size > requests)
+        assertNotEquals(before, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.evidenceHash)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun unchangedCompletedReviewDoesNotRefetchOnRepositoryRecreation() = runRepositoryTest {
-        seed()
-        images.originalAction = { null }
+    fun unchangedCompletedNonexactReviewDoesNotRefetchOnRepositoryRecreation() = runRepositoryTest {
+        seed(sourceTitle = aliasTitle)
         assertEquals(1, repository().scanAutomatically().needsReview)
         val requests = recordRequests.size
         assertEquals(0, repository().scanAutomatically().total)
         assertEquals(requests, recordRequests.size)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun versionSixReviewGetsOneAutomaticArtworkAwareReconsideration() = runRepositoryTest {
+    fun versionSixReviewGetsOneSameNameDefaultReconsideration() = runRepositoryTest {
         seed()
         db.storeMatchDao().upsert(currentMatch().copy(
             matchMethod = MatchMethod.STEAM_CATALOG, confidence = MatchConfidence.REVIEW_REQUIRED,
@@ -240,60 +356,79 @@ class SteamCatalogArtworkResolutionRepositoryTest {
         assertEquals(1, repository().scanAutomatically().autoAccepted)
         assertTrue(CURRENT_RESOLVER_VERSION > 6)
         assertEquals(0, repository().scanAutomatically().total)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun cancellationDuringArtworkLeavesPendingLeaseAndStopsScanning() = runRepositoryTest {
+    fun cancellationDuringDetailsLeavesPendingLeaseAndStopsScanning() = runRepositoryTest {
         seed()
-        images.originalAction = { throw CancellationException("synthetic owning cancellation") }
+        recordAction = { throw CancellationException("synthetic owning cancellation") }
         val repository = repository()
         val failure = runCatching { repository.scanAutomatically() }.exceptionOrNull()
         assertTrue("Owning cancellation must propagate", failure is CancellationException)
         assertFalse(repository.isScanning.value)
         assertEquals(SteamCatalogResolutionStatus.PENDING, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
         assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun sharedArtworkWithoutSourceYearCannotResolveTwoExactCatalogGames() = runRepositoryTest {
+    fun sameNameGamesWithoutSourceYearOrPopularityUseStableAppIdWithoutArtwork() = runRepositoryTest {
         seed()
-        hits += SteamStoreSearchHit(43, title, null)
+        hits = listOf(SteamStoreSearchHit(43, title, null), SteamStoreSearchHit(42, title, null))
         val progress = repository().scanAutomatically()
-        assertEquals(1, progress.needsReview)
-        assertEquals(0, progress.autoAccepted)
-        assertEquals(listOf(42, 43), images.candidates)
-        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(0, progress.needsReview)
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun appDetailsBudgetValidatesAtMostFiveOfTenSearchHits() = runRepositoryTest {
+    fun appDetailsBudgetValidatesAtMostFiveOfTenSameNameHitsAndAcceptsDefault() = runRepositoryTest {
         seed()
         hits = (42..51).map { SteamStoreSearchHit(it, title, null) }
         val repository = repository()
-        repository.scanAutomatically()
+        val progress = repository.scanAutomatically()
         assertEquals(5, recordRequests.size)
         assertEquals(5, repository.candidatesFor(key).size)
-        assertEquals(0, lookupCount)
-        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
-        assertEquals(SteamCatalogResolutionStatus.FAILED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.AUTO_ACCEPTED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun truncatedHitAcquisitionCannotAutoAcceptAnOtherwiseCorroboratedCandidate() = runRepositoryTest {
+    fun truncatedAcquisitionStillAcceptsValidatedSameFullNameDefault() = runRepositoryTest {
         developer = "Fixture Studio"
         recordsDeveloper = developer
         seed()
         hits = (42..56).map { SteamStoreSearchHit(it, if (it == 42) title else "Other Game $it", null) }
         val progress = repository().scanAutomatically()
         assertEquals(5, recordRequests.size)
-        assertEquals(0, progress.autoAccepted)
-        assertEquals(1, progress.needsReview)
-        assertEquals(0, lookupCount)
-        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(0, progress.needsReview)
+        assertEquals(42, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertNoArtworkWork()
     }
 
     @Test
-    fun lateExactSearchHitRemainsReviewableWithinTheValidationBudget() = runRepositoryTest {
+    fun truncatedNonexactAcquisitionCannotAutoAcceptOtherwiseCorroboratedAlias() = runRepositoryTest {
+        developer = "Fixture Studio"
+        recordsDeveloper = developer
+        recordsYear = 2020
+        seed(sourceTitle = aliasTitle, sourceYear = 2020)
+        hits = (42..56).map { SteamStoreSearchHit(it, if (it == 42) title else "Other Game $it", null) }
+        val progress = repository().scanAutomatically()
+        assertEquals(5, recordRequests.size)
+        assertEquals(0, progress.autoAccepted)
+        assertEquals(1, progress.needsReview)
+        assertNull(db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertEquals(SteamCatalogResolutionStatus.FAILED, db.steamCatalogResolutionDao().getAttempt(canonicalId)?.status)
+        assertNoArtworkWork()
+    }
+
+    @Test
+    fun lateExactSearchHitRemainsWithinValidationBudgetAndAcceptsDefault() = runRepositoryTest {
         seed()
         hits = (42..56).map { SteamStoreSearchHit(it, if (it == 56) title else "Other Game $it", null) }
         val repository = repository()
@@ -301,9 +436,16 @@ class SteamCatalogArtworkResolutionRepositoryTest {
         assertEquals(5, recordRequests.size)
         assertTrue("Title ordering must preserve a credible late hit", 56 in recordRequests)
         assertEquals(56, repository.candidatesFor(key).first().steamAppId)
-        assertEquals(1, progress.needsReview)
-        assertEquals(0, progress.autoAccepted)
+        assertEquals(0, progress.needsReview)
+        assertEquals(1, progress.autoAccepted)
+        assertEquals(56, db.canonicalGameDao().get(canonicalId)?.steamAppId)
+        assertNoArtworkWork()
+    }
+
+    private fun assertNoArtworkWork() {
         assertEquals(0, lookupCount)
+        assertTrue(images.originals.isEmpty())
+        assertTrue(images.candidates.isEmpty())
     }
 
     private fun runRepositoryTest(body: suspend TestScope.() -> Unit) = runTest {
@@ -311,10 +453,16 @@ class SteamCatalogArtworkResolutionRepositoryTest {
         withContext(Dispatchers.Default) { body(this@runTest) }
     }
 
-    private suspend fun seed(url: String = originalUrl) {
+    private suspend fun seed(
+        url: String = originalUrl,
+        sourceTitle: String = title,
+        sourceYear: Int? = null,
+        sourceAppType: CanonicalAppType = CanonicalAppType.GAME,
+    ) {
+        val titleKey = SteamCatalogNormalization.titleKey(sourceTitle)
         db.canonicalGameDao().insert(CanonicalGameEntity(
-            canonicalId = canonicalId, steamAppId = null, displayName = title, matchTitleKey = "fixture game",
-            primaryMetadataSource = GameSource.GOG, appType = CanonicalAppType.GAME, releaseYear = null,
+            canonicalId = canonicalId, steamAppId = null, displayName = sourceTitle, matchTitleKey = titleKey,
+            primaryMetadataSource = GameSource.GOG, appType = sourceAppType, releaseYear = sourceYear,
             developerKey = developer, classificationState = ClassificationState.UNCLASSIFIED,
             steamReviewCount = null, createdAt = 1, updatedAt = 1,
         ))
@@ -323,11 +471,11 @@ class SteamCatalogArtworkResolutionRepositoryTest {
             canonicalId = canonicalId, candidateSteamAppId = null, matchMethod = MatchMethod.UNMATCHED,
             confidence = MatchConfidence.UNMATCHED, decisionSource = MatchDecisionSource.AUTOMATIC,
             resolverVersion = CURRENT_RESOLVER_VERSION, matchedAt = 100, isPresent = true,
-            evidenceDisplayName = title, evidenceTitleKey = "fixture game", evidenceDeveloperKey = developer,
-            evidenceReleaseYear = null, evidenceAppType = CanonicalAppType.GAME,
+            evidenceDisplayName = sourceTitle, evidenceTitleKey = titleKey, evidenceDeveloperKey = developer,
+            evidenceReleaseYear = sourceYear, evidenceAppType = sourceAppType,
         ))
         db.gogGameDao().insert(GOGGame(
-            id = "42", title = title, developer = developer, verticalCoverUrl = url,
+            id = "42", title = sourceTitle, developer = developer, verticalCoverUrl = url,
             isInstalled = true, installPath = "fixture-install", installSize = 1234,
         ))
     }
@@ -346,51 +494,31 @@ class SteamCatalogArtworkResolutionRepositoryTest {
         val records = SteamCatalogRecordSource { appId, _ ->
             assertFalse("Catalog providers must not run in Room transactions", db.inTransaction())
             recordRequests += appId
+            recordAction()
             if (appId == missingRecord) null else record(appId, hits.first { it.steamAppId == appId }.title)
         }
         val producer = SteamCatalogArtworkCorroborator(images) { requested ->
             assertFalse("Runtime/image lookup must stay outside Room transactions", db.inTransaction())
             assertEquals(key, requested)
             lookupCount++
-            if (!currentMatch().isPresent) OwnedCopyRuntimeResult.Hidden else {
-                val game = requireNotNull(db.gogGameDao().getById("42"))
-                OwnedCopyRuntimeResult.Available(runtime(game))
-            }
+            throw AssertionError("Unexpected catalog artwork runtime lookup")
         }
-        val arguments = arrayOf<Any>(
-            db.storeMatchDao(), search, records, SteamCatalogCandidatePolicy(), writer,
-            PcGamingWikiCurrentAvailabilitySource { PcGamingWikiCurrentAvailabilityResult.NotConfirmed },
-            EpicCmsCatalogSource { throw AssertionError("GOG must not fetch Epic fallback") }, writer,
-            MetadataLocaleProvider { MetadataLocale("en-US", "US") }, SteamCatalogResolutionDiagnosticSink { events += it },
-            SteamAcceptedIdentityEnrichmentSink { _, _, _ -> SteamAcceptedIdentityEnrichmentResult.Enriched },
-            MetadataClock { 1_000L }, db, SteamCatalogResumeScheduler {},
+        return SteamCatalogResolutionRepository(
+            storeMatchDao = db.storeMatchDao(), searchSource = search, recordSource = records,
+            candidatePolicy = SteamCatalogCandidatePolicy(), decisionWriter = writer,
+            pcGamingWikiSource = PcGamingWikiCurrentAvailabilitySource { PcGamingWikiCurrentAvailabilityResult.NotConfirmed },
+            epicCatalogSource = EpicCmsCatalogSource { throw AssertionError("GOG must not fetch Epic fallback") },
+            epicFallbackWriter = writer,
+            localeProvider = MetadataLocaleProvider { MetadataLocale("en-US", "US") },
+            diagnostics = SteamCatalogResolutionDiagnosticSink { events += it },
+            acceptedIdentityEnrichment = SteamAcceptedIdentityEnrichmentSink { _, _, _ -> SteamAcceptedIdentityEnrichmentResult.Enriched },
+            clock = MetadataClock { 1_000L }, db = db, resumeScheduler = SteamCatalogResumeScheduler {},
+            artworkCorroborator = producer,
         )
-        val constructors = SteamCatalogResolutionRepository::class.java.constructors
-        val integrated = constructors.singleOrNull {
-            it.parameterCount == 15 && it.parameterTypes.last() == SteamCatalogArtworkCorroborator::class.java
-        }
-        val constructor = integrated ?: constructors.single { it.parameterCount == 14 }
-        return try {
-            constructor.newInstance(*(if (integrated != null) arguments + producer else arguments)) as SteamCatalogResolutionRepository
-        } catch (failure: InvocationTargetException) {
-            throw failure.targetException
-        }
     }
 
-    private fun runtime(game: GOGGame) = OwnedCopyRuntime(
-        key = key, reference = SourceOwnedCopyReference.Gog(key, "42"),
-        libraryItem = LibraryItem(appId = "GOG_42", name = game.title, gameSource = GameSource.GOG),
-        nativeTitle = game.title, aliases = emptySet(), developerKey = game.developer, releaseYear = null,
-        appType = CanonicalAppType.GAME, genreKeys = emptySet(), tagIds = emptySet(), featureKeys = emptySet(),
-        iconUrl = "", capsuleImageUrl = "", headerImageUrl = "", heroImageUrl = "", gridHeroImageScale = 1f,
-        installPath = game.installPath, installedSizeBytes = game.installSize, branchOrVersion = null,
-        isInstalled = game.isInstalled, isDownloading = false, hasPartialDownload = false, updateAvailable = false,
-        isShared = false, lastPlayedEpochMs = null, playtimeMinutes = null, capabilities = emptySet(),
-        originalArtworkUrl = game.verticalCoverUrl.takeIf(String::isNotBlank),
-    )
-
     private fun record(appId: Int, name: String) = SteamCatalogRecord(
-        steamAppId = appId, appType = CanonicalAppType.GAME, releaseYear = null,
+        steamAppId = appId, appType = recordsAppType, releaseYear = recordsYear,
         metadata = CanonicalGameMetadata(
             title = name, shortDescription = null, about = null, headerImageUrl = null,
             screenshots = emptyList(), movies = emptyList(), developers = listOfNotNull(recordsDeveloper),
@@ -400,13 +528,10 @@ class SteamCatalogArtworkResolutionRepositoryTest {
         ),
     )
 
-    private fun fingerprint() = requireNotNull(ArtworkFingerprint.fromArgb(192, 288, ArtworkFixtures.cover(192, 288)))
-
     private inner class Images : ArtworkFingerprintSource {
         val originals = mutableListOf<String>()
         val candidates = mutableListOf<Int>()
-        var originalAction: suspend () -> ArtworkFingerprint? = { fingerprint() }
-        var candidateAction: suspend () -> ArtworkFingerprint? = { fingerprint() }
+        var originalAction: suspend () -> ArtworkFingerprint? = { throw AssertionError("Unexpected original image fetch") }
 
         override suspend fun original(source: GameSource, raw: String, steamAppId: Int?): ArtworkFingerprint? {
             assertFalse("Image work must stay outside Room transactions", db.inTransaction())
@@ -419,7 +544,7 @@ class SteamCatalogArtworkResolutionRepositoryTest {
             assertFalse("Image work must stay outside Room transactions", db.inTransaction())
             assertEquals("https://shared.akamai.steamstatic.com/steam/apps/$steamAppId/library_600x900.jpg", raw)
             candidates += steamAppId
-            return candidateAction()
+            throw AssertionError("Unexpected candidate image fetch")
         }
     }
 }
