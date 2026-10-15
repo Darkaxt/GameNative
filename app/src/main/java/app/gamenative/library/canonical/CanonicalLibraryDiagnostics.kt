@@ -37,6 +37,8 @@ class ArtworkPairDigest private constructor(val value: String) {
 interface CanonicalLibraryDiagnosticSink {
     fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) = Unit
 
+    fun artworkScheduler(snapshot: ArtworkSchedulerSnapshot) = Unit
+
     fun artworkCompared(images: ArtworkPairDigest, result: ArtworkMatch, elapsedMs: Long) = Unit
 
     fun artworkUnavailable(source: GameSource, reason: ArtworkEvidenceFailure) = Unit
@@ -117,21 +119,34 @@ internal object NoOpCanonicalLibraryDiagnosticSink : CanonicalLibraryDiagnosticS
 
 @Singleton
 class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibraryDiagnosticSink {
-    override fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) = record(
-        area = DiagnosticArea.MATCHING,
-        name = DiagnosticEventName.GAME_RESOLUTION,
-        outcome = when (observation.stage) {
-            ArtworkTraceStage.QUEUED, ArtworkTraceStage.NATIVE_VALIDATING, ArtworkTraceStage.ORIGINAL_FETCHING -> DiagnosticOutcome.STARTED
-            ArtworkTraceStage.INELIGIBLE, ArtworkTraceStage.INVALID_MEMBERSHIP, ArtworkTraceStage.CANCELLED -> DiagnosticOutcome.SKIPPED
-            ArtworkTraceStage.NATIVE_UNAVAILABLE, ArtworkTraceStage.STALE_NATIVE_EVIDENCE,
-            ArtworkTraceStage.NO_ADMITTED_ORIGINAL, ArtworkTraceStage.ORIGINAL_UNAVAILABLE, ArtworkTraceStage.NATIVE_MATCHER_UNAVAILABLE -> DiagnosticOutcome.UNAVAILABLE
-            ArtworkTraceStage.FAILED -> DiagnosticOutcome.FAILED
-            ArtworkTraceStage.CACHE_HIT, ArtworkTraceStage.ORIGINAL_CACHE_BOUND -> DiagnosticOutcome.CACHE_HIT
-            ArtworkTraceStage.COMPARED -> if (observation.matchResult == ArtworkTraceMatchResult.REJECTED)
-                DiagnosticOutcome.SKIPPED else DiagnosticOutcome.SUCCEEDED
-            else -> DiagnosticOutcome.SUCCEEDED
-        },
-        attributes = buildMap {
+    override fun artworkScheduler(snapshot: ArtworkSchedulerSnapshot) {
+        if (!FeatureDiagnostics.focusedCaptureState().enabled) return
+        FeatureDiagnostics.recordArtworkScheduler(snapshot.elapsedMs.boundedDuration(), mapOf(
+            DiagnosticAttribute.OPERATION to "ARTWORK_SCHEDULER",
+            DiagnosticAttribute.CORRELATION_ID to snapshot.generation.toString(),
+            DiagnosticAttribute.STAGE to snapshot.stage.name,
+            DiagnosticAttribute.PREPARATION_PHASE to snapshot.preparation.name,
+            DiagnosticAttribute.PRODUCER_PHASE to snapshot.producer.name,
+            DiagnosticAttribute.CONSUMER_PHASE to snapshot.consumer.name,
+            DiagnosticAttribute.PRODUCER_RANK to snapshot.producerRank.boundedCount(),
+            DiagnosticAttribute.CONSUMER_RANK to snapshot.consumerRank.boundedCount(),
+            DiagnosticAttribute.REFERENCE_COUNT to snapshot.total.boundedCount(),
+            DiagnosticAttribute.ENQUEUED_COUNT to snapshot.enqueued.boundedCount(),
+            DiagnosticAttribute.DEQUEUED_COUNT to snapshot.dequeued.boundedCount(),
+            DiagnosticAttribute.COMPLETED_COUNT to snapshot.completed.boundedCount(),
+            DiagnosticAttribute.QUEUE_SIZE to snapshot.queueSize.boundedCount(),
+            DiagnosticAttribute.QUEUE_HIGH_WATER to snapshot.queueHighWater.boundedCount(),
+            DiagnosticAttribute.INDEX_PROGRESS to snapshot.indexProgress.boundedCount(),
+            DiagnosticAttribute.INDEX_TOTAL to snapshot.indexTotal.boundedCount(),
+            DiagnosticAttribute.PREPARATION_ELAPSED_MS to snapshot.preparationElapsedMs.boundedDuration().toString(),
+            DiagnosticAttribute.PRODUCER_ELAPSED_MS to snapshot.producerElapsedMs.boundedDuration().toString(),
+            DiagnosticAttribute.CONSUMER_ELAPSED_MS to snapshot.consumerElapsedMs.boundedDuration().toString(),
+        ))
+    }
+
+    override fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) {
+        if (observation.stage == ArtworkTraceStage.ORIGINAL_SCHEDULED && !FeatureDiagnostics.focusedCaptureState().enabled) return
+        val attributes = buildMap {
             put(DiagnosticAttribute.OPERATION, "ARTWORK_TRACE")
             put(DiagnosticAttribute.PUBLIC_TITLE, game.publicTitle)
             put(DiagnosticAttribute.SOURCE, game.source.name)
@@ -143,8 +158,7 @@ class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibrar
                 put(DiagnosticAttribute.REASON, observation.stage.name)
             }
             if (observation.stage in setOf(ArtworkTraceStage.NATIVE_UNAVAILABLE, ArtworkTraceStage.STALE_NATIVE_EVIDENCE,
-                    ArtworkTraceStage.ORIGINAL_UNAVAILABLE,
-                    ArtworkTraceStage.NATIVE_MATCHER_UNAVAILABLE, ArtworkTraceStage.FAILED)) {
+                    ArtworkTraceStage.ORIGINAL_UNAVAILABLE, ArtworkTraceStage.NATIVE_MATCHER_UNAVAILABLE, ArtworkTraceStage.FAILED)) {
                 put(DiagnosticAttribute.ERROR_TYPE, observation.stage.name)
             }
             observation.reference?.let {
@@ -161,8 +175,30 @@ class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibrar
             observation.acceptedCount?.let { put(DiagnosticAttribute.ACCEPTED_COUNT, it.boundedCount()) }
             observation.familySize?.let { put(DiagnosticAttribute.FAMILY_SIZE, it.boundedCount()) }
             observation.groupingReason?.let { put(DiagnosticAttribute.GROUPING_REASON, it.name) }
-        },
-    )
+            observation.acquisitionRank?.let { put(DiagnosticAttribute.ACQUISITION_RANK, it.boundedCount()) }
+            observation.scheduleCacheState?.let { put(DiagnosticAttribute.CACHE_STATE, it.name) }
+        }
+        if (observation.stage == ArtworkTraceStage.ORIGINAL_SCHEDULED) {
+            FeatureDiagnostics.recordArtworkSchedule(attributes)
+            return
+        }
+        record(
+            area = DiagnosticArea.MATCHING,
+            name = DiagnosticEventName.GAME_RESOLUTION,
+            outcome = when (observation.stage) {
+                ArtworkTraceStage.QUEUED, ArtworkTraceStage.NATIVE_VALIDATING, ArtworkTraceStage.ORIGINAL_FETCHING -> DiagnosticOutcome.STARTED
+                ArtworkTraceStage.INELIGIBLE, ArtworkTraceStage.INVALID_MEMBERSHIP, ArtworkTraceStage.CANCELLED -> DiagnosticOutcome.SKIPPED
+                ArtworkTraceStage.NATIVE_UNAVAILABLE, ArtworkTraceStage.STALE_NATIVE_EVIDENCE,
+                ArtworkTraceStage.NO_ADMITTED_ORIGINAL, ArtworkTraceStage.ORIGINAL_UNAVAILABLE, ArtworkTraceStage.NATIVE_MATCHER_UNAVAILABLE -> DiagnosticOutcome.UNAVAILABLE
+                ArtworkTraceStage.FAILED -> DiagnosticOutcome.FAILED
+                ArtworkTraceStage.CACHE_HIT, ArtworkTraceStage.ORIGINAL_CACHE_BOUND -> DiagnosticOutcome.CACHE_HIT
+                ArtworkTraceStage.COMPARED -> if (observation.matchResult == ArtworkTraceMatchResult.REJECTED)
+                    DiagnosticOutcome.SKIPPED else DiagnosticOutcome.SUCCEEDED
+                else -> DiagnosticOutcome.SUCCEEDED
+            },
+            attributes = attributes,
+        )
+    }
 
     override fun artworkCompared(images: ArtworkPairDigest, result: ArtworkMatch, elapsedMs: Long) = record(
         area = DiagnosticArea.MATCHING,

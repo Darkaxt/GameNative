@@ -5,6 +5,8 @@ import app.gamenative.data.canonical.CanonicalGameId
 import app.gamenative.data.canonical.EpicStableSourceId
 import app.gamenative.data.canonical.MatchDecisionSource
 import app.gamenative.data.canonical.OwnedCopyKey
+import app.gamenative.library.canonical.ArtworkSchedulerPhase as SchedulerPhase
+import app.gamenative.library.canonical.ArtworkSchedulerStage as SchedulerStage
 import app.gamenative.library.canonical.artwork.ArtworkFeatureCache
 import app.gamenative.library.canonical.artwork.ArtworkFeatureMatcher
 import app.gamenative.library.canonical.artwork.ArtworkFeatureSource
@@ -249,10 +251,11 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
 
     private data class Original(val canonicalId: CanonicalGameId, val summary: OwnedCopySummary,
         val runtime: OwnedCopyRuntime, val reference: ArtworkReference)
-    private data class AcquiredOriginal(val reference: ArtworkReference, val image: ArtworkFeatures?, val stale: Boolean)
+    private data class AcquiredOriginal(val reference: ArtworkReference, val image: ArtworkFeatures?, val stale: Boolean, val rank: Int)
 
     private fun relationships(cards: List<CanonicalLibraryCard>, acquisitions: PendingAcquisition? = null): Flow<Evidence> = flow {
         val generation = traceGeneration.incrementAndGet()
+        val scheduler = ArtworkSchedulerTrace(generation, diagnostics)
         val trace = ArtworkTraceSession(cards.mapIndexedNotNull { index, card ->
             ArtworkGameTrace.from(card, generation, index)?.let { card.canonicalId to it }
         }.toMap())
@@ -276,8 +279,10 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                 emit(Evidence(emptySet(), trace))
                 eligible.forEach { state(it.canonicalId, ArtworkTraceObservation.of(ArtworkTraceStage.FINISHED,
                     comparisonCount = 0, acceptedCount = 0)) }
+                scheduler.end(SchedulerStage.FINISHED)
                 return@flow
             }
+            scheduler.preparing(SchedulerPhase.NATIVE_VALIDATION)
             val originals = arrayListOf<Original>()
             for (card in eligible) {
                 stage(card.canonicalId, ArtworkTraceStage.NATIVE_VALIDATING)
@@ -352,6 +357,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                     if (index % 32 == 31) yield()
                 }
             }
+            scheduler.preparing(SchedulerPhase.LOAD_BINDINGS)
             withContext(Dispatchers.IO) {
                 byReference.keys.forEach { ref -> cache.contentHash(ref)?.let { contentByReference[ref] = it } }
             }
@@ -368,8 +374,10 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                     }
                 }
             }
+            scheduler.preparing(SchedulerPhase.LOAD_COMPARISONS)
             val savedComparisons = withContext(Dispatchers.IO) { cache.comparisonResults() }
             val warm = savedComparisons.filterValues { it }.keys
+            scheduler.preparing(SchedulerPhase.WARM_REVALIDATION)
             revalidate(warm.flatMap { listOf(it.first, it.second) }.toSet())
             byReference.forEach { (reference, sources) -> contentByReference[reference]?.let { content ->
                 sources.map { it.canonicalId }.distinct().forEach { id ->
@@ -379,6 +387,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
             } }
             comparisonOwners = contentOwners()
             // Prime evidence without draining historical rejection diagnostics before missing originals can run.
+            scheduler.preparing(SchedulerPhase.PRIME_COMPARISONS)
             for ((pair, accepted) in savedComparisons) {
                 currentCoroutineContext().ensureActive()
                 rememberComparison(pair.first, pair.second, if (accepted) ArtworkTraceMatchResult.ACCEPTED else ArtworkTraceMatchResult.REJECTED)
@@ -388,19 +397,39 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
             val failed = acquisitions?.failedReferences().orEmpty()
             val acquisitionOrder = byReference.entries.sortedWith(compareBy(
                 { contentByReference.containsKey(it.key) }, { it.key in failed }))
+            scheduler.scheduled(acquisitionOrder.size)
+            acquisitionOrder.forEachIndexed { index, (reference, sources) ->
+                currentCoroutineContext().ensureActive()
+                val cacheState = when {
+                    contentByReference.containsKey(reference) && reference in failed -> ArtworkScheduleCacheState.WARM_COOLDOWN
+                    contentByReference.containsKey(reference) -> ArtworkScheduleCacheState.WARM
+                    reference in failed -> ArtworkScheduleCacheState.MISSING_COOLDOWN
+                    else -> ArtworkScheduleCacheState.MISSING
+                }
+                sources.map { it.canonicalId }.distinct().forEach { id ->
+                    state(id, ArtworkTraceObservation.of(ArtworkTraceStage.ORIGINAL_SCHEDULED, reference,
+                        referenceCount = acquisitionOrder.size, acquisitionRank = index + 1, scheduleCacheState = cacheState))
+                }
+            }
             val inputs = inputKey(cards).associateBy { it.canonicalId }
+            scheduler.preparing(SchedulerPhase.LOAD_FEATURE_HASHES)
             val indexedHashes = withContext(Dispatchers.IO) { cache.featureHashes() }
+            scheduler.preparing(SchedulerPhase.DONE)
             coroutineScope {
                 // Bound queued descriptors, not just cache-write failures: cache eviction cannot lose queued work.
                 val acquired = Channel<AcquiredOriginal>(64)
                 val fetching = launch {
                     try {
-                        for ((reference, sources) in acquisitionOrder) {
+                        for ((index, entry) in acquisitionOrder.withIndex()) {
+                            val (reference, sources) = entry
+                            val rank = index + 1
                             currentCoroutineContext().ensureActive()
+                            scheduler.producing(SchedulerPhase.ACQUIRE, rank)
                             sources.map { it.canonicalId }.distinct().forEach { stage(it, ArtworkTraceStage.ORIGINAL_FETCHING, reference) }
                             val owners = sources.map { inputs.getValue(it.canonicalId) }.toSet()
                             val image = if (acquisitions == null) original(reference) else acquisitions.original(reference, owners)
                             currentCoroutineContext().ensureActive()
+                            scheduler.producing(SchedulerPhase.NATIVE_REVALIDATION, rank)
                             val stale = sources.any { source ->
                                 currentCopy(source.summary.key, source.summary)?.let { sameEvidence(source.runtime, it) } != true
                             }
@@ -411,6 +440,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                 sources.map { it.canonicalId }.distinct().forEach { stage(it,
                                     if (stale) ArtworkTraceStage.STALE_NATIVE_EVIDENCE else ArtworkTraceStage.ORIGINAL_UNAVAILABLE, reference) }
                             } else {
+                                scheduler.producing(SchedulerPhase.CACHE_WRITE, rank)
                                 withContext(Dispatchers.IO) {
                                     if (cache.contentHash(reference) != usable.contentHash || cache.feature(usable.contentHash) == null)
                                         cache.put(reference, usable)
@@ -418,24 +448,33 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                 currentCoroutineContext().ensureActive()
                                 sources.map { it.canonicalId }.distinct().forEach { stage(it, ArtworkTraceStage.FEATURES_READY, reference, usable) }
                             }
-                            acquired.send(AcquiredOriginal(reference, usable, stale))
+                            scheduler.producing(SchedulerPhase.QUEUE_SEND, rank)
+                            acquired.send(AcquiredOriginal(reference, usable, stale, rank))
+                            scheduler.enqueued(rank)
                         }
+                        scheduler.producing(SchedulerPhase.DONE, acquisitionOrder.size)
                     } catch (error: Exception) {
                         acquired.close(error)
                         throw error
                     } finally { acquired.close() }
                 }
                 try {
+                    scheduler.consuming(SchedulerPhase.MATCHING_LOCK)
                     matching.withLock {
                         try {
+                            scheduler.consuming(SchedulerPhase.INDEX)
                             val index = ArtworkVisualIndex()
-                            for (hash in indexedHashes) {
+                            scheduler.indexed(0, indexedHashes.size)
+                            for ((position, hash) in indexedHashes.withIndex()) {
                                 currentCoroutineContext().ensureActive()
                                 withContext(Dispatchers.IO) { cache.feature(hash) }?.let { evidence ->
                                     withContext(Dispatchers.Default) { index.add(evidence) }
                                 }
+                                scheduler.indexed(position + 1, indexedHashes.size)
                             }
+                            scheduler.consuming(SchedulerPhase.RECEIVE)
                             for (result in acquired) {
+                                scheduler.received(result.rank)
                                 currentCoroutineContext().ensureActive()
                                 val reference = result.reference
                                 val sources = byReference.getValue(reference)
@@ -450,12 +489,19 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                         sources.map { it.canonicalId }.distinct().forEach { stage(it, ArtworkTraceStage.STALE_NATIVE_EVIDENCE, reference) }
                                     }
                                     contentByReference.remove(reference)
-                                    emit(Evidence(project(withContext(Dispatchers.IO) { cache.acceptedPairs() }), trace))
+                                    scheduler.consuming(SchedulerPhase.ACCEPTED_PAIRS)
+                                    val accepted = withContext(Dispatchers.IO) { cache.acceptedPairs() }
+                                    scheduler.consuming(SchedulerPhase.PUBLISH)
+                                    emit(Evidence(project(accepted), trace))
+                                    scheduler.completed()
+                                    scheduler.consuming(SchedulerPhase.RECEIVE)
                                     continue
                                 }
                                 contentByReference[reference] = image.contentHash
                                 comparisonOwners = contentOwners()
+                                scheduler.consuming(SchedulerPhase.REPLAY_COMPARISONS)
                                 replayComparisons(image.contentHash, acceptedOnly = true)
+                                scheduler.consuming(SchedulerPhase.SHORTLIST)
                                 val indexed = withContext(Dispatchers.IO) { cache.isIndexed(image.contentHash) }
                                 val pending = if (indexed) emptyList()
                                     else withContext(Dispatchers.Default) { index.candidates(image) }
@@ -465,6 +511,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                 var completed = true
                                 for (other in pending) {
                                     currentCoroutineContext().ensureActive()
+                                    scheduler.consuming(SchedulerPhase.SHORTLIST)
                                     val cached = withContext(Dispatchers.IO) { cache.comparison(image.contentHash, other) }
                                     val candidate = withContext(Dispatchers.IO) { cache.feature(other) }
                                     if (candidate == null) {
@@ -475,6 +522,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                         compared(image.contentHash, candidate.contentHash, cached, true)
                                         continue
                                     }
+                                    scheduler.consuming(SchedulerPhase.COMPARE)
                                     val match = compare(image, candidate)
                                     compared(image.contentHash, candidate.contentHash, match.accepted, false, match.completed)
                                     currentCoroutineContext().ensureActive()
@@ -487,6 +535,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                 val identicalOwners = byReference.filterKeys { contentByReference[it] == image.contentHash }
                                     .values.flatten().map { it.canonicalId }.distinct()
                                 if (identicalOwners.size > 1 && withContext(Dispatchers.IO) { cache.comparison(image.contentHash, image.contentHash) } == null) {
+                                    scheduler.consuming(SchedulerPhase.COMPARE)
                                     val match = compare(image, image)
                                     compared(image.contentHash, image.contentHash, match.accepted, false, match.completed)
                                     if (match.completed) withContext(Dispatchers.IO) { cache.putComparison(image.contentHash, image.contentHash, match.accepted) }
@@ -495,15 +544,23 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                         unavailable(reference.source, ArtworkEvidenceFailure.NATIVE_MATCHER_UNAVAILABLE)
                                     }
                                 }
+                                scheduler.consuming(SchedulerPhase.INDEX_WRITE)
                                 withContext(Dispatchers.Default) { index.add(image) }
                                 if (completed) withContext(Dispatchers.IO) { cache.markIndexed(image.contentHash) }
+                                scheduler.consuming(SchedulerPhase.CACHE_FLUSH)
                                 withContext(Dispatchers.IO) { cache.flush() }
+                                scheduler.consuming(SchedulerPhase.ACCEPTED_PAIRS)
                                 val accepted = withContext(Dispatchers.IO) { cache.acceptedPairs() }
+                                scheduler.consuming(SchedulerPhase.NATIVE_REVALIDATION)
                                 revalidate(accepted.filter { it.first == image.contentHash || it.second == image.contentHash }
                                     .flatMap { listOf(it.first, it.second) }.toSet())
+                                scheduler.consuming(SchedulerPhase.PUBLISH)
                                 emit(Evidence(project(accepted), trace))
+                                scheduler.completed()
+                                scheduler.consuming(SchedulerPhase.RECEIVE)
                                 yield()
                             }
+                            scheduler.consuming(SchedulerPhase.DONE)
                         } finally { withContext(NonCancellable + Dispatchers.IO) { cache.flush() } }
                     }
                 } finally {
@@ -512,14 +569,18 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                 }
             }
             // Preserve cached rejection explanations and late owner attribution after acquisition/publication progress.
+            scheduler.preparing(SchedulerPhase.REPLAY_COMPARISONS)
             comparisonOwners = contentOwners()
             for (content in comparisonOwners.keys) replayComparisons(content)
             eligible.forEach { state(it.canonicalId, ArtworkTraceObservation.of(ArtworkTraceStage.FINISHED,
                 comparisonCount = comparisons[it.canonicalId].orEmpty().size, acceptedCount = acceptances[it.canonicalId].orEmpty().size)) }
+            scheduler.end(SchedulerStage.FINISHED)
         } catch (error: kotlinx.coroutines.CancellationException) {
+            scheduler.end(SchedulerStage.CANCELLED)
             eligible.forEach { stage(it.canonicalId, ArtworkTraceStage.CANCELLED) }
             throw error
         } catch (error: Exception) {
+            scheduler.end(SchedulerStage.FAILED)
             eligible.forEach { stage(it.canonicalId, ArtworkTraceStage.FAILED) }
             throw error
         }

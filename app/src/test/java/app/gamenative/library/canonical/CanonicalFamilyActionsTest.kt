@@ -80,6 +80,9 @@ class CanonicalFamilyActionsTest {
 
     @Before
     fun setUp() {
+        // Prepare real fixture data before the action deadline, including cold host JNI/graphics startup.
+        ArtworkFeatureFixtures.artwork()
+        ArtworkFeatureFixtures.artwork("dredge-epic.jpg")
         db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), PluviaDatabase::class.java)
             .allowMainThreadQueries().build()
         preferences = PreferredCopyRepository(db)

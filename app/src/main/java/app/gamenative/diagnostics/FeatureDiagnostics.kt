@@ -91,6 +91,43 @@ object FeatureDiagnostics {
         }
     }
 
+    // Shared scheduler progress must not fan out into the standard log or per-game retained state.
+    internal fun recordArtworkScheduler(durationMs: Long, attributes: Map<DiagnosticAttribute, String>) {
+        val capture = focusedCapture ?: return
+        val state = capture.state()
+        if (!state.enabled || state.full) return
+        val outcome = when (attributes[DiagnosticAttribute.STAGE]) {
+            "FINISHED" -> DiagnosticOutcome.SUCCEEDED
+            "CANCELLED" -> DiagnosticOutcome.SKIPPED
+            "FAILED" -> DiagnosticOutcome.FAILED
+            else -> DiagnosticOutcome.STARTED
+        }
+        capture.recordScheduler(DiagnosticEvent(
+            timestampEpochMs = System.currentTimeMillis(),
+            sessionId = sessionId,
+            area = DiagnosticArea.MATCHING,
+            name = DiagnosticEventName.GAME_RESOLUTION,
+            outcome = outcome,
+            durationMs = durationMs,
+            attributes = DiagnosticRedactor.sanitize(attributes),
+        ))
+    }
+
+    // Per-original schedules use the ordinary focused title filter, but never the standard disk log.
+    internal fun recordArtworkSchedule(attributes: Map<DiagnosticAttribute, String>) {
+        val capture = focusedCapture ?: return
+        val state = capture.state()
+        if (!state.enabled || state.full) return
+        capture.record(DiagnosticEvent(
+            timestampEpochMs = System.currentTimeMillis(),
+            sessionId = sessionId,
+            area = DiagnosticArea.MATCHING,
+            name = DiagnosticEventName.GAME_RESOLUTION,
+            outcome = DiagnosticOutcome.STARTED,
+            attributes = DiagnosticRedactor.sanitize(attributes),
+        ))
+    }
+
     @Synchronized
     private fun retainGameState(event: DiagnosticEvent) {
         val operation = event.attributes[DiagnosticAttribute.OPERATION.wireName]
