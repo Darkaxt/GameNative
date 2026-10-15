@@ -272,7 +272,7 @@ jobs:
 
             ## RC21 diagnostic checkpoint
 
-            - Integrates current official GameNative updates through `222a48c1`, preserving the fork's canonical library and native store-copy actions.
+            - Integrates current official GameNative updates through `e9d7f9ae6`, preserving the fork's canonical library and native store-copy actions.
             - Focused artwork capture now records each selected original's real acquisition rank and missing/warm cache classification before fetching.
             - Bounded, identity-free shared scheduler snapshots expose preparation, acquisition, queue, index and consumer progress even when a later selected original has not started. Latest observed snapshots are retained on export/stop with an explicit age.
             - This is a causal-logging checkpoint, not a claimed DREDGE matching fix. Scheduling, exact full-title grouping, manual overrides, read-only **Explain aggregation**, and ORB-v1 thresholds are unchanged; production artwork/restart and fresh automatic resolver acceptance remain live checks.
