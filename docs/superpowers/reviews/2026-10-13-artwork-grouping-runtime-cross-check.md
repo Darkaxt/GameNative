@@ -1,5 +1,7 @@
 # Artwork-first canonical grouping runtime cross-check
 
+**Latest delivery reconciliation — 2026-10-15:** Signed46/RC20 source `7e1279f45ea7f5c649c6b135a03b00c23dc423f7` is published through successful workflow38752020157; independent verification matched all four APKs, immutable source/tag, published checksums, persistent signer and unchanged OpenCV payloads. Host results remain501 passes/one explicit Windows capability skip per flavor. Production DREDGE acceptance is **not verified**: after fresh four-peer coordination, exact Samsung readiness returned device-not-found before any upgrade or interaction; reservations released. ART7/R14 and production/restart/fresh non-review resolver checks remain blocked by connection. See the qualification plan's RC20 delivery section; older checkpoint authority statements below describe their historical scope, not a new pause or a revocation of the user's later iterative authority.
+
 Status: HOST_VERIFIED_AND_PUBLISHED. Integrated source checkpoint `9ac6f22611fbfe88b06e13be1a5b88034a1f5d41` was pushed to `fork/sync/official-2026-10-03` and independently matched by fresh `git ls-remote`. One focused cross-check for G1 / specification §9.4 ART1–ART7; no device or candidate authority. The broader parent remains IN_PROGRESS. Historical failed/live/POC evidence is unchanged.
 
 ## Production integration

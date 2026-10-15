@@ -1,5 +1,7 @@
 # Steam Resolution and Native Community Visible-Core Design Specification
 
+**Current execution reconciliation — 2026-10-15:** The current-upstream acquisition/lifecycle repair is host-qualified and delivered as signed46/`v1.3.0-rc20`, immutable source `7e1279f45ea7f5c649c6b135a03b00c23dc423f7`, successful workflow38752020157. All four published APK identities/checksums/persistent signers/native payloads independently verified; this is not live acceptance. Freshly coordinated Samsung readiness returned `device 'R52W60CFTRL' not found` before installation or interaction; all peer reservations released. ART7/R14 and EX3–EX4/FC-LIVE-1 remain blocked on connection, with unchanged production artwork/restart/two-original/fresh automatic non-review resolver criteria. Resume under the existing iterative Samsung authority with fresh ownership/readiness, not another routine permission question. Exact evidence and next action are in the qualification plan's RC20 delivery section; historical failed/limited records and the one explicit Windows capability skip remain intact.
+
 **Status:** Approved product direction; implementation awaits review of this focused specification
 **Date:** 2026-08-08
 **Base checkpoint:** `8311ec59` (`1.1.3-rc4`, schema 27)
