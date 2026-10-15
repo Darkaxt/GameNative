@@ -14,8 +14,8 @@ permissions:
 env:
   RELEASE_TAG: ${{ inputs.release_tag }}
   EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
-  EXPECTED_VERSION_CODE: "40"
-  EXPECTED_VERSION_NAME: "1.2.0-rc14"
+  EXPECTED_VERSION_CODE: "44"
+  EXPECTED_VERSION_NAME: "1.3.0-rc18"
 
 jobs:
   build:
@@ -147,7 +147,12 @@ jobs:
           yes | "$SDKMANAGER" --install "build-tools;34.0.0"
 
       - name: Build one release bundle
-        run: ./gradlew "${{ matrix.gradle_task }}" --no-daemon
+        # R8 exhausted 3 GiB in artifact-only run 37699848087; use its diagnosed Linux release profile.
+        run: >-
+          ./gradlew "${{ matrix.gradle_task }}" --no-daemon --no-configuration-cache
+          --max-workers=2 --no-parallel
+          '-Dorg.gradle.jvmargs=-Xmx5g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8'
+          -Pkotlin.compiler.execution.strategy=in-process
 
       - name: Extract and sign universal APK
         env:
@@ -265,12 +270,12 @@ jobs:
 
             All APKs use the persistent Darkaxt fork release certificate (SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`).
 
-            ## RC14 highlights
+            ## RC18 highlights
 
-            - Integrates official GameNative 1.2 updates through `549ed53f`, including Favorites, community configurations, radial controls, immersive XR support, and current storage/FFP fixes.
-            - Repairs native Steam Reviews and Discussions pagination, refresh recovery, cancellation cleanup, and stable item identity.
-            - Compacts owned-copy actions and improves detail-media fitting for tablet/controller use.
-            - Allows normal bounded caching and diagnostics for public catalog, community, PCGamingWiki, and candidate-media data while retaining credential, account, and local-path protection.
+            - Integrates official GameNative 1.3 updates through `95b9fcab`, retaining the fork's canonical library and native store-copy actions.
+            - Adds **Explain aggregation** to every game detail entry: read-only metadata, original-banner/cache, fresh ORB comparison, and exact full-title evidence with selectable text and manual export.
+            - Makes warm artwork bindings and actual title/artwork grouping support visible in focused diagnostics; cached Boolean verdicts are not presented as historical matching metrics.
+            - Preserves immediate exact full-title grouping and the existing ORB-v1 safeguards and tolerance. DREDGE live pipeline acceptance is evaluated separately; publication is not a device-test claim.
           files: |
             release-assets/gamenative-${{ env.RELEASE_TAG }}-compat.apk
             release-assets/gamenative-${{ env.RELEASE_TAG }}-compat-legacy-xr.apk

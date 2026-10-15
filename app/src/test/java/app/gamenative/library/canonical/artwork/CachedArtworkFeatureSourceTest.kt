@@ -76,6 +76,39 @@ class CachedArtworkFeatureSourceTest {
         } finally { diagnostics.clear(); field.set(null, previous) }
     }
 
+    @Test fun isolatedOriginalInspectionFetchesCurrentBytesWithoutProductionEvidenceOrCacheWrites() = test {
+        val diagnostics = app.gamenative.diagnostics.FeatureDiagnostics
+        val field = diagnostics::class.java.getDeclaredField("store").apply { isAccessible = true }
+        val previous = field.get(null)
+        try {
+            field.set(null, app.gamenative.diagnostics.DiagnosticLogStore(temporary.newFolder()))
+            diagnostics.clear()
+            val folder = temporary.newFolder()
+            val cache = ArtworkFeatureCache(folder, clock)
+            val source = source(cache)
+            val cached = requireNotNull(source.original(reference))
+            cache.flush()
+            val before = folder.listFiles().orEmpty().associate { it.name to it.readBytes().toList() }
+            val events = diagnostics.currentGameStates()
+            body = bytes("portal2.jpg")
+            val inspected = source.inspectOriginal(reference)
+            assertEquals(ArtworkAcquisitionStage.FEATURES_READY, inspected.stage)
+            assertEquals(200, inspected.httpStatus)
+            assertEquals(ArtworkFeatures.hash(body), inspected.features!!.contentHash)
+            assertEquals(cached.contentHash, cache.contentHash(reference))
+            assertEquals(events, diagnostics.currentGameStates())
+            assertEquals(before, folder.listFiles().orEmpty().associate { it.name to it.readBytes().toList() })
+            assertEquals(2, requests.get())
+            body = byteArrayOf(1, 2, 3)
+            val malformed = source.inspectOriginal(reference)
+            assertEquals(ArtworkAcquisitionStage.SIGNATURE_REJECTED, malformed.stage)
+            assertNull(malformed.features)
+            assertEquals(cached.contentHash, cache.contentHash(reference))
+            assertEquals(events, diagnostics.currentGameStates())
+            assertEquals(before, folder.listFiles().orEmpty().associate { it.name to it.readBytes().toList() })
+        } finally { diagnostics.clear(); field.set(null, previous) }
+    }
+
     @Test fun productionTransportDecoderFeaturesAndRestartReuseTheOriginalWithoutNetwork() = test {
         val folder = temporary.newFolder()
         val cache = ArtworkFeatureCache(folder, clock)

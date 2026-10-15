@@ -88,6 +88,10 @@ class ArtworkFeatureMatcherTest {
     private fun compare(left: ArtworkFeatures, right: ArtworkFeatures): Boolean {
         val started = System.nanoTime()
         val result = matcher.compare(left, right)
+        assertTrue("Native host matching must complete", result.completed)
+        assertTrue("A completed real matcher verdict must carry its owning reason",
+            result.reason != ArtworkMatchReason.REASON_NOT_RETAINED && result.reason != ArtworkMatchReason.NATIVE_UNAVAILABLE)
+        assertTrue("Acceptance reason agrees with the verdict", (result.reason == ArtworkMatchReason.ACCEPTED) == result.accepted)
         println("Artwork ORB ${left.count}/${right.count}: $result; ${(System.nanoTime() - started) / 1_000_000}ms")
         return result.accepted
     }

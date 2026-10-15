@@ -422,6 +422,7 @@ class SteamMatchViewModelTest {
         resolutionRepository = repository,
         steamWebApiKeyRepository = keyRepository,
         canonicalLibraryDao = object : CanonicalLibraryDao {
+            override suspend fun getPresentGames(): List<CanonicalLibraryAggregate> = aggregates.first()
             override fun observePresentGames(): Flow<List<CanonicalLibraryAggregate>> = aggregates
         },
         publicLibraryGate = CanonicalPublicLibraryGate { publicLibraryEnabled },

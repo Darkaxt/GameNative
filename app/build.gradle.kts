@@ -66,8 +66,8 @@ android {
         buildConfigField("boolean", "XR_BUILD", "false")
         buildConfigField("boolean", "MODERN_XR", "false")
 
-        versionCode = 43
-        versionName = "1.2.0-rc17"
+        versionCode = 44
+        versionName = "1.3.0-rc18"
 
         buildConfigField("boolean", "GOLD", "false")
         buildConfigField("String", "RELEASE_CHANNEL", "\"compatibility\"")

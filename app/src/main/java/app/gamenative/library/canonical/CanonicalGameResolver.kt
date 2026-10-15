@@ -567,30 +567,8 @@ class CanonicalGameResolver @Inject constructor(
     private fun isCompatibleExactMatch(
         evidence: Evidence,
         candidate: CanonicalGameEntity,
-    ): Boolean {
-        if (!areKnownTypesCompatible(evidence.appType, candidate.appType)) return false
-
-        val developerConflict =
-            evidence.developerKey.isNotEmpty() &&
-                candidate.developerKey.isNotEmpty() &&
-                evidence.developerKey != candidate.developerKey
-        if (developerConflict) return false
-
-        val yearConflict =
-            evidence.releaseYear != null &&
-                candidate.releaseYear != null &&
-                abs(evidence.releaseYear - candidate.releaseYear) > 1
-        if (yearConflict) return false
-
-        val equalKnownDeveloper =
-            evidence.developerKey.isNotEmpty() &&
-                evidence.developerKey == candidate.developerKey
-        val compatibleKnownYear =
-            evidence.releaseYear != null &&
-                candidate.releaseYear != null &&
-                abs(evidence.releaseYear - candidate.releaseYear) <= 1
-        return equalKnownDeveloper || compatibleKnownYear
-    }
+    ): Boolean = exactMetadataReason(evidence.titleKey, evidence.appType, evidence.developerKey,
+        evidence.releaseYear, candidate) == ExactMetadataReason.COMPATIBLE
 
     private fun areKnownTypesCompatible(
         sourceType: CanonicalAppType,
@@ -623,6 +601,26 @@ class CanonicalGameResolver @Inject constructor(
                 releaseYear = copy.releaseYear,
                 appType = copy.appType,
             )
+        }
+    }
+
+    internal enum class ExactMetadataReason {
+        COMPATIBLE, TITLE_DIFFERENT, TYPE_UNKNOWN, TYPE_DIFFERENT,
+        DEVELOPER_CONFLICT, YEAR_CONFLICT, CORROBORATION_MISSING,
+    }
+
+    companion object {
+        internal fun exactMetadataReason(titleKey: String, type: CanonicalAppType, developer: String,
+            year: Int?, candidate: CanonicalGameEntity): ExactMetadataReason = when {
+            titleKey.isBlank() || titleKey != candidate.matchTitleKey -> ExactMetadataReason.TITLE_DIFFERENT
+            type == CanonicalAppType.UNKNOWN || candidate.appType == CanonicalAppType.UNKNOWN -> ExactMetadataReason.TYPE_UNKNOWN
+            type != candidate.appType -> ExactMetadataReason.TYPE_DIFFERENT
+            developer.isNotEmpty() && candidate.developerKey.isNotEmpty() && developer != candidate.developerKey ->
+                ExactMetadataReason.DEVELOPER_CONFLICT
+            year != null && candidate.releaseYear != null && abs(year - candidate.releaseYear) > 1 -> ExactMetadataReason.YEAR_CONFLICT
+            (developer.isNotEmpty() && developer == candidate.developerKey) ||
+                (year != null && candidate.releaseYear != null && abs(year - candidate.releaseYear) <= 1) -> ExactMetadataReason.COMPATIBLE
+            else -> ExactMetadataReason.CORROBORATION_MISSING
         }
     }
 

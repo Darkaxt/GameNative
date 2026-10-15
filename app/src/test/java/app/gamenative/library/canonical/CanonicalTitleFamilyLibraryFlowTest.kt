@@ -123,6 +123,80 @@ class CanonicalTitleFamilyLibraryFlowTest {
         } }
     }
 
+    @Test fun actualOneShotAggregationReportPreservesRoomNativeStateAndDoesNotLaunchArtworkWorker() = runTest {
+        withContext(Dispatchers.Default) { withTimeout(10_000) {
+            seed()
+            val selected = repository().observeCards().first().single()
+            val before = db.canonicalLibraryDao().getPresentGames()
+            val cacheBefore = cacheDirectory.listFiles().orEmpty().associate { it.name to it.readBytes().toList() }
+            val report = repository().explainAggregation(selected)
+            assertTrue(report.contains("Admitted support: TITLE"))
+            assertTrue(report.contains("neither a matching known developer nor release years within one"))
+            assertTrue(report.contains("no admitted original references"))
+            assertTrue(report.contains("title alone is sufficient"))
+            assertFalse(report.contains(firstKey.accountScope.value))
+            assertFalse(report.contains(firstKey.toString()))
+            assertEquals(before, db.canonicalLibraryDao().getPresentGames())
+            assertEquals(cacheBefore, cacheDirectory.listFiles().orEmpty().associate { it.name to it.readBytes().toList() })
+            verify(exactly = 0) { matcher.compare(any(), any()) }
+        } }
+    }
+
+    @Test fun oneShotAggregationReportRejectsStaleAndDisappearedSelectionWithoutMutation() = runTest {
+        withContext(Dispatchers.Default) { withTimeout(10_000) {
+            seed()
+            val selected = repository().observeCards().first().single()
+            val match = db.storeMatchDao().get(secondKey.accountScope.value, secondKey.source, secondKey.stableSourceId)!!
+            db.storeMatchDao().upsert(match.copy(isPresent = false))
+            val before = db.canonicalLibraryDao().getPresentGames()
+            assertTrue(repository().explainAggregation(selected).contains("STALE"))
+            assertEquals(before, db.canonicalLibraryDao().getPresentGames())
+            verify(exactly = 0) { matcher.compare(any(), any()) }
+        } }
+    }
+
+    @Test fun existingSharedMetadataAssociationIsReportedWithoutInventingABannerOrTitleEdge() = runTest {
+        withContext(Dispatchers.Default) { withTimeout(10_000) {
+            seed()
+            val epic = db.storeMatchDao().get(secondKey.accountScope.value, secondKey.source, secondKey.stableSourceId)!!
+            db.storeMatchDao().upsert(epic.copy(canonicalId = id(1).value, candidateSteamAppId = 42))
+            val selected = repository().observeCards().first().single()
+            val before = db.canonicalLibraryDao().getPresentGames()
+            val report = repository().explainAggregation(selected)
+            assertTrue(report.contains("Admitted support: METADATA"))
+            assertTrue(report.contains("Metadata association: ACCEPTED/STORED"))
+            assertTrue(report.contains("SKIPPED — no separate admitted original pair"))
+            assertEquals(setOf(firstKey, secondKey), selected.copies.map { it.key }.toSet())
+            assertEquals(before, db.canonicalLibraryDao().getPresentGames())
+            verify(exactly = 0) { matcher.compare(any(), any()) }
+        } }
+    }
+
+    @Test fun malformedDuplicateSelectionReturnsFixedStaleReportWithoutMutation() = runTest {
+        seed()
+        val selected = repository().observeCards().first().single()
+        val before = db.canonicalLibraryDao().getPresentGames()
+        assertTrue(repository().explainAggregation(selected.copy(copies = selected.copies + selected.copies.first())).contains("STALE"))
+        assertEquals(before, db.canonicalLibraryDao().getPresentGames())
+        verify(exactly = 0) { matcher.compare(any(), any()) }
+    }
+
+    @Test fun reportHonorsCurrentRoomManualSeparationInsteadOfTitleFallback() = runTest {
+        withContext(Dispatchers.Default) { withTimeout(10_000) {
+            seed()
+            val match = db.storeMatchDao().get(secondKey.accountScope.value, secondKey.source, secondKey.stableSourceId)!!
+            db.storeMatchDao().upsert(match.copy(matchMethod = MatchMethod.MANUAL, confidence = MatchConfidence.REJECTED,
+                decisionSource = MatchDecisionSource.USER))
+            val selected = repository().observeCards().first().first { it.copies.any { copy -> copy.key == firstKey } }
+            val before = db.canonicalLibraryDao().getPresentGames()
+            val report = repository().explainAggregation(selected)
+            assertTrue(report.contains("Admitted support: NONE"))
+            assertTrue(report.contains("SKIPPED — manual/native/identity safeguard"))
+            assertTrue(report.contains("MANUAL/REJECTED, USER"))
+            assertEquals(before, db.canonicalLibraryDao().getPresentGames())
+        } }
+    }
+
     private fun repository(): CanonicalLibraryRepository {
         val owner = CanonicalFamilyArtworkCorroborator(originals, ArtworkFeatureCache(cacheDirectory, MetadataClock { 100L }),
             matcher, registry::resolve)

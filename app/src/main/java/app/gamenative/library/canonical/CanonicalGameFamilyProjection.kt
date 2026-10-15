@@ -20,17 +20,11 @@ object CanonicalGameFamilyProjection {
         cards: List<CanonicalLibraryCard>,
         verifiedArtwork: Set<Pair<CanonicalGameId, CanonicalGameId>>,
     ): List<CanonicalLibraryCard> {
-        if (cards.map { it.canonicalId }.distinct().size != cards.size ||
-            cards.flatMap { it.copies }.map { it.key }.let { it.distinct().size != it.size }
-        ) return cards
+        val relationships = relationships(cards, verifiedArtwork)
+        if (!relationships.valid) return cards
         val admitted = cards.filter(::eligible).associateBy { it.canonicalId }
-        val titleEdges = admitted.values.groupBy { SteamCatalogNormalization.titleKey(it.displayName) }
-            .filterKeys(String::isNotBlank).values.flatMap { members ->
-                val root = members.first().canonicalId
-                members.drop(1).map { root to it.canonicalId }
-            }
         val neighbours = hashMapOf<CanonicalGameId, MutableSet<CanonicalGameId>>()
-        for ((left, right) in verifiedArtwork + titleEdges) {
+        for ((left, right) in relationships.title + relationships.artwork) {
             if (left == right || left !in admitted || right !in admitted) continue
             neighbours.getOrPut(left, ::linkedSetOf).add(right)
             neighbours.getOrPut(right, ::linkedSetOf).add(left)
@@ -59,6 +53,43 @@ object CanonicalGameFamilyProjection {
         }
         return freezeList((cards.filterNot { it.canonicalId in grouped } + families)
             .sortedBy { it.key.stableComposeKey() })
+    }
+
+    internal data class Relationships(
+        val valid: Boolean,
+        val title: Set<Pair<CanonicalGameId, CanonicalGameId>>,
+        val artwork: Set<Pair<CanonicalGameId, CanonicalGameId>>,
+    ) {
+        fun reason(members: Set<CanonicalGameId>, copyCount: Int): FamilyGroupingReason {
+            val titleSupported = title.any { it.first in members && it.second in members }
+            val artworkSupported = artwork.any { it.first in members && it.second in members }
+            return when {
+                titleSupported && artworkSupported -> FamilyGroupingReason.TITLE_AND_ARTWORK
+                titleSupported -> FamilyGroupingReason.TITLE
+                artworkSupported -> FamilyGroupingReason.ARTWORK
+                members.size == 1 && copyCount > 1 -> FamilyGroupingReason.METADATA
+                else -> FamilyGroupingReason.NONE
+            }
+        }
+    }
+
+    internal fun relationships(
+        cards: List<CanonicalLibraryCard>,
+        verifiedArtwork: Set<Pair<CanonicalGameId, CanonicalGameId>>,
+    ): Relationships {
+        if (cards.map { it.canonicalId }.distinct().size != cards.size ||
+            cards.flatMap { it.copies }.map { it.key }.let { it.distinct().size != it.size }
+        ) return Relationships(false, emptySet(), emptySet())
+        val admitted = cards.filter(::eligible).associateBy { it.canonicalId }
+        val title = admitted.values.groupBy { SteamCatalogNormalization.titleKey(it.displayName) }
+            .filterKeys(String::isNotBlank).values.flatMap { members ->
+                val root = members.first().canonicalId
+                members.drop(1).map { root to it.canonicalId }
+            }.toSet()
+        val artwork = verifiedArtwork.filterTo(linkedSetOf()) { (left, right) ->
+            left != right && left in admitted && right in admitted
+        }
+        return Relationships(true, freezeSet(title), freezeSet(artwork))
     }
 
     internal fun familyTitleKey(value: String): String {

@@ -24,6 +24,7 @@
 
 - **One game, all owned copies:** confidently related Steam, Epic, GOG, Amazon and custom copies share one canonical card and search result while retaining their real source badges.
 - **Conservative Steam catalog matching:** normalized title and corroborating metadata drive automatic matches; ambiguous games stay unresolved until you use **Fix Steam match** with a title or AppID.
+- **Explain aggregation:** game entries offer a read-only, selectable report of stored metadata, original artwork, cached versus fresh comparisons and exact-title grouping, with manual text export. The report simulates the current snapshot; it does not invent historical failure causes or change grouping.
 - **Ownership-safe actions:** a Steam match improves presentation only. Install, play, update, uninstall and save operations still use the selected copy from the store where you actually own it.
 - **Steam-rich game pages:** trusted Steam identities can provide descriptions, media, requirements, achievements, DLC information and other catalog details for non-Steam-owned copies.
 - **Native Steam community browsing:** fork prereleases include read-only Reviews and Discussions with filters and bounded pagination; authenticated actions continue through Steam.

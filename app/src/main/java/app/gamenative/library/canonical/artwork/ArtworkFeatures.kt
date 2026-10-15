@@ -33,6 +33,13 @@ class ArtworkFeatures(
     }
 }
 
+enum class ArtworkMatchReason {
+    ACCEPTED, REASON_NOT_RETAINED, INVALID_FEATURES, TOO_FEW_MATCHES, AFFINE_UNAVAILABLE,
+    NONFINITE_TRANSFORM, TOO_FEW_INLIERS, LOW_INLIER_RATIO, LOW_COVERAGE, TOO_FEW_CELLS,
+    NARROW_HORIZONTAL_SPAN, NARROW_VERTICAL_SPAN, IMPLAUSIBLE_SCALE, EXCESSIVE_ROTATION,
+    EXCESSIVE_RESIDUAL, NATIVE_UNAVAILABLE,
+}
+
 data class ArtworkMatch(
     val accepted: Boolean,
     val matches: Int = 0,
@@ -42,6 +49,8 @@ data class ArtworkMatch(
     val occupiedCells: Int = 0,
     val meanError: Double = 0.0,
     val completed: Boolean = true,
+    val reason: ArtworkMatchReason = if (!completed) ArtworkMatchReason.NATIVE_UNAVAILABLE
+        else if (accepted) ArtworkMatchReason.ACCEPTED else ArtworkMatchReason.REASON_NOT_RETAINED,
 )
 
 interface ArtworkFeatureSource {

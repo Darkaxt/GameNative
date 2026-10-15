@@ -16,6 +16,31 @@ class CachedArtworkFeatureSource @Inject constructor(
 ) : ArtworkFeatureSource {
     private val acquisition = Mutex()
 
+    /** Isolated diagnostic replay: no put/invalidate/flush or production-acquisition events. */
+    internal suspend fun inspectOriginal(reference: ArtworkReference): ArtworkOriginalInspection = acquisition.withLock {
+        withContext(Dispatchers.IO) {
+            var stage = ArtworkAcquisitionStage.INVALID_RESPONSE
+            var status: Int? = null
+            val encoded = images.inspectOriginal(reference) { value, code -> stage = value; status = code }
+                ?: return@withContext ArtworkOriginalInspection(reference, null, stage, status)
+            if (!ArtworkImageDecoder.hasSupportedSignature(encoded.bytes, encoded.mimeType)) {
+                return@withContext ArtworkOriginalInspection(reference, null, ArtworkAcquisitionStage.SIGNATURE_REJECTED, status)
+            }
+            stage = ArtworkAcquisitionStage.EXTRACTOR_UNAVAILABLE
+            val feature = withContext(Dispatchers.Default) {
+                ensureActive()
+                val pixels = ArtworkImageDecoder.featurePixels(encoded.bytes, encoded.mimeType) ?: run {
+                    stage = ArtworkAcquisitionStage.DECODE_UNAVAILABLE
+                    return@withContext null
+                }
+                matcher.extract(pixels.width, pixels.height, pixels.argb, ArtworkFeatures.hash(encoded.bytes))
+            }
+            ensureActive()
+            ArtworkOriginalInspection(reference, feature,
+                if (feature == null) stage else ArtworkAcquisitionStage.FEATURES_READY, status)
+        }
+    }
+
     override suspend fun original(reference: ArtworkReference): ArtworkFeatures? = acquisition.withLock {
         withContext(Dispatchers.IO) {
             if (ArtworkUrlPolicy.Default.groupingUrl(reference.source, reference.url, reference.steamAppId) == null) return@withContext null

@@ -35,6 +35,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.withContext
+import app.gamenative.diagnostics.FeatureDiagnostics
 
 @Singleton
 class CanonicalLibraryRepository @Inject constructor(
@@ -54,6 +56,36 @@ class CanonicalLibraryRepository @Inject constructor(
         .flowOn(Dispatchers.Default)
         .buffer(0)
         .distinctUntilChanged()
+
+    /** Does not collect the live flow or invoke catalog/grouping mutations. */
+    suspend fun explainAggregation(selected: CanonicalLibraryCard): String = withContext(Dispatchers.Default) {
+        val aggregates = freezeAggregates(dao.getPresentGames())
+        val cards = assemble(aggregates)
+        val selectedKeys = selected.copies.mapTo(linkedSetOf()) { it.key }
+        val current = cards.flatMap { card -> card.copies.map { it.key to card } }.toMap()
+        if (selectedKeys.isEmpty() || selectedKeys.size != selected.copies.size ||
+            !CanonicalGameFamilyProjection.relationships(cards, emptySet()).valid || selectedKeys.any { key ->
+                val card = current[key]
+                card == null || (selected.copyCanonicalIds[key] ?: selected.canonicalId) != card.canonicalId ||
+                    selected.copies.single { it.key == key }.let { before ->
+                        val now = card.copies.single { it.key == key }
+                        before.matchMethod != now.matchMethod || before.confidence != now.confidence ||
+                            before.decisionSource != now.decisionSource || before.decisionRevision != now.decisionRevision ||
+                            before.originalArtwork != now.originalArtwork
+                    }
+            }) return@withContext AggregationDiagnosticReport.stale()
+        val simulation = familyArtwork.simulate(cards, selectedKeys)
+        val after = freezeAggregates(dao.getPresentGames())
+        fun fingerprint(values: List<CanonicalLibraryAggregate>) = values.associate { aggregate ->
+            val game = aggregate.game
+            game.canonicalId to listOf(game.steamAppId, game.displayName, game.matchTitleKey, game.appType,
+                game.developerKey, game.releaseYear, aggregate.matches.filter { it.isPresent }.toSet(),
+                aggregate.preferences.map { it.titleOverride to it.familyGroupingSuppressed }.toSet(),
+                aggregate.detailSnapshots.toSet())
+        }
+        if (simulation.stale || fingerprint(aggregates) != fingerprint(after)) return@withContext AggregationDiagnosticReport.stale()
+        AggregationDiagnosticReport.build(cards, selected, aggregates, simulation, FeatureDiagnostics.currentGameStates())
+    }
 
     private suspend fun assembleDiagnosed(
         aggregates: List<CanonicalLibraryAggregate>,

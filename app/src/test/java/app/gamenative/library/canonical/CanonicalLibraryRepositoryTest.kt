@@ -1366,6 +1366,8 @@ class CanonicalLibraryRepositoryTest {
     ) : CanonicalLibraryDao {
         val observeCalls = AtomicInteger()
 
+        override suspend fun getPresentGames(): List<CanonicalLibraryAggregate> = aggregates.first()
+
         override fun observePresentGames(): Flow<List<CanonicalLibraryAggregate>> {
             observeCalls.incrementAndGet()
             return aggregates

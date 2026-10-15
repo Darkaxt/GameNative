@@ -303,7 +303,7 @@ class CanonicalFamilyArtworkCorroboratorTest {
             entered.await()
             val latest = initial.map { card ->
                 val id = card.steamAppId!! + 500
-                card.copy(displayName = "Changed catalog", appType = CanonicalAppType.DLC, steamAppId = id,
+                card.copy(displayName = "Changed catalog $id", appType = CanonicalAppType.DLC, steamAppId = id,
                     memberSteamAppIds = mapOf(card.canonicalId to id), copies = card.copies.map {
                         it.copy(decisionCandidateSteamAppId = id, decisionRevision = 200, playtimeMinutes = 123)
                     })

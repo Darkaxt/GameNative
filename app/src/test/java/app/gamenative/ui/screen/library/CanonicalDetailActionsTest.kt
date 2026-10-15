@@ -95,6 +95,78 @@ class CanonicalDetailActionsTest {
     }
 
     @Test
+    fun explainAggregationCapturesActualCardAndDialogBackPreservesDetailTabWithoutSourceActions() {
+        val selected = card(emptySet(), installed = false)
+        val operations = mutableListOf<OwnedCopyOperation>()
+        val diagnostic = mutableStateOf<app.gamenative.ui.model.AggregationDiagnosticState>(
+            app.gamenative.ui.model.AggregationDiagnosticState.Closed)
+        val requests = mutableListOf<CanonicalLibraryCard>()
+        var clears = 0
+        screen(selected, operations, aggregationState = diagnostic, onClearDetail = { clears++ },
+            onExplainAggregation = {
+                requests += it
+                diagnostic.value = app.gamenative.ui.model.AggregationDiagnosticState.Content("Safe completed report")
+            }, onCloseAggregation = { diagnostic.value = app.gamenative.ui.model.AggregationDiagnosticState.Closed })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").performClick()
+        composeRule.onNodeWithTag("canonical-detail-explain-aggregation").performClick()
+        composeRule.onNodeWithText("Safe completed report").assertExists()
+        composeRule.onNodeWithTag("aggregation-close").performKeyInput { pressKey(Key.ButtonB) }
+        composeRule.onNodeWithTag("aggregation-dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("canonical-detail-tab:DETAILS").assertIsSelected()
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+        composeRule.runOnIdle {
+            assertEquals(listOf(selected), requests)
+            assertEquals(emptyList<OwnedCopyOperation>(), operations)
+            assertEquals(0, clears)
+        }
+    }
+
+    @Test
+    fun actualDetailDisposalClosesAggregationOwnerAndChangedCardRebindsSelection() {
+        val original = card(emptySet(), installed = false)
+        val live = mutableStateOf(listOf(original))
+        val mounted = mutableStateOf(true)
+        val bound = mutableListOf<CanonicalLibraryCard>()
+        var closes = 0
+        screen(original, mutableListOf(), liveCanonicalCards = live, mounted = mounted,
+            onBindAggregationSelection = { bound += it }, onCloseAggregation = { closes++ })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        val changed = original.copy(displayName = "Updated public title")
+        composeRule.runOnIdle { live.value = listOf(changed) }
+        composeRule.runOnIdle { assertEquals(listOf(original, changed), bound) }
+        composeRule.runOnIdle { mounted.value = false }
+        composeRule.runOnIdle { assertEquals(1, closes) }
+    }
+
+    @Test
+    fun actualDetailManualTextExportUsesSafAndCapturedCompletedReportTicket() {
+        val selected = card(emptySet(), installed = false)
+        val diagnostic = mutableStateOf<app.gamenative.ui.model.AggregationDiagnosticState>(
+            app.gamenative.ui.model.AggregationDiagnosticState.Content("Exact completed report"))
+        val request = app.gamenative.ui.model.AggregationExportRequest(1L, 1L, "Exact completed report")
+        val results = mutableListOf<Pair<app.gamenative.ui.model.AggregationExportRequest, android.net.Uri?>>()
+        lateinit var activity: android.app.Activity
+        screen(selected, mutableListOf(), aggregationState = diagnostic,
+            onHostContext = { context -> activity = generateSequence(context) { (it as? android.content.ContextWrapper)?.baseContext }
+                .filterIsInstance<android.app.Activity>().first() },
+            onPrepareAggregationExport = { request }, onCompleteAggregationExport = { ticket, uri -> results += ticket to uri })
+        composeRule.onNodeWithTag("canonical-card").performClick()
+        composeRule.onNodeWithTag("aggregation-export").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        val shadow = org.robolectric.Shadows.shadowOf(activity)
+        val launched = shadow.nextStartedActivityForResult
+        assertEquals(android.content.Intent.ACTION_CREATE_DOCUMENT, launched.intent.action)
+        assertEquals("text/plain", launched.intent.type)
+        assertEquals("aggregation-report.txt", launched.intent.getStringExtra(android.content.Intent.EXTRA_TITLE))
+        val destination = android.net.Uri.parse("content://documents/aggregation-report.txt")
+        composeRule.runOnIdle {
+            shadow.receiveResult(launched.intent, android.app.Activity.RESULT_OK, android.content.Intent().setData(destination))
+        }
+        composeRule.runOnIdle { assertEquals(listOf(request to destination), results) }
+        composeRule.onNodeWithTag("canonical-detail-screen").assertExists()
+    }
+
+    @Test
     fun installedOptionsReplaceSeparateCopiesAndSourceDetailsButtons() {
         val card = card(setOf(OwnedCopyOperation.OPEN_SOURCE_DETAILS))
         val operations = mutableListOf<OwnedCopyOperation>()
@@ -619,6 +691,13 @@ class CanonicalDetailActionsTest {
         onBindDlcCopies: (List<OwnedCopyKey>, Boolean) -> Unit = { _, _ -> },
         onSelectDlcCopy: (OwnedCopyKey) -> Unit = {},
         onRetryDlc: () -> Unit = {},
+        aggregationState: State<app.gamenative.ui.model.AggregationDiagnosticState>? = null,
+        onExplainAggregation: (CanonicalLibraryCard) -> Unit = {},
+        onBindAggregationSelection: (CanonicalLibraryCard) -> Unit = {},
+        onCloseAggregation: () -> Unit = {},
+        onPrepareAggregationExport: () -> app.gamenative.ui.model.AggregationExportRequest? = { null },
+        onCompleteAggregationExport: (app.gamenative.ui.model.AggregationExportRequest, android.net.Uri?) -> Unit = { _, _ -> },
+        onHostContext: (android.content.Context) -> Unit = {},
         onCloseThread: () -> Boolean = { false },
         expectedExplicitKey: OwnedCopyKey? = null,
         liveCanonicalCards: State<List<CanonicalLibraryCard>>? = null,
@@ -645,7 +724,11 @@ class CanonicalDetailActionsTest {
                 canonicalSnapshotRevision = if (currentCards == listOf(card)) 1L else 2L,
             )
             val inputModeManager = LocalInputModeManager.current
-            LaunchedEffect(Unit) { inputModeManager.requestInputMode(InputMode.Keyboard) }
+            val hostContext = androidx.compose.ui.platform.LocalContext.current
+            LaunchedEffect(Unit) {
+                inputModeManager.requestInputMode(InputMode.Keyboard)
+                onHostContext(hostContext)
+            }
             if (mounted?.value == false) return@setContent
             PluviaTheme {
                 LibraryScreenContent(
@@ -679,6 +762,12 @@ class CanonicalDetailActionsTest {
                     onBindDlcCopies = onBindDlcCopies,
                     onSelectDlcCopy = onSelectDlcCopy,
                     onRetryDlc = onRetryDlc,
+                    aggregationState = aggregationState?.value ?: app.gamenative.ui.model.AggregationDiagnosticState.Closed,
+                    onExplainAggregation = onExplainAggregation,
+                    onBindAggregationSelection = onBindAggregationSelection,
+                    onCloseAggregation = onCloseAggregation,
+                    onPrepareAggregationExport = onPrepareAggregationExport,
+                    onCompleteAggregationExport = onCompleteAggregationExport,
                     onClearCanonicalDetail = onClearDetail,
                     discussionState = liveDiscussionState?.value ?: discussionState,
                     reviewSummaryState = reviewSummaryState,

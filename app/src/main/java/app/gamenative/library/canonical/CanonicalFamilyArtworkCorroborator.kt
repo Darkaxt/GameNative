@@ -14,6 +14,8 @@ import app.gamenative.library.canonical.artwork.ArtworkReference
 import app.gamenative.library.canonical.artwork.ArtworkUrlPolicy
 import app.gamenative.library.canonical.artwork.ArtworkVisualIndex
 import app.gamenative.library.canonical.artwork.CachedArtworkFeatureSource
+import app.gamenative.library.canonical.artwork.ArtworkOriginalInspection
+import app.gamenative.library.canonical.artwork.ArtworkAcquisitionStage
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntime
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeRegistry
 import app.gamenative.library.canonical.runtime.OwnedCopyRuntimeResult
@@ -51,10 +53,13 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
     private val matcher: ArtworkFeatureMatcher,
     private val lookupRuntime: suspend (OwnedCopyKey) -> OwnedCopyRuntimeResult,
     private val diagnostics: CanonicalLibraryDiagnosticSink = NoOpCanonicalLibraryDiagnosticSink,
+    private val inspectOriginal: suspend (ArtworkReference) -> ArtworkOriginalInspection = { ref ->
+        ArtworkOriginalInspection(ref, cache.original(ref, freshOnly = false), ArtworkAcquisitionStage.DESCRIPTOR_CACHE_HIT)
+    },
 ) {
     @Inject constructor(features: CachedArtworkFeatureSource, cache: ArtworkFeatureCache,
         matcher: ArtworkFeatureMatcher, runtimes: OwnedCopyRuntimeRegistry, diagnostics: CanonicalLibraryDiagnosticSink) :
-        this(features, cache, matcher, runtimes::resolve, diagnostics)
+        this(features, cache, matcher, runtimes::resolve, diagnostics, features::inspectOriginal)
 
     private val matching = Mutex()
     private val traceGeneration = AtomicLong()
@@ -104,6 +109,12 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
         return projected
     }
 
+    internal suspend fun simulate(cards: List<CanonicalLibraryCard>, selectedKeys: Set<OwnedCopyKey>): AggregationArtworkSimulation =
+        AggregationArtworkSimulator.run(cards, selectedKeys, cache, matcher, validate = { summary ->
+            val runtime = currentCopy(summary.key, summary, diagnose = false)
+            runtime != null && (summary.originalArtwork.isEmpty() || summary.originalArtwork == artworkReferences(runtime))
+        }, inspect = inspectOriginal)
+
     private data class ArtworkInput(
         val canonicalId: CanonicalGameId,
         val key: CanonicalCardKey,
@@ -133,14 +144,17 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
         trace: ArtworkTraceSession? = null): List<CanonicalLibraryCard> {
         val started = System.nanoTime()
         val projected = CanonicalGameFamilyProjection.project(cards, evidence)
+        val relationships = CanonicalGameFamilyProjection.relationships(cards, evidence)
         diagnostics.recordSafely {
             cardsProjected(projected.size, cards.size, cards.sumOf { it.copies.size }, (System.nanoTime() - started) / 1_000_000)
             if (trace != null) for (family in projected) {
                 val members = family.memberSteamAppIds.keys.ifEmpty { setOf(family.canonicalId) }
+                val reason = relationships.reason(members, family.copies.size)
                 for (id in members) {
                     val game = trace.games[id] ?: continue
-                    if (trace.publicationChanged(id, members.size)) artworkState(game,
-                        ArtworkTraceObservation.of(ArtworkTraceStage.FAMILY_PUBLISHED, familySize = members.size))
+                    if (trace.publicationChanged(id, members.size, reason)) artworkState(game,
+                        ArtworkTraceObservation.of(ArtworkTraceStage.FAMILY_PUBLISHED, familySize = members.size,
+                            groupingReason = reason))
                 }
             }
         }
@@ -204,6 +218,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                 }
             }
             val byReference = originals.groupBy { it.reference }
+            val referencesByCanonical = originals.groupBy({ it.canonicalId }, { it.reference })
             eligible.forEach { card ->
                 val refs = originals.filter { it.canonicalId == card.canonicalId }.map { it.reference }.distinct()
                 stage(card.canonicalId, if (refs.isEmpty()) ArtworkTraceStage.NO_ADMITTED_ORIGINAL else ArtworkTraceStage.ORIGINALS_ADMITTED,
@@ -250,21 +265,8 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
             withContext(Dispatchers.IO) {
                 byReference.keys.forEach { ref -> cache.contentHash(ref)?.let { contentByReference[ref] = it } }
             }
-            fun project(accepted: Set<Pair<String, String>>): Set<Pair<CanonicalGameId, CanonicalGameId>> {
-                val owners = linkedMapOf<String, MutableSet<CanonicalGameId>>()
-                byReference.forEach { (reference, sources) -> contentByReference[reference]?.let { hash ->
-                    owners.getOrPut(hash, ::linkedSetOf).addAll(sources.map { it.canonicalId })
-                } }
-                val edges = linkedSetOf<Pair<CanonicalGameId, CanonicalGameId>>()
-                for ((left, right) in accepted) {
-                    val leftIds = owners[left].orEmpty()
-                    val rightIds = owners[right].orEmpty()
-                    if (leftIds.isEmpty() || rightIds.isEmpty()) continue
-                    val members = (leftIds + rightIds).sortedBy { it.value }
-                    members.drop(1).forEach { edges += members.first() to it }
-                }
-                return Collections.unmodifiableSet(edges)
-            }
+            fun project(accepted: Set<Pair<String, String>>): Set<Pair<CanonicalGameId, CanonicalGameId>> =
+                edgesFromContent(referencesByCanonical, contentByReference, accepted)
             suspend fun revalidate(hashes: Set<String>) {
                 for (original in originals) {
                     if (contentByReference[original.reference] !in hashes) continue
@@ -279,6 +281,12 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
             val savedComparisons = withContext(Dispatchers.IO) { cache.comparisonResults() }
             val warm = savedComparisons.filterValues { it }.keys
             revalidate(warm.flatMap { listOf(it.first, it.second) }.toSet())
+            byReference.forEach { (reference, sources) -> contentByReference[reference]?.let { content ->
+                sources.map { it.canonicalId }.distinct().forEach { id ->
+                    state(id, ArtworkTraceObservation.of(ArtworkTraceStage.ORIGINAL_CACHE_BOUND,
+                        reference = reference, contentHash = content))
+                }
+            } }
             comparisonOwners = contentOwners()
             for ((pair, accepted) in savedComparisons) compared(pair.first, pair.second, accepted, true)
             emit(Evidence(project(warm), trace))
@@ -374,15 +382,15 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
     }.distinctUntilChanged()
 
     private suspend fun currentCopy(key: OwnedCopyKey, summary: OwnedCopySummary,
-        reportFailure: (ArtworkEvidenceFailure) -> Unit = {}): OwnedCopyRuntime? {
+        diagnose: Boolean = true, reportFailure: (ArtworkEvidenceFailure) -> Unit = {}): OwnedCopyRuntime? {
         val copy = (withTimeoutOrNull(20_000) { lookupRuntime(key) } as? OwnedCopyRuntimeResult.Available)?.copy
         if (copy == null) {
-            unavailable(summary.source, ArtworkEvidenceFailure.NATIVE_COPY_UNAVAILABLE)
+            if (diagnose) unavailable(summary.source, ArtworkEvidenceFailure.NATIVE_COPY_UNAVAILABLE)
             reportFailure(ArtworkEvidenceFailure.NATIVE_COPY_UNAVAILABLE)
             return null
         }
         if (copy.key != key || copy.reference.key != key || summary.source != key.source || copy.isHidden || !exactNativeIdentity(copy)) {
-            unavailable(summary.source, ArtworkEvidenceFailure.STALE_NATIVE_COPY)
+            if (diagnose) unavailable(summary.source, ArtworkEvidenceFailure.STALE_NATIVE_COPY)
             reportFailure(ArtworkEvidenceFailure.STALE_NATIVE_COPY)
             return null
         }
@@ -423,8 +431,25 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
     companion object {
         private val STEAM_ASSET_ROOT = Regex("^/(?:steam/apps|store_item_assets/steam/apps)/([1-9][0-9]*)/")
 
+        internal fun edgesFromContent(references: Map<CanonicalGameId, List<ArtworkReference>>,
+            contentByReference: Map<ArtworkReference, String>, accepted: Set<Pair<String, String>>): Set<Pair<CanonicalGameId, CanonicalGameId>> {
+            val owners = linkedMapOf<String, MutableSet<CanonicalGameId>>()
+            references.forEach { (id, refs) -> refs.forEach { reference -> contentByReference[reference]?.let { hash ->
+                owners.getOrPut(hash, ::linkedSetOf).add(id)
+            } } }
+            val edges = linkedSetOf<Pair<CanonicalGameId, CanonicalGameId>>()
+            for ((left, right) in accepted) {
+                val leftIds = owners[left].orEmpty()
+                val rightIds = owners[right].orEmpty()
+                if (leftIds.isEmpty() || rightIds.isEmpty()) continue
+                val members = (leftIds + rightIds).sortedBy { it.value }
+                members.drop(1).forEach { edges += members.first() to it }
+            }
+            return Collections.unmodifiableSet(edges)
+        }
+
         /** Raw CDN images selected by the existing card generator; the asset ID grants no Steam ownership. */
-        private fun cardArtworkReferences(card: CanonicalLibraryCard): List<ArtworkReference> =
+        internal fun cardArtworkReferences(card: CanonicalLibraryCard): List<ArtworkReference> =
             listOf(card.headerImageUrl, card.heroImageUrl).filter { it.isNotBlank() && it.length <= 2_048 }.mapNotNull { raw ->
                 val url = raw.toHttpUrlOrNull() ?: return@mapNotNull null
                 val id = STEAM_ASSET_ROOT.find(url.encodedPath)?.groupValues?.get(1)?.toIntOrNull() ?: return@mapNotNull null

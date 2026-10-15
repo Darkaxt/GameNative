@@ -107,6 +107,7 @@ enum class DiagnosticAttribute(val wireName: String) {
     COMPARISON_COUNT("comparison_count"),
     ACCEPTED_COUNT("accepted_count"),
     FAMILY_SIZE("family_size"),
+    GROUPING_REASON("grouping_reason"),
     DEFERRED_COUNT("deferred_count"),
     RETRY_AFTER_MS("retry_after_ms"),
     REQUEST_INTERVAL_MS("request_interval_ms"),

@@ -158,6 +158,7 @@ internal fun CanonicalGameDetailScreen(
     onCloseReviewComments: () -> Boolean = { false },
     onRefreshReviewComments: () -> Unit = {},
     onLoadMoreReviewComments: () -> Unit = {},
+    onExplainAggregation: () -> Unit = {},
 ) {
     val metadata = when (state) {
         is GameDetailState.Content -> state.metadata
@@ -270,6 +271,7 @@ internal fun CanonicalGameDetailScreen(
                         onCopies = onCopies,
                         onSourceDetails = onSourceDetails,
                         optionsFocusRequester = optionsFocusRequester,
+                        onExplainAggregation = onExplainAggregation,
                     )
                     if (isOffline) {
                         DetailStatusBanner(stringResource(R.string.canonical_detail_offline))
@@ -467,6 +469,7 @@ private fun DetailActions(
     onCopies: () -> Unit,
     onSourceDetails: () -> Unit,
     optionsFocusRequester: FocusRequester,
+    onExplainAggregation: () -> Unit,
 ) {
     val operations = listOf(
         OwnedCopyOperation.PLAY,
@@ -514,6 +517,9 @@ private fun DetailActions(
                 ) {
                     Icon(Icons.Filled.Build, contentDescription = stringResource(R.string.game_options_title))
                 }
+            }
+            OutlinedButton(onClick = onExplainAggregation, modifier = Modifier.testTag("canonical-detail-explain-aggregation")) {
+                Text(stringResource(R.string.canonical_explain_aggregation))
             }
         }
     }

@@ -66,7 +66,7 @@ class ArtworkFeatureMatcher @Inject constructor() {
     }
 
     fun compare(first: ArtworkFeatures, second: ArtworkFeatures): ArtworkMatch = native {
-        if (!first.isValid() || !second.isValid()) return@native ArtworkMatch(false)
+        if (!first.isValid() || !second.isValid()) return@native ArtworkMatch(false, reason = ArtworkMatchReason.INVALID_FEATURES)
         // Stable orientation and RNG seed make persisted relationships independent of import order.
         val (left, right) = if (first.contentHash <= second.contentHash) first to second else second to first
         val leftDescriptors = Mat(left.count, ArtworkFeatures.DESCRIPTOR_BYTES, CvType.CV_8UC1)
@@ -90,7 +90,8 @@ class ArtworkFeatureMatcher @Inject constructor() {
             val reverseBest = filtered(reverse).associate { it.queryIdx to it.trainIdx }
             val matches = filtered(forward).filter { reverseBest[it.trainIdx] == it.queryIdx }
                 .sortedWith(compareBy({ it.queryIdx }, { it.trainIdx }))
-            if (matches.size < MIN_INLIERS) return@native ArtworkMatch(false, matches = matches.size)
+            if (matches.size < MIN_INLIERS) return@native ArtworkMatch(false, matches = matches.size,
+                reason = ArtworkMatchReason.TOO_FEW_MATCHES)
             fun point(features: ArtworkFeatures, index: Int) = Point(
                 features.points[index * 2] * features.width.toDouble(),
                 features.points[index * 2 + 1] * features.height.toDouble(),
@@ -102,10 +103,12 @@ class ArtworkFeatureMatcher @Inject constructor() {
             Core.setRNGSeed(0x474e4152)
             transform = Calib3d.estimateAffinePartial2D(from, to, inlierMask, Calib3d.RANSAC, 3.0, 2_000L, 0.995, 10L)
             val affine = transform
-            if (affine.empty() || affine.rows() != 2 || affine.cols() != 3) return@native ArtworkMatch(false, matches.size)
+            if (affine.empty() || affine.rows() != 2 || affine.cols() != 3) return@native ArtworkMatch(false, matches.size,
+                reason = ArtworkMatchReason.AFFINE_UNAVAILABLE)
             val coefficients = DoubleArray(6)
             affine.get(0, 0, coefficients)
-            if (coefficients.any { !it.isFinite() }) return@native ArtworkMatch(false, matches.size)
+            if (coefficients.any { !it.isFinite() }) return@native ArtworkMatch(false, matches.size,
+                reason = ArtworkMatchReason.NONFINITE_TRANSFORM)
             val scale = hypot(coefficients[0], coefficients[3])
             val rotation = abs(atan2(coefficients[3], coefficients[0]) * 180 / Math.PI)
             val mask = ByteArray(matches.size)
@@ -161,7 +164,19 @@ class ArtworkFeatureMatcher @Inject constructor() {
                 coverage >= MIN_COVERAGE && cells >= MIN_CELLS &&
                 min(leftSpatial.xSpan, rightSpatial.xSpan) >= 0.45 && min(leftSpatial.ySpan, rightSpatial.ySpan) >= 0.40 &&
                 scale in 0.15..6.0 && rotation <= 25 && error <= 2.5
-            ArtworkMatch(accepted, matches.size, selected.size, ratio, coverage, cells, error)
+            val reason = when {
+                accepted -> ArtworkMatchReason.ACCEPTED
+                selected.size < MIN_INLIERS -> ArtworkMatchReason.TOO_FEW_INLIERS
+                ratio < MIN_INLIER_RATIO -> ArtworkMatchReason.LOW_INLIER_RATIO
+                coverage < MIN_COVERAGE -> ArtworkMatchReason.LOW_COVERAGE
+                cells < MIN_CELLS -> ArtworkMatchReason.TOO_FEW_CELLS
+                min(leftSpatial.xSpan, rightSpatial.xSpan) < 0.45 -> ArtworkMatchReason.NARROW_HORIZONTAL_SPAN
+                min(leftSpatial.ySpan, rightSpatial.ySpan) < 0.40 -> ArtworkMatchReason.NARROW_VERTICAL_SPAN
+                scale !in 0.15..6.0 -> ArtworkMatchReason.IMPLAUSIBLE_SCALE
+                rotation > 25 -> ArtworkMatchReason.EXCESSIVE_ROTATION
+                else -> ArtworkMatchReason.EXCESSIVE_RESIDUAL
+            }
+            ArtworkMatch(accepted, matches.size, selected.size, ratio, coverage, cells, error, reason = reason)
         } finally {
             (forward + reverse).forEach(Mat::release)
             listOf(leftDescriptors, rightDescriptors, from, to, inlierMask).forEach(Mat::release)

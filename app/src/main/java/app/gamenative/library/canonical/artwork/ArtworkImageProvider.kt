@@ -43,6 +43,11 @@ class ArtworkImageProvider internal constructor(client: OkHttpClient, private va
         policy.groupingUrl(reference.source, reference.url, reference.steamAppId), reference,
     ) { policy.groupingUrl(reference.source, it, reference.steamAppId) }
 
+    internal suspend fun inspectOriginal(reference: ArtworkReference,
+        observe: (ArtworkAcquisitionStage, Int?) -> Unit): EncodedArtwork? = fetchBytes(
+        policy.groupingUrl(reference.source, reference.url, reference.steamAppId), observe = observe,
+    ) { policy.groupingUrl(reference.source, it, reference.steamAppId) }
+
     internal data class EncodedArtwork(val bytes: ByteArray, val mimeType: String)
 
     private suspend fun fetch(initial: HttpUrl?, validate: (String) -> HttpUrl?): ArtworkFingerprint? =
@@ -57,10 +62,13 @@ class ArtworkImageProvider internal constructor(client: OkHttpClient, private va
             }
         }
 
-    private suspend fun fetchBytes(initial: HttpUrl?, reference: ArtworkReference? = null, validate: (String) -> HttpUrl?): EncodedArtwork? {
+    private suspend fun fetchBytes(initial: HttpUrl?, reference: ArtworkReference? = null,
+        observe: ((ArtworkAcquisitionStage, Int?) -> Unit)? = null,
+        validate: (String) -> HttpUrl?): EncodedArtwork? {
         val firstUrl = initial ?: return null
         fun record(stage: ArtworkAcquisitionStage, status: Int? = null) {
             reference?.let { recordArtworkAcquisition(it, stage, httpStatus = status) }
+            observe?.invoke(stage, status)
         }
         record(ArtworkAcquisitionStage.FETCHING)
         var finished = false

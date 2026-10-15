@@ -126,7 +126,7 @@ class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibrar
             ArtworkTraceStage.NATIVE_UNAVAILABLE, ArtworkTraceStage.STALE_NATIVE_EVIDENCE,
             ArtworkTraceStage.NO_ADMITTED_ORIGINAL, ArtworkTraceStage.ORIGINAL_UNAVAILABLE, ArtworkTraceStage.NATIVE_MATCHER_UNAVAILABLE -> DiagnosticOutcome.UNAVAILABLE
             ArtworkTraceStage.FAILED -> DiagnosticOutcome.FAILED
-            ArtworkTraceStage.CACHE_HIT -> DiagnosticOutcome.CACHE_HIT
+            ArtworkTraceStage.CACHE_HIT, ArtworkTraceStage.ORIGINAL_CACHE_BOUND -> DiagnosticOutcome.CACHE_HIT
             ArtworkTraceStage.COMPARED -> if (observation.matchResult == ArtworkTraceMatchResult.REJECTED)
                 DiagnosticOutcome.SKIPPED else DiagnosticOutcome.SUCCEEDED
             else -> DiagnosticOutcome.SUCCEEDED
@@ -160,6 +160,7 @@ class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibrar
             observation.comparisonCount?.let { put(DiagnosticAttribute.COMPARISON_COUNT, it.boundedCount()) }
             observation.acceptedCount?.let { put(DiagnosticAttribute.ACCEPTED_COUNT, it.boundedCount()) }
             observation.familySize?.let { put(DiagnosticAttribute.FAMILY_SIZE, it.boundedCount()) }
+            observation.groupingReason?.let { put(DiagnosticAttribute.GROUPING_REASON, it.name) }
         },
     )
 
@@ -174,6 +175,7 @@ class FeatureCanonicalLibraryDiagnostics @Inject constructor() : CanonicalLibrar
         durationMs = elapsedMs.boundedDuration(),
         attributes = mapOf(
             DiagnosticAttribute.MATCH_METHOD to "ORB_V1",
+            DiagnosticAttribute.REASON to result.reason.name,
             DiagnosticAttribute.PUBLIC_CONTENT_ID to images.value,
             DiagnosticAttribute.RESULT_COUNT to result.matches.boundedCount(),
             DiagnosticAttribute.CONFIDENCE to "inliers=${result.inliers.boundedCount()};ratio=${result.inlierRatio.thousandths()};" +

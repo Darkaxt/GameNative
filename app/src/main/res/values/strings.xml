@@ -197,6 +197,14 @@
     <string name="canonical_detail_refresh_failed">Couldn’t refresh. Showing saved details.</string>
     <string name="canonical_detail_unavailable">Details are not available for this game.</string>
     <string name="canonical_detail_retry">Retry</string>
+    <string name="canonical_explain_aggregation">Explain aggregation</string>
+    <string name="aggregation_read_only">Read-only snapshot. This report does not change your games, matches, grouping or installations.</string>
+    <string name="aggregation_loading">Preparing aggregation report…</string>
+    <string name="aggregation_failed">Could not prepare the aggregation report. Try again.</string>
+    <string name="aggregation_export">Export text</string>
+    <string name="aggregation_exporting">Exporting report…</string>
+    <string name="aggregation_exported">Report exported.</string>
+    <string name="aggregation_export_failed">Could not export the report. Try again.</string>
     <string name="canonical_trailer_unmute">Unmute trailer</string>
     <string name="canonical_trailer_mute">Mute trailer</string>
     <string name="canonical_detail_reviews_placeholder">Native review browsing is not available yet.</string>

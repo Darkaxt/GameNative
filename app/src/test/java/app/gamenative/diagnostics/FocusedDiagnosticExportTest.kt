@@ -3,6 +3,11 @@ package app.gamenative.diagnostics
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import app.gamenative.data.GameSource
+import app.gamenative.data.canonical.*
+import app.gamenative.library.canonical.*
+import app.gamenative.library.canonical.artwork.*
+import java.util.UUID
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -65,6 +70,44 @@ class FocusedDiagnosticExportTest {
             assertTrue(focused.any { it.attributes["family_size"] == "2" })
             assertFalse(focused.toString().contains("Other Game"))
             assertFalse(focused.toString().contains("synthetic-secret"))
+        } finally { FeatureDiagnostics.clear() }
+    }
+
+    @Test
+    fun warmTypedBindingsAdmitTitleFreeOriginalMetricsAndActualGroupingCause() {
+        val context = startCapture()
+        try {
+            val source = GameSource.GOG
+            val key = OwnedCopyKey(AccountScope("2".repeat(64)), source, "1")
+            val id = CanonicalGameId.parse(UUID(0, 1).toString())
+            val copy = OwnedCopySummary(key, source, "DREDGE", null, null, null,
+                false, false, false, false, false, null, null, emptySet(), null, true,
+                MatchMethod.UNMATCHED, MatchConfidence.UNMATCHED,
+                MatchDecisionSource.AUTOMATIC, null,
+                CURRENT_RESOLVER_VERSION, 100)
+            val card = CanonicalLibraryCard(
+                CanonicalCardKey.Grouped(id), id, "DREDGE",
+                CanonicalAppType.GAME, "", "", "", "", 1f, emptySet(), setOf(source),
+                listOf(copy), null, emptySet(), false)
+            val game = requireNotNull(ArtworkGameTrace.from(card, 1, 0))
+            val facade = FeatureCanonicalLibraryDiagnostics()
+            val refs = listOf("a", "b").map { ArtworkReference(source, "https://images.gog.com/warm-$it.jpg") }
+            val images = refs.indices.map { index -> ArtworkFeatures(
+                "${index + 1}".repeat(64), 128, 128, FloatArray(48) { .5f }, ByteArray(24 * 32)) }
+            refs.zip(images).forEach { (ref, image) ->
+                facade.artworkState(game, ArtworkTraceObservation.of(
+                    ArtworkTraceStage.ORIGINAL_CACHE_BOUND, ref, contentHash = image.contentHash))
+            }
+            facade.artworkCompared(ArtworkPairDigest.from(images[0], images[1]), ArtworkMatch(
+                false, 30, 25, .8, .02, 3, 1.0, reason = ArtworkMatchReason.LOW_COVERAGE), 1L)
+            facade.artworkState(game, ArtworkTraceObservation.of(
+                ArtworkTraceStage.FAMILY_PUBLISHED, familySize = 2,
+                groupingReason = FamilyGroupingReason.TITLE))
+            val events = focusedEvents(DiagnosticReportBuilder.buildFocused(context))
+            assertEquals(2, events.count { it.attributes["stage"] == "ORIGINAL_CACHE_BOUND" })
+            assertTrue(events.any { it.attributes["reason"] == "LOW_COVERAGE" && it.attributes["public_title"] == null })
+            assertTrue(events.any { it.attributes["grouping_reason"] == "TITLE" && it.attributes["family_size"] == "2" })
+            assertFalse(events.toString().contains(key.accountScope.value))
         } finally { FeatureDiagnostics.clear() }
     }
 

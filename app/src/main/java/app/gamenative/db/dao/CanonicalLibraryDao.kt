@@ -59,4 +59,18 @@ interface CanonicalLibraryDao {
         """,
     )
     fun observePresentGames(): Flow<List<CanonicalLibraryAggregate>>
+
+    @Transaction
+    @Query(
+        """
+        SELECT * FROM canonical_game
+        WHERE EXISTS (
+            SELECT 1 FROM store_match
+            WHERE store_match.canonical_id = canonical_game.canonical_id
+              AND store_match.is_present = 1
+        )
+        ORDER BY canonical_game.canonical_id
+        """,
+    )
+    suspend fun getPresentGames(): List<CanonicalLibraryAggregate>
 }

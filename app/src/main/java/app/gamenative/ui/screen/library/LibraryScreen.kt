@@ -113,6 +113,9 @@ import app.gamenative.ui.enums.LibraryTab
 import app.gamenative.ui.enums.PaneType
 import app.gamenative.ui.enums.SortOption
 import app.gamenative.ui.internal.fakeAppInfo
+import app.gamenative.ui.model.AggregationDiagnosticState
+import app.gamenative.ui.model.AggregationDiagnosticViewModel
+import app.gamenative.ui.model.AggregationExportRequest
 import app.gamenative.ui.model.CanonicalCopyChangeResult
 import app.gamenative.ui.model.DlcUiState
 import app.gamenative.ui.model.DlcViewModel
@@ -181,6 +184,8 @@ fun HomeLibraryScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val dlcViewModel = hiltViewModel<DlcViewModel>()
+    val aggregationViewModel = hiltViewModel<AggregationDiagnosticViewModel>()
+    val aggregationState by aggregationViewModel.state.collectAsStateWithLifecycle()
     val dlcUiState by dlcViewModel.state.collectAsStateWithLifecycle()
     val gameDetailState by detailViewModel.state.collectAsStateWithLifecycle()
     val reviewSummaryState by detailViewModel.reviewSummaryState.collectAsStateWithLifecycle()
@@ -260,6 +265,14 @@ fun HomeLibraryScreen(
         onBindDlcCopies = dlcViewModel::bindCopies,
         onSelectDlcCopy = dlcViewModel::select,
         onRetryDlc = dlcViewModel::retry,
+        aggregationState = aggregationState,
+        onExplainAggregation = aggregationViewModel::open,
+        onBindAggregationSelection = aggregationViewModel::bindSelection,
+        onCloseAggregation = aggregationViewModel::close,
+        onRetryAggregation = aggregationViewModel::retry,
+        onPrepareAggregationExport = aggregationViewModel::prepareExport,
+        onCompleteAggregationExport = aggregationViewModel::completeExport,
+        onAggregationExportLaunchFailed = aggregationViewModel::exportLaunchFailed,
         reviewState = reviewState,
         reviewQuery = reviewQuery,
         onLoadReviews = { appId -> detailViewModel.loadReviews(appId, isOffline) },
@@ -377,6 +390,14 @@ internal fun LibraryScreenContent(
     onBindDlcCopies: (List<OwnedCopyKey>, Boolean) -> Unit = { _, _ -> },
     onSelectDlcCopy: (OwnedCopyKey) -> Unit = {},
     onRetryDlc: () -> Unit = {},
+    aggregationState: AggregationDiagnosticState = AggregationDiagnosticState.Closed,
+    onExplainAggregation: (CanonicalLibraryCard) -> Unit = {},
+    onBindAggregationSelection: (CanonicalLibraryCard) -> Unit = {},
+    onCloseAggregation: () -> Unit = {},
+    onRetryAggregation: () -> Unit = {},
+    onPrepareAggregationExport: () -> AggregationExportRequest? = { null },
+    onCompleteAggregationExport: (AggregationExportRequest, Uri?) -> Unit = { _, _ -> },
+    onAggregationExportLaunchFailed: (AggregationExportRequest) -> Unit = {},
     reviewState: ReviewSectionState = ReviewSectionState.Idle,
     reviewQuery: SteamReviewQuery = SteamReviewQuery(),
     onLoadReviews: (Int) -> Unit = {},
@@ -418,6 +439,28 @@ internal fun LibraryScreenContent(
     val context = LocalContext.current
     val lifecycleScope = LocalLifecycleOwner.current.lifecycleScope
     val uiScope = rememberCoroutineScope()
+
+    var pendingAggregationExport by remember { mutableStateOf<AggregationExportRequest?>(null) }
+    val completeAggregationExport by rememberUpdatedState(onCompleteAggregationExport)
+    val aggregationExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val request = pendingAggregationExport
+        pendingAggregationExport = null
+        if (request != null) completeAggregationExport(request, uri)
+    }
+    fun exportAggregation() {
+        if (pendingAggregationExport != null) return
+        val request = onPrepareAggregationExport() ?: return
+        pendingAggregationExport = request
+        try {
+            aggregationExportLauncher.launch("aggregation-report.txt")
+        } catch (_: android.content.ActivityNotFoundException) {
+            pendingAggregationExport = null
+            onAggregationExportLaunchFailed(request)
+        } catch (_: SecurityException) {
+            pendingAggregationExport = null
+            onAggregationExportLaunchFailed(request)
+        }
+    }
 
     val gogOAuthLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult(),
@@ -1733,8 +1776,13 @@ internal fun LibraryScreenContent(
                 val detailSteamMatchStatus =
                     detailSteamMatchCopy?.steamMatchStatus(steamMatchState.isScanning)
                 val clearCanonicalDetail by rememberUpdatedState(onClearCanonicalDetail)
+                val closeAggregation by rememberUpdatedState(onCloseAggregation)
+                LaunchedEffect(selectedCanonicalCard) { onBindAggregationSelection(selectedCanonicalCard) }
                 DisposableEffect(Unit) {
-                    onDispose { clearCanonicalDetail() }
+                    onDispose {
+                        closeAggregation()
+                        clearCanonicalDetail()
+                    }
                 }
                 CanonicalSourceDetailHost(
                     libraryItem = selectedSourceItem,
@@ -1823,9 +1871,17 @@ internal fun LibraryScreenContent(
                         },
                         actionInProgress = routeRequestIdentity != null,
                         onRetry = onRetryCanonicalDetail,
-                        backEnabled = !isSteamMatchPickerOpen && copiesSheetCardKey == null,
+                        onExplainAggregation = { onExplainAggregation(selectedCanonicalCard) },
+                        backEnabled = !isSteamMatchPickerOpen && copiesSheetCardKey == null &&
+                            aggregationState == AggregationDiagnosticState.Closed,
                     )
                 }
+                AggregationDiagnosticDialog(
+                    state = aggregationState,
+                    onClose = onCloseAggregation,
+                    onRetry = onRetryAggregation,
+                    onExport = ::exportAggregation,
+                )
             } else {
                 LibraryDetailPane(
                     card = selectedPresentationCard,
