@@ -8,10 +8,13 @@ class DarkaxtFastReleaseWorkflowContractTest {
     @Test
     fun fastReleasePublishesFourPersistentlySignedChannels() {
         val workflow = repositoryFile(".github/workflows/darkaxt-fast-release.yml").readText()
+        val application = repositoryFile("app/build.gradle.kts").readText()
+        val versionCode = checkNotNull(Regex("""versionCode\s*=\s*(\d+)""").find(application)).groupValues[1]
+        val versionName = checkNotNull(Regex("""versionName\s*=\s*"([^"]+)"""").find(application)).groupValues[1]
 
         assertTrue(workflow.contains("EXPECTED_FORK_CERT_SHA256"))
-        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"40\""))
-        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"1.2.0-rc14\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_CODE: \"$versionCode\""))
+        assertTrue(workflow.contains("EXPECTED_VERSION_NAME: \"$versionName\""))
         assertTrue(workflow.contains("[[ \"\$RELEASE_TAG\" != \"v\$EXPECTED_VERSION_NAME\" ]]"))
         assertTrue(workflow.contains("compat-legacy-xr"))
         assertTrue(workflow.contains("side-by-side-legacy-xr"))

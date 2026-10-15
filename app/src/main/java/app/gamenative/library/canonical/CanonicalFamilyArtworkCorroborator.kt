@@ -237,15 +237,20 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
             var comparisonOwners = emptyMap<String, Set<CanonicalGameId>>()
             val knownComparisons = mutableMapOf<String, MutableMap<Pair<String, String>, ArtworkTraceMatchResult>>()
             val tracedComparisons = mutableMapOf<CanonicalGameId, MutableSet<String>>()
-            fun compared(left: String, right: String, accepted: Boolean, cached: Boolean, completed: Boolean = true) {
-                val result = if (!completed) ArtworkTraceMatchResult.UNAVAILABLE else if (accepted)
-                    ArtworkTraceMatchResult.ACCEPTED else ArtworkTraceMatchResult.REJECTED
+            fun rememberComparison(left: String, right: String, result: ArtworkTraceMatchResult) {
                 val hashes = if (left <= right) left to right else right to left
                 knownComparisons.getOrPut(left, ::linkedMapOf)[hashes] = result
                 knownComparisons.getOrPut(right, ::linkedMapOf)[hashes] = result
+            }
+            suspend fun compared(left: String, right: String, accepted: Boolean, cached: Boolean, completed: Boolean = true) {
+                currentCoroutineContext().ensureActive()
+                val result = if (!completed) ArtworkTraceMatchResult.UNAVAILABLE else if (accepted)
+                    ArtworkTraceMatchResult.ACCEPTED else ArtworkTraceMatchResult.REJECTED
+                rememberComparison(left, right, result)
                 val ids = comparisonOwners[left].orEmpty() + comparisonOwners[right].orEmpty()
                 val pair = ArtworkPairDigest.fromHashes(left, right)
                 for (id in ids) {
+                    currentCoroutineContext().ensureActive()
                     val firstObservation = tracedComparisons.getOrPut(id, ::linkedSetOf).add("${pair.value}:${result.name}")
                     if (cached && !firstObservation) continue
                     if (!cached) comparisons.getOrPut(id, ::linkedSetOf).add(pair.value)
@@ -256,10 +261,15 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                         comparisonCount = comparisons[id].orEmpty().size, acceptedCount = acceptances[id].orEmpty().size))
                 }
             }
-            fun replayComparisons(content: String) {
-                knownComparisons[content].orEmpty().toList().forEach { (pair, result) ->
-                    compared(pair.first, pair.second, result == ArtworkTraceMatchResult.ACCEPTED, cached = true,
-                        completed = result != ArtworkTraceMatchResult.UNAVAILABLE)
+            suspend fun replayComparisons(content: String, acceptedOnly: Boolean = false) {
+                for ((index, entry) in knownComparisons[content].orEmpty().toList().withIndex()) {
+                    currentCoroutineContext().ensureActive()
+                    val (pair, result) = entry
+                    if (!acceptedOnly || result == ArtworkTraceMatchResult.ACCEPTED) {
+                        compared(pair.first, pair.second, result == ArtworkTraceMatchResult.ACCEPTED, cached = true,
+                            completed = result != ArtworkTraceMatchResult.UNAVAILABLE)
+                    }
+                    if (index % 32 == 31) yield()
                 }
             }
             withContext(Dispatchers.IO) {
@@ -288,8 +298,14 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                 }
             } }
             comparisonOwners = contentOwners()
-            for ((pair, accepted) in savedComparisons) compared(pair.first, pair.second, accepted, true)
+            // Prime evidence without draining historical rejection diagnostics before missing originals can run.
+            for ((pair, accepted) in savedComparisons) {
+                currentCoroutineContext().ensureActive()
+                rememberComparison(pair.first, pair.second, if (accepted) ArtworkTraceMatchResult.ACCEPTED else ArtworkTraceMatchResult.REJECTED)
+            }
+            for (pair in warm) compared(pair.first, pair.second, accepted = true, cached = true)
             emit(Evidence(project(warm), trace))
+            val acquisitionOrder = byReference.entries.sortedBy { contentByReference.containsKey(it.key) }
             matching.withLock {
                 try {
                     val index = ArtworkVisualIndex()
@@ -299,7 +315,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                             withContext(Dispatchers.Default) { index.add(evidence) }
                         }
                     }
-                    for ((reference, sources) in byReference) {
+                    for ((reference, sources) in acquisitionOrder) {
                         currentCoroutineContext().ensureActive()
                         sources.map { it.canonicalId }.distinct().forEach { stage(it, ArtworkTraceStage.ORIGINAL_FETCHING, reference) }
                         val image = try { withTimeoutOrNull(20_000) { features.original(reference) } }
@@ -323,7 +339,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                         contentByReference[reference] = image.contentHash
                         comparisonOwners = contentOwners()
                         sources.map { it.canonicalId }.distinct().forEach { stage(it, ArtworkTraceStage.FEATURES_READY, reference, image) }
-                        replayComparisons(image.contentHash)
+                        replayComparisons(image.contentHash, acceptedOnly = true)
                         val indexed = withContext(Dispatchers.IO) { cache.isIndexed(image.contentHash) }
                         val pending = if (indexed) emptyList()
                             else withContext(Dispatchers.Default) { index.candidates(image) }
@@ -370,6 +386,9 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                     }
                 } finally { withContext(NonCancellable + Dispatchers.IO) { cache.flush() } }
             }
+            // Preserve cached rejection explanations and late owner attribution after acquisition/publication progress.
+            comparisonOwners = contentOwners()
+            for (content in comparisonOwners.keys) replayComparisons(content)
             eligible.forEach { state(it.canonicalId, ArtworkTraceObservation.of(ArtworkTraceStage.FINISHED,
                 comparisonCount = comparisons[it.canonicalId].orEmpty().size, acceptedCount = acceptances[it.canonicalId].orEmpty().size)) }
         } catch (error: kotlinx.coroutines.CancellationException) {

@@ -14,6 +14,8 @@ import io.mockk.mockk
 import io.mockk.verify
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
@@ -43,10 +45,11 @@ class ArtworkGroupingTraceTest {
         source: ArtworkFeatureSource = source { features(it) },
         fixtureCards: List<CanonicalLibraryCard> = cards,
         originalUrls: (CanonicalLibraryCard) -> List<String> = { listOf(url(it.copies.single().key.stableSourceId)) },
+        diagnosticSink: CanonicalLibraryDiagnosticSink = diagnostics,
     ) = CanonicalFamilyArtworkCorroborator(source, cache, matcher, { key ->
         val card = fixtureCards.single { it.copies.single().key == key }
         OwnedCopyRuntimeResult.Available(runtime(card, originalUrls(card)))
-    }, diagnostics)
+    }, diagnosticSink)
 
     @Test fun realOwnerBindsOriginalsComparisonAndPublishedFamilyThenReusesCachedEvidence() = runTest {
         val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
@@ -298,6 +301,68 @@ class ArtworkGroupingTraceTest {
             }
             assertTrue(report.contains(pair))
         }
+    }
+
+    @Test fun acquisitionAndWarmPublicationPrecedeHistoricalRejectedTraceDrain() = runTest {
+        val fixtureCards = cards + card(3)
+        val refs = fixtureCards.map { ArtworkReference(GameSource.GOG, url(it.copies.single().key.stableSourceId)) }
+        val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+        refs.take(2).forEach { cache.put(it, features(it)); cache.markIndexed(features(it).contentHash) }
+        cache.putComparison(features(refs[0]).contentHash, features(refs[1]).contentHash, true)
+        val rejected = (1..32).map { ArtworkFeatures.hash("historical-$it".toByteArray()) }
+        rejected.forEach { cache.putComparison(features(refs[0]).contentHash, it, false) }
+        var acquired = 0
+        val owner = owner(cache, source {
+            if (acquired++ == 0) {
+                assertTrue("Warm accepted family must publish before acquisition", observations.any {
+                    it.second.stage == ArtworkTraceStage.FAMILY_PUBLISHED && it.second.familySize == 2
+                })
+                assertFalse("Historical rejected diagnostic replay must not block acquisition", observations.any {
+                    it.second.stage == ArtworkTraceStage.CACHE_HIT && it.second.matchResult == ArtworkTraceMatchResult.REJECTED
+                })
+            }
+            features(it)
+        }, fixtureCards = fixtureCards)
+        assertEquals(1, owner.project(fixtureCards).size)
+        assertEquals(3, acquired)
+        val rejectedPairs = rejected.map { ArtworkPairDigest.fromHashes(features(refs[0]).contentHash, it).value }.toSet()
+        assertEquals("Deferred cached outcomes must not be silently discarded", rejectedPairs,
+            observations.filter { it.second.matchResult == ArtworkTraceMatchResult.REJECTED }.mapNotNull { it.second.pair?.value }.toSet())
+    }
+
+    @Test fun cacheMissingOriginalIsAcquiredBeforeAlreadyBoundOriginals() = runTest {
+        val first = ArtworkReference(GameSource.GOG, url("1"))
+        val missing = ArtworkReference(GameSource.GOG, url("2"))
+        val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+        cache.put(first, features(first))
+        cache.markIndexed(features(first).contentHash)
+        val acquired = mutableListOf<ArtworkReference>()
+        owner(cache, source { acquired += it; features(it) }).project(cards)
+        assertEquals("Missing current originals must not wait behind warm revalidation", listOf(missing, first), acquired)
+    }
+
+    @Test fun cachedTraceReplayObservesOwnerCancellationBeforeNextPair() = runTest {
+        val ref = ArtworkReference(GameSource.GOG, url("1"))
+        val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+        cache.put(ref, features(ref))
+        cache.markIndexed(features(ref).contentHash)
+        repeat(32) { cache.putComparison(features(ref).contentHash, ArtworkFeatures.hash("old-$it".toByteArray()), false) }
+        var cachedPairs = 0
+        lateinit var worker: Job
+        val cancellingSink = object : CanonicalLibraryDiagnosticSink by diagnostics {
+            override fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) {
+                diagnostics.artworkState(game, observation)
+                if (observation.stage == ArtworkTraceStage.CACHE_HIT && observation.pair != null) {
+                    cachedPairs++
+                    worker.cancel()
+                }
+            }
+        }
+        worker = launch { owner(cache, diagnosticSink = cancellingSink).project(cards) }
+        worker.join()
+        assertTrue(worker.isCancelled)
+        assertEquals("Cancelled generations must not drain the remaining historical traces", 1, cachedPairs)
+        assertFalse(observations.any { it.second.stage == ArtworkTraceStage.FINISHED })
     }
 
     private fun withTraceExport(flood: Boolean = false, assertions: (List<DiagnosticEvent>, String) -> Unit) {
