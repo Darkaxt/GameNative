@@ -157,10 +157,15 @@ import app.gamenative.utils.downloader.GraphicsDriverDownloader
 import app.gamenative.utils.PreInstallSteps
 import app.gamenative.utils.SteamHostAuth
 import app.gamenative.utils.SteamInstallScriptRegistry
+import app.gamenative.utils.RedistComponents
+import app.gamenative.utils.RedistInstallerExtractor
+import app.gamenative.utils.WinComponentInstall
 import app.gamenative.utils.BrightnessManager
 import app.gamenative.utils.SteamTokenLogin
 import app.gamenative.enums.Marker
 import app.gamenative.utils.MarkerUtils
+import app.gamenative.utils.OpenALRedist
+import app.gamenative.utils.PhysXLayout
 import app.gamenative.utils.SteamUtils
 import app.gamenative.utils.WineMono
 import app.gamenative.utils.WineMsiCache
@@ -2137,6 +2142,10 @@ fun XServerScreen(
                             return null
                         }
 
+                        private fun refreshTouchTransform() {
+                            PluviaApp.touchpadView?.let { view -> view.post { view.refreshTransform() } }
+                        }
+
                         private fun refreshFrameRatingTracking(reason: String) {
                             val rating = ui.frameRating ?: return
                             if (!getxServer().isFlatPresentationEnabled) return
@@ -2199,6 +2208,7 @@ fun XServerScreen(
                         }
 
                         override fun onMapWindow(window: Window) {
+                            if (getxServer().isDesktopWindow(window)) refreshTouchTransform()
                             if (window.isApplicationWindow()) runCatching { windowActivity.onWindowMapped(window) }
                             Timber.i(
                                 "onMapWindow:" +
@@ -2214,6 +2224,7 @@ fun XServerScreen(
                         }
 
                         override fun onUnmapWindow(window: Window) {
+                            if (getxServer().isDesktopWindow(window)) refreshTouchTransform()
                             runCatching { windowActivity.onWindowUnmapped(window) }
                             Timber.i(
                                 "onUnmapWindow:" +
@@ -2233,6 +2244,7 @@ fun XServerScreen(
                         }
 
                         override fun onUpdateWindowGeometry(window: Window, resized: Boolean) {
+                            if (resized && getxServer().isDesktopWindow(window)) refreshTouchTransform()
                             if (window.id == frameRatingWindowId || window.isApplicationWindow()) {
                                 refreshFrameRatingTracking(if (resized) "geometry-resize" else "geometry-move")
                             }
@@ -2332,6 +2344,8 @@ fun XServerScreen(
                             Timber.i("Doing things once")
                             val envVars = EnvVars()
                             immersiveHooks?.windowsVr?.beforeWineSystemSetup(container)
+                            RedistInstallerExtractor.clearCache()
+                            RedistComponents.applyForLaunch(container, appId)
 
                             runBlocking {
                                 setupWineSystemFiles(
@@ -5629,11 +5643,13 @@ private suspend fun setupWineSystemFiles(
 
     if (xServerState.value.dxwrapper == "cnc-ddraw") envVars.put("CNC_DDRAW_CONFIG_FILE", "C:\\ProgramData\\cnc-ddraw\\ddraw.ini")
 
+    PhysXLayout.applyForLaunch(container)
     // val wincomponents = if (shortcut != null) shortcut.getExtra("wincomponents", container.winComponents) else container.winComponents
     val wincomponents = container.winComponents
     if (!wincomponents.equals(container.getExtra("wincomponents"))) {
-        extractWinComponentFiles(context, firstTimeBoot, imageFs, container, containerManager, onExtractFileListener)
-        container.putExtra("wincomponents", wincomponents)
+        val previousWinComponents = container.getExtra("wincomponents", Container.FALLBACK_WINCOMPONENTS)
+        val failedWinComponents = extractWinComponentFiles(context, firstTimeBoot, imageFs, container, containerManager, onExtractFileListener)
+        container.putExtra("wincomponents", WinComponentInstall.appliedValue(wincomponents, previousWinComponents, failedWinComponents))
         containerDataChanged = true
     }
     // every launch, not only on a wincomponents change: containers made before the Wine 10 CLSID fix still
@@ -5645,6 +5661,7 @@ private suspend fun setupWineSystemFiles(
         hasBuiltinWmDecoderDlls(imageFs),
     )
 
+    OpenALRedist.applyForLaunch(container)
     // OpenAL audio: extract native DLLs if WINEDLLOVERRIDES mentions openal32 or soft_oal
     val dllOverrides = EnvVars(container.envVars).get("WINEDLLOVERRIDES")
     val needsOpenalDlls = dllOverrides.contains("openal32") || dllOverrides.contains("soft_oal")
@@ -5774,6 +5791,7 @@ private suspend fun applyGeneralPatches(
         }
     }
     WineUtils.applySystemTweaks(context, wineInfo)
+    SteamInstallScriptRegistry.clearPrefixStamps(File(container.rootDir, ".wine"))
     container.putExtra("graphicsDriver", null)
     container.putExtra("desktopTheme", null)
     container.putExtra("xaudioDllsExtracted", null)
@@ -6046,10 +6064,11 @@ private suspend fun extractWinComponentFiles(
     containerManager: ContainerManager,
     // shortcut: Shortcut?,
     onExtractFileListener: OnExtractFileListener?,
-) {
+): Set<String> {
     val rootDir = imageFs.rootDir
     val windowsDir = File(rootDir, ImageFs.WINEPREFIX + "/drive_c/windows")
     val systemRegFile = File(rootDir, ImageFs.WINEPREFIX + "/system.reg")
+    val failed = linkedSetOf<String>()
 
     try {
         val wincomponentsJSONObject = JSONObject(FileUtils.readString(context, "wincomponents/wincomponents.json"))
@@ -6081,33 +6100,42 @@ private suspend fun extractWinComponentFiles(
             if (oldValue == wincomponent[1] && !firstTimeBoot) continue
             val identifier = wincomponent[0]
             val useNative = wincomponent[1].equals("1")
+            val extractDir = if (identifier == PhysXLayout.COMPONENT) windowsDir.parentFile!! else windowsDir
 
             if (!container.wineVersion.contains("arm64ec") && identifier.contains("opengl") && useNative) continue
 
             // Note: GameNative do not bundle directinput and directinput8 dlls, need to skip them and use wine/proton dll instead
             if (useNative && (identifier != "directinput8" && identifier != "directinput")) {
-                // Download or use cached/bundled wincomponent
-                val componentFile = WinComponentDownloader.ensureWinComponentAvailable(
-                    context, identifier
-                ) { progress ->
-                    Timber.d("Downloading wincomponent $identifier: ${(progress * 100).toInt()}%")
-                }
+                val placed = (onExtractFileListener == null && RedistInstallerExtractor.placeComponent(context, container, identifier, windowsDir)) ||
+                    WinComponentInstall.attempt(identifier) {
+                        // Download or use cached/bundled wincomponent
+                        val componentFile = WinComponentDownloader.ensureWinComponentAvailable(
+                            context, identifier
+                        ) { progress ->
+                            Timber.d("Downloading wincomponent $identifier: ${(progress * 100).toInt()}%")
+                        }
 
-                if (componentFile == null) {
-                    // Legacy variant: use bundled asset
-                    Timber.d("Extracting wincomponent $identifier from bundled assets")
-                    TarCompressorUtils.extract(
-                        TarCompressorUtils.Type.ZSTD, context.assets,
-                        "wincomponents/$identifier.tzst", windowsDir, onExtractFileListener,
-                    )
-                } else {
-                    // Modern variant: use downloaded file
-                    Timber.d("Extracting wincomponent $identifier from downloaded file: ${componentFile.absolutePath}")
-                    TarCompressorUtils.extract(
-                        TarCompressorUtils.Type.ZSTD, componentFile,
-                        windowsDir, onExtractFileListener,
-                    )
+                        if (componentFile == null) {
+                            // Legacy variant: use bundled asset
+                            Timber.d("Extracting wincomponent $identifier from bundled assets")
+                            TarCompressorUtils.extract(
+                                TarCompressorUtils.Type.ZSTD, context.assets,
+                                "wincomponents/$identifier.tzst", extractDir, onExtractFileListener,
+                            )
+                        } else {
+                            // Modern variant: use downloaded file
+                            Timber.d("Extracting wincomponent $identifier from downloaded file: ${componentFile.absolutePath}")
+                            TarCompressorUtils.extract(
+                                TarCompressorUtils.Type.ZSTD, componentFile,
+                                extractDir, onExtractFileListener,
+                            )
+                        }
+                    }
+                if (!placed) {
+                    failed += identifier
+                    continue
                 }
+                RedistInstallerExtractor.recordVcRuntime(identifier, windowsDir, systemRegFile.parentFile!!)
             } else {
                 val dlnames = wincomponentsJSONObject.getJSONArray(identifier)
                 for (i in 0 until dlnames.length()) {
@@ -6122,8 +6150,13 @@ private suspend fun extractWinComponentFiles(
         if (!dlls.isEmpty()) restoreOriginalDllFiles(context, container, containerManager, imageFs, *dlls.toTypedArray())
     } catch (e: JSONException) {
         Timber.e("Failed to read JSON: $e")
+    } finally {
+        RedistInstallerExtractor.clearCache()
     }
+    return failed
 }
+
+private const val DEFAULT_SPOOFED_GPU = "NVIDIA GeForce GTX 680"
 
 private suspend fun extractGraphicsDriverFiles(
     context: Context,
@@ -6406,9 +6439,10 @@ private suspend fun extractGraphicsDriverFiles(
         val blacklistedExtensions: String? = graphicsDriverConfig.get("blacklistedExtensions")
         envVars.put("WRAPPER_EXTENSION_BLACKLIST", blacklistedExtensions)
 
-        val gpuName = graphicsDriverConfig.get("gpuName")
+        val configuredGpuName = graphicsDriverConfig.get("gpuName")
+        val gpuName = if (configuredGpuName == "Device") DEFAULT_SPOOFED_GPU else configuredGpuName
         if (gpuName != "Device") {
-            envVars.put("WRAPPER_DEVICE_NAME", gpuName)
+            envVars.put("WRAPPER_DEVICE_NAME", GPUInformation.getCardNameFromGPUName(context, gpuName))
             envVars.put("WRAPPER_DEVICE_ID", GPUInformation.getDeviceIdFromGPUName(context, gpuName))
             envVars.put("WRAPPER_VENDOR_ID", GPUInformation.getVendorIdFromGPUName(context, gpuName))
         }

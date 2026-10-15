@@ -14,8 +14,8 @@ permissions:
 env:
   RELEASE_TAG: ${{ inputs.release_tag }}
   EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
-  EXPECTED_VERSION_CODE: "45"
-  EXPECTED_VERSION_NAME: "1.3.0-rc19"
+  EXPECTED_VERSION_CODE: "46"
+  EXPECTED_VERSION_NAME: "1.3.0-rc20"
 
 jobs:
   build:
@@ -270,12 +270,12 @@ jobs:
 
             All APKs use the persistent Darkaxt fork release certificate (SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`).
 
-            ## RC19 highlights
+            ## RC20 highlights
 
-            - Retains official GameNative 1.3 updates through `95b9fcab`, the fork's canonical library, and native store-copy actions.
-            - Repairs artwork pipeline priority: validated warm support publishes before historical rejected-cache diagnostics; originals missing from the cache are acquired first.
-            - Makes cached diagnostic replay cooperatively cancellable while retaining cached outcomes and late artwork-owner attribution.
-            - Keeps **Explain aggregation**, manual report export, exact full-title grouping, native identity checks, manual overrides, and ORB-v1 thresholds unchanged. Production DREDGE artwork/restart acceptance is evaluated separately; publication is not a device-test claim.
+            - Integrates current official GameNative updates through `a5045850`, preserving the fork's canonical library and native store-copy actions.
+            - Separates bounded original-artwork acquisition from descriptor-index hydration and per-original comparison work.
+            - Retains unchanged in-flight acquisition across unrelated library generations, with affected-input cancellation, native revalidation and bounded failure cooldown.
+            - Keeps **Explain aggregation**, manual report export, exact full-title grouping, manual overrides, and ORB-v1 thresholds unchanged. Production DREDGE artwork/restart acceptance remains a separate live check; publication is not a device-test claim.
           files: |
             release-assets/gamenative-${{ env.RELEASE_TAG }}-compat.apk
             release-assets/gamenative-${{ env.RELEASE_TAG }}-compat-legacy-xr.apk

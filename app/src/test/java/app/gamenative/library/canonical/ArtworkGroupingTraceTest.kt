@@ -13,9 +13,22 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
@@ -286,8 +299,13 @@ class ArtworkGroupingTraceTest {
         val currentBFetching = observations.indexOfFirst {
             it.first.publicTitle == "DREDGE 2" && it.second.stage == ArtworkTraceStage.ORIGINAL_FETCHING && it.second.reference == newOriginalB
         }
-        assertTrue("Game A must compare against the cached old-URL bytes before game B is acquired",
-            firstComparison >= 0 && currentBFetching > firstComparison)
+        val currentBSupport = observations.indexOfFirst {
+            it.first.publicTitle == "DREDGE 2" && it.second.pair?.value == pair &&
+                it.second.matchResult == ArtworkTraceMatchResult.ACCEPTED
+        }
+        assertTrue("Every current URL must reach acquisition", currentBFetching >= 0)
+        assertTrue("A later-bound owner must receive accepted support after the original comparison",
+            firstComparison >= 0 && currentBSupport > firstComparison)
         assertTrue(observations.any { it.first.publicTitle == "DREDGE 2" && it.second.stage == ArtworkTraceStage.FAMILY_PUBLISHED && it.second.familySize == 2 })
         assertTrue("Newly discovered game B must receive the accepted pair supporting its published family", observations.any {
             it.first.publicTitle == "DREDGE 2" && it.second.pair?.value == pair
@@ -339,6 +357,145 @@ class ArtworkGroupingTraceTest {
         val acquired = mutableListOf<ArtworkReference>()
         owner(cache, source { acquired += it; features(it) }).project(cards)
         assertEquals("Missing current originals must not wait behind warm revalidation", listOf(missing, first), acquired)
+    }
+
+    @Test fun laterOriginalAcquisitionProgressesWhileHistoricalComparisonIsBlocked() = runBlocking {
+        val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+        val historical = ArtworkReference(GameSource.GOG, url("historical"))
+        cache.put(historical, features(historical))
+        val comparisonEntered = CountDownLatch(1)
+        val releaseComparison = CountDownLatch(1)
+        val laterAcquired = CountDownLatch(1)
+        every { matcher.compare(any(), any()) } answers {
+            comparisonEntered.countDown()
+            assertTrue("Test must release the bounded comparison", releaseComparison.await(10, TimeUnit.SECONDS))
+            ArtworkMatch(true, 30, 28, 0.93, 0.4, 10, 1.0)
+        }
+        val worker = launch {
+            owner(cache, source {
+                if (it.url == url("2")) {
+                    withContext(Dispatchers.Default) {
+                        assertTrue("Historical comparison must be active", comparisonEntered.await(10, TimeUnit.SECONDS))
+                    }
+                    laterAcquired.countDown()
+                }
+                features(it)
+            }).project(cards)
+        }
+        try {
+            assertTrue(withContext(Dispatchers.Default) { comparisonEntered.await(10, TimeUnit.SECONDS) })
+            // A real-time bound is intentional: the native comparison occupies a Default worker.
+            val acquired = withContext(Dispatchers.Default) { laterAcquired.await(2, TimeUnit.SECONDS) }
+            assertTrue("Later original acquisition must not wait for another original's shortlist", acquired)
+        } finally {
+            releaseComparison.countDown()
+            worker.cancelAndJoin()
+        }
+    }
+
+    @Test fun unrelatedMembershipChurnDoesNotRestartAnUnchangedSlowAcquisition() = runTest {
+        val early = card(1)
+        val target = listOf(card(2), card(3))
+        val extra = card(4)
+        val fixture = listOf(early) + target + extra
+        val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+        val entered = CompletableDeferred<Unit>()
+        var earlyAttempts = 0
+        val acquired = mutableSetOf<ArtworkReference>()
+        val targetReady = CountDownLatch(target.size)
+        val upstream = MutableSharedFlow<List<CanonicalLibraryCard>>()
+        val producer = owner(cache, source {
+            if (it.url == url("1")) {
+                earlyAttempts++
+                entered.complete(Unit)
+                awaitCancellation()
+            }
+            acquired += it
+            if (target.any { card -> it.url == url(card.copies.single().key.stableSourceId) }) targetReady.countDown()
+            features(it)
+        }, fixtureCards = fixture)
+        val collector = launch { producer.observe(upstream).collect() }
+        try {
+            testScheduler.runCurrent()
+            upstream.emit(listOf(early) + target)
+            entered.await()
+            repeat(8) { index ->
+                delay(5_000)
+                upstream.emit(listOf(early) + target + if (index % 2 == 0) listOf(extra) else emptyList())
+            }
+            val ready = withContext(Dispatchers.Default) { targetReady.await(2, TimeUnit.SECONDS) }
+            assertEquals("Unrelated members must not restart the stable acquisition timeout", 1, earlyAttempts)
+            assertTrue("Stable target originals must progress despite unrelated generations", ready &&
+                target.all { ArtworkReference(GameSource.GOG, url(it.copies.single().key.stableSourceId)) in acquired })
+        } finally { collector.cancelAndJoin() }
+    }
+
+    @Test fun singletonFinishesWithoutAcquisitionOrInventedArtworkFailure() = runTest {
+        val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+        val acquired = mutableListOf<ArtworkReference>()
+        val singleton = listOf(cards.last())
+        assertEquals(singleton, owner(cache, source { acquired += it; features(it) }).project(singleton))
+        assertTrue("A singleton has no inter-canonical visual relationship to discover", acquired.isEmpty())
+        verify(exactly = 0) { matcher.compare(any(), any()) }
+        assertEquals(ArtworkTraceStage.FINISHED, observations.last().second.stage)
+        assertFalse(observations.any { it.second.stage in setOf(ArtworkTraceStage.INELIGIBLE,
+            ArtworkTraceStage.ORIGINAL_FETCHING, ArtworkTraceStage.ORIGINAL_UNAVAILABLE, ArtworkTraceStage.COMPARED) })
+    }
+
+    @Test fun lastVisualPeerRetirementCancelsWithoutReacquiringAndRecoversWhenPeerReturns() = runBlocking {
+        withTimeout(10_000) {
+            val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+            val entered = CompletableDeferred<Unit>()
+            val cleaned = CompletableDeferred<Unit>()
+            val singletonFinished = CompletableDeferred<Unit>()
+            val acquired = mutableListOf<ArtworkReference>()
+            var blocked = true
+            val upstream = MutableSharedFlow<List<CanonicalLibraryCard>>(replay = 1)
+            val emitted = Channel<List<CanonicalLibraryCard>>(Channel.UNLIMITED)
+            val sink = object : CanonicalLibraryDiagnosticSink by diagnostics {
+                override fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) {
+                    diagnostics.artworkState(game, observation)
+                    if (game.publicTitle == "DREDGE 2" && observation.stage == ArtworkTraceStage.FINISHED)
+                        singletonFinished.complete(Unit)
+                }
+            }
+            val producer = owner(cache, source {
+                acquired += it
+                if (it.url == url("2") && blocked) {
+                    entered.complete(Unit)
+                    try { awaitCancellation() } finally { cleaned.complete(Unit) }
+                }
+                features(it)
+            }, diagnosticSink = sink)
+            val collector = launch { producer.observe(upstream).collect { emitted.send(it) } }
+            try {
+                upstream.emit(cards)
+                entered.await()
+                upstream.emit(listOf(cards.last()))
+                cleaned.await()
+                singletonFinished.await()
+                assertEquals("Retirement must not restart acquisition without a visual peer",
+                    listOf(url("1"), url("2")), acquired.map { it.url })
+                val retiredSnapshots = mutableListOf<List<CanonicalLibraryCard>>()
+                while (true) retiredSnapshots += emitted.tryReceive().getOrNull() ?: break
+                assertEquals(listOf(cards.last()), retiredSnapshots.last())
+                assertFalse(retiredSnapshots.flatten().any { it.isPresentationFamily })
+
+                blocked = false
+                upstream.emit(cards)
+                var family: CanonicalLibraryCard
+                while (true) {
+                    val snapshot = emitted.receive()
+                    if (snapshot.size == 1 && snapshot.single().isPresentationFamily) {
+                        family = snapshot.single()
+                        break
+                    }
+                }
+                assertEquals(cards.flatMap { it.copies }.toSet(), family.copies.toSet())
+                assertEquals("The returned peer must enable a fresh acquisition", 2, acquired.count { it.url == url("2") })
+                assertEquals(cards.associate { it.copies.single().key to it.canonicalId }, family.copyCanonicalIds)
+            } finally { collector.cancelAndJoin(); emitted.cancel() }
+        }
     }
 
     @Test fun cachedTraceReplayObservesOwnerCancellationBeforeNextPair() = runTest {

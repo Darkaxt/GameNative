@@ -6,6 +6,7 @@ import com.winlator.container.Container
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -39,8 +40,10 @@ class PreInstallStepsTest {
     @Before
     fun setUp() {
         container = mockk(relaxed = true)
-        gameDir = createTempDirectory(prefix = "preinstall-steps-test").toFile()
-        every { container.drives } returns "A:${gameDir.absolutePath}"
+        val fixtureRoot = File("build/test-fixtures").apply { mkdirs() }
+        gameDir = createTempDirectory(fixtureRoot.toPath(), prefix = "preinstall-steps-test").toFile()
+        every { container.drives } returns "A:${gameDir.path}"
+        assertEquals(gameDir.canonicalFile, PreInstallSteps.getGameDir(container)?.canonicalFile)
         every { container.containerVariant } returns Container.BIONIC
     }
 
@@ -67,7 +70,10 @@ class PreInstallStepsTest {
 
     @Test
     fun getPreInstallCommands_buildsWrappedGuestCommand_forDetectedInstallerStep() {
-        File(gameDir, "UbisoftConnectInstaller.exe").writeText("dummy")
+        File(gameDir, "_CommonRedist/UbisoftConnect/UbisoftConnectInstaller.exe").apply {
+            parentFile!!.mkdirs()
+            writeText("dummy")
+        }
 
         val result = PreInstallSteps.getPreInstallCommands(
             container = container,
@@ -89,7 +95,10 @@ class PreInstallStepsTest {
 
     @Test
     fun getPreInstallCommands_resetsMarkers_whenContainerVariantChanged() {
-        File(gameDir, "UbisoftConnectInstaller.exe").writeText("dummy")
+        File(gameDir, "_CommonRedist/UbisoftConnect/UbisoftConnectInstaller.exe").apply {
+            parentFile!!.mkdirs()
+            writeText("dummy")
+        }
         MarkerUtils.addMarker(gameDir.absolutePath, Marker.UBISOFT_CONNECT_INSTALLED)
 
         val withoutReset = PreInstallSteps.getPreInstallCommands(
@@ -124,14 +133,14 @@ class PreInstallStepsTest {
         PreInstallSteps.markAllDone(container)
 
         val expectedMarkers = listOf(
-            Marker.VCREDIST_INSTALLED,
-            Marker.PHYSX_INSTALLED,
-            Marker.OPENAL_INSTALLED,
-            Marker.XNA_INSTALLED,
             Marker.GOG_SCRIPT_INSTALLED,
             Marker.UBISOFT_CONNECT_INSTALLED,
         )
         assertTrue(expectedMarkers.all { marker -> File(gameDir, marker.fileName).exists() })
+        assertFalse(File(gameDir, Marker.VCREDIST_INSTALLED.fileName).exists())
+        assertFalse(File(gameDir, Marker.OPENAL_INSTALLED.fileName).exists())
+        assertFalse(File(gameDir, Marker.PHYSX_INSTALLED.fileName).exists())
+        assertFalse(File(gameDir, Marker.XNA_INSTALLED.fileName).exists())
     }
 
     @Test
