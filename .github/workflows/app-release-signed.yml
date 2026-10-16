@@ -34,7 +34,8 @@ jobs:
     if: ${{ !inputs.validation_candidate }}
 
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Three sequential bundles use the existing per-bundle 30-minute release envelope.
+    timeout-minutes: 90
 
     steps:
     - uses: actions/checkout@v4
@@ -131,12 +132,14 @@ jobs:
         yes | "$SDKMANAGER" --install "build-tools;34.0.0"
 
     - name: Build with Gradle
-      # R8 exhausted 3 GiB in run 38956718496; reuse the qualified Linux release profile.
+      # R8 exhausted 3 GiB in run 38956718496; isolate each variant in the qualified 5 GiB profile.
       run: |
-        ./gradlew --no-daemon --no-configuration-cache --max-workers=2 --no-parallel \
-          '-Dorg.gradle.jvmargs=-Xmx5g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8' \
-          -Pkotlin.compiler.execution.strategy=in-process \
-          :app:bundleLegacyRelease :app:bundleModernRelease :app:bundleLegacyXrRelease
+        for variant in Legacy Modern LegacyXr; do
+          ./gradlew --no-daemon --no-configuration-cache --max-workers=2 --no-parallel \
+            '-Dorg.gradle.jvmargs=-Xmx5g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8' \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            ":app:bundle${variant}Release"
+        done
         free -m
 
     - name: Stage bundles
