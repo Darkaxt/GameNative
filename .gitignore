@@ -4,6 +4,7 @@
 
 # Gradle files
 .gradle/
+.gamenative-local-build/
 build/
 tools/*aab*
 

@@ -442,6 +442,11 @@ android {
     // }
 }
 
+// AGP can discard the task dependency when converting generated asset folders to files.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("DebugAssets") }.configureEach {
+    dependsOn(copyDebugManifest)
+}
+
 tasks.withType<Test>().configureEach {
     val isolatedTmpDir = layout.buildDirectory.dir("test-tmp/$name").get().asFile
     systemProperty("java.io.tmpdir", isolatedTmpDir.absolutePath)

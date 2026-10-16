@@ -1,0 +1,9 @@
+// Opt-in only: local_gradle.py supplies both this script and the external root.
+gradle.beforeProject { project ->
+    def outputRoot = gradle.startParameter.projectProperties['gamenative.localBuildRoot']
+    if (outputRoot) {
+        def modulePath = project.path == ':' ? '_root' : project.path.substring(1).replace(':', '/')
+        def accessRoot = gradle.startParameter.projectProperties['gamenative.localBuildAccess'] ?: outputRoot
+        project.layout.buildDirectory.set(new File(accessRoot, modulePath))
+    }
+}

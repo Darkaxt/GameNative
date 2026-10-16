@@ -14,11 +14,12 @@ $gradleHome = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-P
 $aarCache = Join-Path $gradleHome "caches\modules-2\files-2.1\org.khronos.openxr\openxr_loader_for_android\1.1.61"
 $aar = if (Test-Path -LiteralPath $aarCache) { Get-ChildItem $aarCache -Recurse -Filter "openxr_loader_for_android-1.1.61.aar" | Select-Object -First 1 }
 if (-not $aar) { throw "OpenXR Android loader 1.1.61 is not in the Gradle cache ($gradleHome); run a Gradle sync first so it is downloaded" }
-$work = Join-Path $repository "app\build\xr-native"
+$appBuild = if ($env:GAMENATIVE_BUILD_ROOT) { Join-Path $env:GAMENATIVE_BUILD_ROOT "app" } else { Join-Path $repository "app\build" }
+$work = Join-Path $appBuild "xr-native"
 $dependency = Join-Path $work "openxr"
 $build = Join-Path $work "build"
 $output = Join-Path $repository "app\src\modernXr\jniLibs\arm64-v8a"
-$unixBuild = Join-Path $repository "app\build\xr-unixlib"
+$unixBuild = Join-Path $appBuild "xr-unixlib"
 $payloadOutput = Join-Path $repository "app\src\modernXr\assets"
 New-Item -ItemType Directory -Force -Path $dependency, $build, $output | Out-Null
 if (-not (Test-Path (Join-Path $dependency "prefab"))) {

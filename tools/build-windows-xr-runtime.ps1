@@ -5,7 +5,8 @@ param(
 $ErrorActionPreference = "Stop"
 $repository = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $repository "app\src\main\windows\openxr_runtime"
-$build = Join-Path $repository "app\build\windows-xr-runtime"
+$appBuild = if ($env:GAMENATIVE_BUILD_ROOT) { Join-Path $env:GAMENATIVE_BUILD_ROOT "app" } else { Join-Path $repository "app\build" }
+$build = Join-Path $appBuild "windows-xr-runtime"
 $output = Join-Path $repository "app\src\modernXr\assets"
 $ndk = Join-Path $env:LOCALAPPDATA "Android\Sdk\ndk\29.0.14206865"
 $clang = Join-Path $ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe"
