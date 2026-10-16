@@ -42,6 +42,12 @@ The seventh run passed the strict launch-config converter tests, OS-mask coverag
 
 Run eight passed all 21 focused methods: title-family flow 7, overlay environment 6, environment redaction 3 and runtime paths 5, then assembled the APK. The unchanged title-flow timeout did not recur; its underlying cause is unproved, not silently declared fixed. Native host coverage remains 256/256 separately. The expendable debug APK and native host-test output are eligible for exact reviewed cleanup after their verification consumers finish; preserve incremental build state, qualification receipts, the active host JNI runtime and signed RC22.
 
+## Fork CI follow-up
+
+Merge `1e41fb3d3999f8b7e0488d9d7e3252b8ee160ba4` was atomically pushed to feature and fork master. Normal Android CI run [38956718496](https://github.com/Darkaxt/GameNative/actions/runs/38956718496) was **cancelled at the 45-minute job limit**, not successful. Its build log independently confirms `minifyLegacyReleaseWithR8` failed with `OutOfMemoryError: Java heap space`; D8 also reported heap exhaustion. The configured Gradle maximum was 3 GiB and Kotlin ran in-process. No signed artifacts were produced or claimed verified from that run.
+
+The narrowly scoped workflow correction reuses the existing Linux release profile: 5 GiB Gradle heap, in-process Kotlin, two workers, no parallel projects and single-use daemon. All three original release bundle tasks remain, requested together in one invocation; the 45-minute job limit, signing checks and artifact behavior remain unchanged. YAML parsing and shell syntax checks passed. App source is unchanged, so the host test/APK evidence above remains applicable; the revised cloud profile requires fresh CI verification rather than being declared equivalent to the failed run.
+
 ## Delivery boundary
 
 Commit/push only after successful host qualification and final preservation review. Reconcile actual remote refs again before fast-forwarding fork master; do not force-push or publish/contact official upstream. No new RC tag is needed for this source integration. Inspect the resulting normal fork Android CI separately.

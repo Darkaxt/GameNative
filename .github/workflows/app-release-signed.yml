@@ -131,10 +131,12 @@ jobs:
         yes | "$SDKMANAGER" --install "build-tools;34.0.0"
 
     - name: Build with Gradle
+      # R8 exhausted 3 GiB in run 38956718496; reuse the qualified Linux release profile.
       run: |
-        ./gradlew -Pkotlin.daemon.jvmargs=-Xmx3g :app:bundleLegacyRelease
-        ./gradlew -Pkotlin.daemon.jvmargs=-Xmx3g :app:bundleModernRelease
-        ./gradlew -Pkotlin.daemon.jvmargs=-Xmx3g :app:bundleLegacyXrRelease
+        ./gradlew --no-daemon --no-configuration-cache --max-workers=2 --no-parallel \
+          '-Dorg.gradle.jvmargs=-Xmx5g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8' \
+          -Pkotlin.compiler.execution.strategy=in-process \
+          :app:bundleLegacyRelease :app:bundleModernRelease :app:bundleLegacyXrRelease
         free -m
 
     - name: Stage bundles
