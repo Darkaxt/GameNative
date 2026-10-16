@@ -14,16 +14,14 @@ import io.mockk.every
 import io.mockk.mockk
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.yield
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -39,34 +37,49 @@ class ArtworkSchedulerDiagnosticsTest {
         withCapture(clock = { captureClock }) {
             val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
             val historical = ArtworkReference(GameSource.GOG, url("historical"))
-            cache.put(historical, features(historical))
-            val comparing = CountDownLatch(1)
+            val historicalFeatures = features(historical)
+            assertTrue(historicalFeatures.isValid())
+            assertTrue("The initial comparison candidate must be admitted", cache.put(historical, historicalFeatures))
+            val sharedArtwork = ArtworkReference(GameSource.GOG, url("shared-fixture"))
+            val sharedFeatures = features(sharedArtwork)
+            assertTrue(sharedFeatures.isValid())
+            assertNotEquals(historicalFeatures.contentHash, sharedFeatures.contentHash)
+            assertTrue("Descriptor persistence is fixture setup, not the queue-readiness deadline", cache.put(sharedArtwork, sharedFeatures))
+            assertEquals(setOf(historicalFeatures.contentHash, sharedFeatures.contentHash), cache.featureHashes().toSet())
+            assertTrue(cards.indices.all { cache.original(ArtworkReference(GameSource.GOG, url("${it + 1}"))) == null })
+            val comparing = CompletableDeferred<Unit>()
             val release = CountDownLatch(1)
             val ready = CompletableDeferred<Unit>()
+            val lastScheduler = AtomicReference<ArtworkSchedulerSnapshot>()
             every { matcher.compare(any(), any()) } answers {
-                comparing.countDown()
-                check(release.await(15, TimeUnit.SECONDS)) { "Test must release the native comparison" }
+                comparing.complete(Unit)
+                release.await()
                 ArtworkMatch(false, 0, 0, 0.0, 0.0, 0, 0.0)
             }
             val facade = FeatureCanonicalLibraryDiagnostics()
             val sink = object : CanonicalLibraryDiagnosticSink by facade {
-                override fun artworkState(game: ArtworkGameTrace, observation: ArtworkTraceObservation) {
-                    facade.artworkState(game, observation)
-                    if (observation.stage == ArtworkTraceStage.FEATURES_READY && observation.reference?.url == url("66"))
+                override fun artworkScheduler(snapshot: ArtworkSchedulerSnapshot) {
+                    facade.artworkScheduler(snapshot)
+                    lastScheduler.set(snapshot)
+                    if (snapshot.producer == ArtworkSchedulerPhase.QUEUE_SEND && snapshot.producerRank == 66)
                         ready.complete(Unit)
                 }
             }
             val worker = launch {
                 owner(cache, sink) { reference ->
-                    if (reference.url == url("2")) withContext(Dispatchers.Default) {
-                        check(comparing.await(15, TimeUnit.SECONDS)) { "Consumer must enter its comparison" }
-                    }
-                    features(reference)
+                    if (reference.url == url("2")) comparing.await()
+                    sharedFeatures
                 }.project(cards)
             }
             try {
-                withTimeout(15_000) { ready.await() }
-                yield()
+                try {
+                    // This fixture persists real diagnostics; readiness is not a disk-throughput assertion.
+                    withTimeout(60_000) { ready.await() }
+                } catch (error: TimeoutCancellationException) {
+                    val last = lastScheduler.get()
+                    throw AssertionError("Queue-send frontier not reached: producer=${last?.producer}/${last?.producerRank}, " +
+                        "consumer=${last?.consumer}/${last?.consumerRank}, enqueued=${last?.enqueued}, dequeued=${last?.dequeued}", error)
+                }
                 captureClock = 5_000L
                 val events = FeatureDiagnostics.focusedCaptureReport().events
                 assertTargetSchedule(events)

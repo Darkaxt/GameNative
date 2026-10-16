@@ -1,6 +1,12 @@
 package app.gamenative.utils
 
+import app.gamenative.db.converters.AppConverter
 import app.gamenative.enums.PathType
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import `in`.dragonbra.javasteam.types.KeyValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -1197,6 +1203,67 @@ class KeyValueUtilsTest {
         assertEquals("saves", patterns[0].path)
         assertEquals("*.sav", patterns[0].pattern)
         assertEquals(PathType.WinMyDocuments, patterns[0].uploadRoot)
+    }
+
+    private fun launchOptionsApp() = KeyValue.loadFromString(
+        """
+            "appinfo"
+            {
+                "appid" "108600"
+                "common" { "genres" { "0" "23" } }
+                "config"
+                {
+                    "launch"
+                    {
+                        "7"
+                        {
+                            "executable" "jre/bin/javaw.exe"
+                            "arguments" "-jar game.jar"
+                            "config" { "oslist" "windows" "osarch" "64" }
+                        }
+                        "19"
+                        {
+                            "executable" "game.exe"
+                            "config" { "oslist" "windows" }
+                        }
+                        "custom" { "executable" "fallback.exe" }
+                    }
+                }
+            }
+        """.trimIndent(),
+    )!!.generateSteamApp()
+
+    @Test
+    fun launchOptionsKeepSparseSteamKeysAlongsideForkDiscoveryFacets() {
+        val app = launchOptionsApp()
+
+        assertEquals(listOf(7, 19, -1), app.config.launch.map { it.option })
+        assertEquals("-jar game.jar", app.config.launch.first().arguments)
+        assertEquals(listOf(23), app.genreIds)
+        assertEquals(8, app.ufsParseVersion)
+        assertEquals(CURRENT_PICS_PARSE_VERSION, app.picsParseVersion)
+    }
+
+    @Test
+    fun launchOptionsSurviveTheExistingDatabaseConfigConverter() {
+        val config = launchOptionsApp().config
+        val converter = AppConverter()
+
+        assertEquals(config, converter.toConfigInfo(converter.fromConfigInfo(config)))
+    }
+
+    @Test
+    fun oldStoredLaunchOptionsWithoutKeysRemainReadable() {
+        val converter = AppConverter()
+        val config = launchOptionsApp().config
+        val stored = Json.parseToJsonElement(converter.fromConfigInfo(config)).jsonObject
+        val oldLaunches = JsonArray(stored.getValue("launch").jsonArray.map { JsonObject(it.jsonObject - "option") })
+        val oldStored = JsonObject(stored + ("launch" to oldLaunches)).toString()
+
+        val restored = converter.toConfigInfo(oldStored)
+
+        assertEquals(config.launch.map { it.copy(option = -1) }, restored.launch)
+        assertEquals(listOf(-1, -1, -1), restored.launch.map { it.option })
     }
 
     private fun vrApp(common: String) = KeyValue.loadFromString(

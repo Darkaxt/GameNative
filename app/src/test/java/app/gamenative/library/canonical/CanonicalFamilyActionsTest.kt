@@ -63,7 +63,8 @@ import org.robolectric.junit.rules.TimeoutRule
 @Config(manifest = Config.NONE, application = ResolutionWorkerTestApplication::class, sdk = [29])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CanonicalFamilyActionsTest {
-    @get:Rule val timeout = TimeoutRule.seconds(30)
+    // Includes cold host JNI/graphics setup; runActionTest retains its 10-second behavior deadline.
+    @get:Rule val timeout = TimeoutRule.seconds(120)
     private lateinit var db: PluviaDatabase
     private lateinit var preferences: PreferredCopyRepository
     private lateinit var router: OwnedCopyActionRouter

@@ -1,0 +1,49 @@
+# Official upstream integration — 2026-10-16
+
+Status: HOST_QUALIFIED — 131 tests across 13 selected classes have complete passing evidence; Modern debug assembly passed. Earlier failed runs and the unchanged-suite timeout/retry remain recorded below. No tablet verification claimed.
+
+## Reconciliation
+
+Fresh GitHub release/API and remote-ref checks found latest stable **v1.3.0**, published 2026-10-14, target `0be4545b34a814dc7227125b3f112ced90706d4b`. It was already included in the fork. Integrate upstream master `7cff2a01bebf0bbb1004e9c642fcdc7e58b8be7d` into fork feature parent `916909fd4ba365437db81a5c7a0d0cebf600554c`; shared upstream ancestor is `e9d7f9ae60afd3b9c68651c7347a27683c6452c4`.
+
+Incoming commits:
+
+- `358117b5e`: hide `.DepotDownloader` and `.DownloadInfo` from guest directory listings.
+- `aa350491b`: contributor documentation pointing to the broken-games list.
+- `7cff2a01b`: Java-game launch-option selection, Java defaults, failure handling and process-environment redaction.
+
+The sole textual conflict was resolved semantically: retain independent fork PICS parser revision 1 and discovery facets while adopting upstream UFS parser revision 8. Fork media-conversion environment setup is preserved. No schema, production canonical grouping/resolver/artwork/manual-action implementation, local build tooling or signing identity changes are included.
+
+## Host verification
+
+- Native core: **256 passed, 0 failed**, GCC ASan/UBSan, no observed sanitizer errors. Existing compiler warnings remain. The first WSL command failed due to MSYS path conversion; the corrected command passed. This is not Android real-directory interposition testing or a reproducible rebuild of the supplied upstream `.so`.
+- Incoming AArch64 overlay binary: SHA-256 `34deaf0ca03bf33b7a25e6820beaa8cee5d2a609ff4c74ab1a59aedfcc96f0e0`; retained export/import/dependency contract and 16 KiB LOAD alignment reviewed.
+- Added integration coverage for sparse Steam launch keys, arguments and fork discovery facets; actual database-config converter round-trip; legacy serialized options without the new field; and process-environment redaction, malformed inputs and input preservation.
+- JVM qualification: **131 passed across 13 selected classes**, with no skipped methods in the qualified evidence. Nine complete passing suites from run seven plus four complete suites from focused run eight use identical frozen source, host JNI and resource settings. Run seven itself remains failed; this is not a claim of a single all-green full run.
+- Modern debug assembly: **BUILD SUCCESSFUL, exit 0** in run eight. Host-only preview, not a production release or install candidate: `app.gamenative`, version `1.3.0-rc22` / code 48, min SDK 29, target SDK 36, debuggable; APK 262,129,134 bytes, SHA-256 `8db918d2aa364e3fc02d23cda47aab9306b8a22bdcc80de8c7ce88c3fe4233d9`. APK v2 signature verified using the debug identity, not the production fork key. Packaged `lib/arm64-v8a/libgnoverlay.so` exactly matches the incoming hash above.
+- All Windows executions used `tools/local_gradle.py`, E:-routed generated output and the installed host-wide Gradle gate. Gate acquired; observed Gradle heap 3 GiB, Kotlin project strategy in-process (same heap), two workers, no parallel projects, one 1 GiB test fork, fail-fast enabled and ignore-failures disabled. No actual OOM observed. Single-use daemon exit verified. These are observed task settings, not a total-host memory guarantee.
+- After qualification, all 3018 frozen inputs remained exact. All 111 protected production/schema/tooling hashes matched the exact fork parent, and all three pre-existing POC files matched their immediately-post-automatic-merge snapshot; the incoming delta touches no POC paths.
+
+### Existing scheduler test qualification
+
+Three attempts failed before reaching APK assembly. Preserve these as failed runs, not passing evidence: initial readiness timeout; second run producer `CACHE_WRITE/4`, consumer `COMPARE/1`, enqueued 3/dequeued 1; third run producer `CACHE_WRITE/29`, consumer `COMPARE/1`, enqueued 28/dequeued 1. Fail-fast prevented the complete selected test set from running.
+
+Test-only corrections check cache admission and initial missing bindings, observe the actual rank-66 `QUEUE_SEND` frontier rather than `FEATURES_READY` plus `yield`, coordinate comparison entry with suspension, and always release the held native mock in `finally`. Two pre-persisted descriptor blobs avoid repeated descriptor-file creation while retaining all 70 distinct current references and the real bounded channel. Every queue/export/privacy assertion remains.
+
+The final prospective qualification changes the first test's readiness guard from 15 to 60 seconds: real cache metadata and diagnostic persistence remain inside setup, and this is a scheduler/export correctness test, not a disk-throughput benchmark. The original 15-second value is not a user performance acceptance criterion. No production behavior or Android performance guarantee is changed. Exact low-level filesystem delay is unproved; the host exFAT volume supports the observed Java atomic move, and a separate fsync probe did not reproduce the full workload. Do not infer that `CACHE_WRITE` phase entry alone identifies the slow operation.
+
+The fourth run passed both scheduler tests (43.120 seconds combined) and the diagnostics/explanation/build-isolation suites, then failed during `CanonicalFamilyActionsTest` fixture setup: production artwork extraction returned null. The invocation omitted the existing host-JNI environment setting; investigate and qualify that environment rather than bypassing real-image assertions. Overall 21 tests were dispatched, 19 passed, one failed and one skipped; APK assembly was not reached. All 3018 frozen source inputs remained unchanged. The gate was acquired and its single-use daemon exit verified; no actual OOM was observed.
+
+The native-enabled fifth run passed fixture extraction but failed the first actions test's outer 30-second Robolectric rule (68.116-second total method time). That outer rule wraps `@Before`, including cold native/graphics setup. The next prospective profile gives the two real-JNI action/library-flow fixtures a 120-second outer setup/teardown allowance while retaining their existing 10-second action/flow body deadlines and every assertion. No user or Android performance criterion is revised. The exact retained Windows x64 OpenCV JNI runtime was freshly hash-verified against its prior qualification receipt (`opencv_java4.dll`, SHA-256 `952fbd693da18c7fec1e4a511670c10030db7ab5145ff94b1e1b0ab1d297dbe2`); unchanged artwork extractor source requires no native rebuild. This host runtime is not Android parity evidence.
+
+The sixth run passed all canonical action, artwork-flow, title-flow and resolver suites, then the strict new `AppConverter` round-trip test exposed an existing integer OS-mask defect: the zero-valued `none` sentinel was always included alongside recognized OS bits. Corrected `OS.from(Int)` to add only recognized nonzero bits and use `{none}` only when no supported bit is present. Added all seven supported-mask round-trips plus zero, unknown-only and mixed-known/unknown coverage. The launch-config round-trip assertion is unchanged. This fixes actual persisted launch configuration compatibility without changing schema or discarding old serialized data. Sixth-run totals: 112 dispatched, 110 passed, one failed and one skipped; APK assembly was not reached. The following qualification includes the OS test as a thirteenth selected class.
+
+The seventh run passed the strict launch-config converter tests, OS-mask coverage and all other completed suites (110 passed), then the unchanged title-family flow suite hit its 10-second deadline waiting for the first repository card emission; one subsequently dispatched test was skipped by fail-fast. That class had passed all seven methods in run six. Preserve the seventh run as failed; no root cause or Android performance conclusion is inferred. The focused follow-up reruns that class and the three previously unreached overlay/redaction/runtime classes plus APK assembly, with unchanged source, host runtime and resource profile. Successful unchanged suites from run seven are retained rather than repeatedly rerun.
+
+Run eight passed all 21 focused methods: title-family flow 7, overlay environment 6, environment redaction 3 and runtime paths 5, then assembled the APK. The unchanged title-flow timeout did not recur; its underlying cause is unproved, not silently declared fixed. Native host coverage remains 256/256 separately. The expendable debug APK and native host-test output are eligible for exact reviewed cleanup after their verification consumers finish; preserve incremental build state, qualification receipts, the active host JNI runtime and signed RC22.
+
+## Delivery boundary
+
+Commit/push only after successful host qualification and final preservation review. Reconcile actual remote refs again before fast-forwarding fork master; do not force-push or publish/contact official upstream. No new RC tag is needed for this source integration. Inspect the resulting normal fork Android CI separately.
+
+The retained signed RC22 and its Samsung DREDGE live-acceptance blocker are unchanged. No Android command, install, account action or tablet test belongs to this host task.

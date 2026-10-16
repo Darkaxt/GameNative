@@ -68,7 +68,8 @@ import org.robolectric.junit.rules.TimeoutRule
 @Config(manifest = Config.NONE, application = ResolutionWorkerTestApplication::class, sdk = [29])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class CanonicalFamilyLibraryFlowTest {
-    @get:Rule val timeout = TimeoutRule.seconds(30)
+    // Includes cold host JNI/graphics setup; runFlowTest retains its 10-second behavior deadline.
+    @get:Rule val timeout = TimeoutRule.seconds(120)
     @get:Rule val temporary = TemporaryFolder()
     private val evidenceDirectory by lazy { temporary.newFolder() }
     private lateinit var db: PluviaDatabase

@@ -29,12 +29,12 @@ enum class OS(val code: Int) {
 
         fun from(code: Int): EnumSet<OS> {
             val result = EnumSet.noneOf(OS::class.java)
-            OS.entries.forEach { appType ->
-                if (code and appType.code == appType.code) {
-                    result.add(appType)
+            OS.entries.forEach { os ->
+                if (os != none && code and os.code == os.code) {
+                    result.add(os)
                 }
             }
-            return result
+            return result.ifEmpty { EnumSet.of(none) }
         }
 
         fun code(value: EnumSet<OS>): Int {
