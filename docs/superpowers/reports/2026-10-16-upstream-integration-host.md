@@ -1,6 +1,6 @@
 # Official upstream integration — 2026-10-16
 
-Status: HOST_QUALIFIED — 131 tests across 13 selected classes have complete passing evidence; Modern debug assembly passed. Earlier failed runs and the unchanged-suite timeout/retry remain recorded below. No tablet verification claimed.
+Status: COMPLETE — host upstream integration published and signed fork CI verified. 131 tests across 13 selected classes have complete passing evidence; Modern debug assembly passed. Earlier failed runs and the unchanged-suite timeout/retry remain recorded below. No tablet verification claimed.
 
 ## Reconciliation
 
@@ -50,10 +50,18 @@ The first workflow correction reuses the existing Linux release profile: 5 GiB G
 
 Run [38962598370](https://github.com/Darkaxt/GameNative/actions/runs/38962598370), commit `2fa0db436f2b05580fb227b849cc40370f1b7f3a`, also reached the 45-minute limit. Its log shows Legacy and LegacyXr Kotlin compilation starting less than one second apart in the combined task graph, then Gradle reporting heap pressure with a confirmed 5 GiB maximum. No actual second-run OOM exception or exact low-level stall cause is claimed. No signed artifact was produced.
 
-The next prospective correction restores sequential **single-variant Gradle invocations**, each with a single-use daemon and the same 5 GiB/two-worker/no-parallel profile. This prevents overlapping variant compilation within one task graph and restores per-invocation heap isolation. No further heap increase is made. The normal three-bundle job receives a 90-minute envelope, matching three existing 30-minute per-bundle release envelopes; the separate validation-candidate job retains its 45-minute limit. This is a prospective execution-budget change, not a successful verification claim or a change to product performance criteria. YAML parsing, byte-exact Linux shell syntax and a no-build argument recorder verified all three calls and their flags. App source and signing behavior remain unchanged. This revision still requires actual cloud verification.
+The next prospective correction restores sequential **single-variant Gradle invocations**, each with a single-use daemon and the same 5 GiB/two-worker/no-parallel profile. This prevents overlapping variant compilation within one task graph and restores per-invocation heap isolation. No further heap increase is made. The normal three-bundle job receives a 90-minute envelope, matching three existing 30-minute per-bundle release envelopes; the separate validation-candidate job retains its 45-minute limit. This is a prospective execution-budget change, not a successful verification claim or a change to product performance criteria. YAML parsing, byte-exact Linux shell syntax and a no-build argument recorder verified all three calls and their flags. App source and signing behavior remain unchanged. Its actual cloud verification is recorded below.
+
+## Final cloud verification
+
+[Android CI 38968630333](https://github.com/Darkaxt/GameNative/actions/runs/38968630333), exact source commit `898e6ddf802a5bd5030fc1b44b0312ba0fa449bb`, completed **SUCCESS**. Sequential release builds succeeded in 7m05s (Legacy), 6m51s (Modern) and 6m57s (LegacyXr). Persistent fork signing, signature verification and all three artifact uploads passed. The actual verification output reports the pinned certificate SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9` for each of `universal.apk`, `universal-modern.apk` and `universal-legacy-xr.apk`.
+
+GitHub artifact metadata binds all three non-expired artifacts to that exact run/source: `app-release-signed`, `app-release-signed-modern` and `app-release-signed-legacy-xr`. No duplicate local download was needed. These are normal signed nightly compatibility-channel artifacts, not a newly tagged RC or a side-by-side validation build. The skipped validation-candidate job is intentional for the ordinary push workflow.
 
 ## Delivery boundary
 
-Commit/push only after successful host qualification and final preservation review. Reconcile actual remote refs again before fast-forwarding fork master; do not force-push or publish/contact official upstream. No new RC tag is needed for this source integration. Inspect the resulting normal fork Android CI separately.
+Qualified source and CI corrections were atomically pushed to the feature branch and fork master after fresh remote reconciliation, without force-push or official-upstream contact. This final report update is documentation-only; the signed artifact source remains the exact commit above. No new RC tag was created.
 
-The retained signed RC22 and its Samsung DREDGE live-acceptance blocker are unchanged. No Android command, install, account action or tablet test belongs to this host task.
+Reviewed cleanup applied all six exact disposable entries, reclaiming 263,359,231 file bytes: the host-only debug preview and native test/probe output. Incremental E: build state, qualification evidence, the retained host JNI runtime and the signed RC22 side-by-side APK are preserved; the latter was freshly hash-verified as `cede175ac3cdc9b004d8075d4651411522afab19fb6c7520f26a1516d4e93300`.
+
+The separate Samsung DREDGE live-acceptance blocker is unchanged. This host integration is complete, not live acceptance. No Android command, install, account action or tablet test occurred.
