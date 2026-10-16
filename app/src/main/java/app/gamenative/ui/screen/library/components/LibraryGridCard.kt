@@ -106,7 +106,6 @@ internal fun GridViewCard(
     val isCapsule = paneType == PaneType.GRID_CAPSULE
     val topOverlayPadding = if (isCapsule) 8.dp else 4.dp
     val cardContentBottomPadding = if (isCapsule) 12.dp else 8.dp
-    val topIconPadding = if (isCapsule) 10.dp else 8.dp
     val bottomGradientHeight = if (isCapsule) 80.dp else 56.dp
     val glowColor = MaterialTheme.colorScheme.primary
     val focusHaloModifier = if (isFocused && showFocusGlow) {
@@ -425,66 +424,55 @@ internal fun GridViewCard(
                 }
                 }
 
-                // Top-left: Featured badge, GOG rating (store rec), or Recommended/compat badge
-                if (card.isFeatured) {
-                    FeaturedBadge(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(top = topOverlayPadding, start = topOverlayPadding),
-                    )
-                } else if (card.isRecommended && card.recStoreCard) {
-                    val productId = card.recommendedGameId.toLongOrNull()
-                    val rating by produceState(initialValue = card.recRating, productId) {
-                        if (value == null && productId != null) {
-                            value = GogRecommendationsRepository.getRating(productId)
+                // Share the visible edge insets and reserve space for both top overlays.
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(top = topOverlayPadding, start = topOverlayPadding, end = topOverlayPadding),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (card.isFeatured) {
+                            FeaturedBadge()
+                        } else if (card.isRecommended && card.recStoreCard) {
+                            val productId = card.recommendedGameId.toLongOrNull()
+                            val rating by produceState(initialValue = card.recRating, productId) {
+                                if (value == null && productId != null) {
+                                    value = GogRecommendationsRepository.getRating(productId)
+                                }
+                            }
+                            rating?.let { RecRatingPill(rating = it) }
+                        } else {
+                            LibraryCompatibilityBadge(card = card)
                         }
                     }
-                    rating?.let {
-                        RecRatingPill(
-                            rating = it,
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(top = topOverlayPadding, start = topOverlayPadding),
-                        )
-                    }
-                } else {
-                    LibraryCompatibilityBadge(
-                        card = card,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(top = topOverlayPadding, start = topOverlayPadding),
-                    )
-                }
 
-                // Top-right: seed-game badge (store rec), source icon for normal cards
-                if (card.isRecommended && card.recStoreCard) {
-                    if (!card.recSeedIconUrl.isNullOrBlank() || card.recSeedCount >= 2) {
-                        RecSimilarBadge(
-                            iconUrl = card.recSeedIconUrl,
-                            extraCount = (card.recSeedCount - 1).coerceAtLeast(0),
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = topOverlayPadding, end = topOverlayPadding),
-                        )
-                    }
-                } else if (card.identity is LibraryCardIdentity.Canonical) {
-                    OwnedSourceCopiesAction(
-                        sources = card.orderedSources,
-                        onClick = onCopies,
-                        modifier = copiesActionModifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = topOverlayPadding, end = topOverlayPadding),
-                        iconSize = if (isCapsule) 14 else 12,
-                    )
-                } else if (!card.isRecommended) {
-                    card.orderedSources.firstOrNull()?.let { source ->
-                        GameSourceIcon(
-                            gameSource = source,
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = topIconPadding, end = topIconPadding),
+                    // Keep the copies hitbox while aligning its visible badges to the edge.
+                    if (card.isRecommended && card.recStoreCard) {
+                        if (!card.recSeedIconUrl.isNullOrBlank() || card.recSeedCount >= 2) {
+                            RecSimilarBadge(
+                                iconUrl = card.recSeedIconUrl,
+                                extraCount = (card.recSeedCount - 1).coerceAtLeast(0),
+                            )
+                        }
+                    } else if (card.identity is LibraryCardIdentity.Canonical) {
+                        OwnedSourceCopiesAction(
+                            sources = card.orderedSources,
+                            onClick = onCopies,
+                            modifier = copiesActionModifier,
                             iconSize = if (isCapsule) 14 else 12,
+                            contentAlignment = Alignment.TopEnd,
                         )
+                    } else if (!card.isRecommended) {
+                        card.orderedSources.firstOrNull()?.let { source ->
+                            GameSourceIcon(
+                                gameSource = source,
+                                iconSize = if (isCapsule) 14 else 12,
+                                alignmentBoxSize = if (isCapsule) 14 else 12,
+                            )
+                        }
                     }
                 }
             }

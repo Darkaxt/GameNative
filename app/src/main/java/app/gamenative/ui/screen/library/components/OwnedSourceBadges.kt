@@ -55,6 +55,7 @@ internal fun OwnedSourceCopiesAction(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     iconSize: Int = 12,
+    contentAlignment: Alignment = Alignment.Center,
 ) {
     val actionLabel = stringResource(R.string.canonical_copies_action)
     Box(
@@ -66,7 +67,7 @@ internal fun OwnedSourceCopiesAction(
                 role = Role.Button,
                 onClick = onClick,
             ),
-        contentAlignment = Alignment.Center,
+        contentAlignment = contentAlignment,
     ) {
         OwnedSourceBadges(sources = sources, iconSize = iconSize)
     }

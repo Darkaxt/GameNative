@@ -14,8 +14,8 @@ permissions:
 env:
   RELEASE_TAG: ${{ inputs.release_tag }}
   EXPECTED_FORK_CERT_SHA256: 90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9
-  EXPECTED_VERSION_CODE: "47"
-  EXPECTED_VERSION_NAME: "1.3.0-rc21"
+  EXPECTED_VERSION_CODE: "48"
+  EXPECTED_VERSION_NAME: "1.3.0-rc22"
 
 jobs:
   build:
@@ -270,12 +270,13 @@ jobs:
 
             All APKs use the persistent Darkaxt fork release certificate (SHA-256 `90d491f4c194d4f6e9efaf2ba1a548e59388edd9ecbd96853d330fe6a9c260c9`).
 
-            ## RC21 diagnostic checkpoint
+            ## RC22 artwork scheduling checkpoint
 
-            - Integrates current official GameNative updates through `e9d7f9ae6`, preserving the fork's canonical library and native store-copy actions.
-            - Focused artwork capture now records each selected original's real acquisition rank and missing/warm cache classification before fetching.
-            - Bounded, identity-free shared scheduler snapshots expose preparation, acquisition, queue, index and consumer progress even when a later selected original has not started. Latest observed snapshots are retained on export/stop with an explicit age.
-            - This is a causal-logging checkpoint, not a claimed DREDGE matching fix. Scheduling, exact full-title grouping, manual overrides, read-only **Explain aggregation**, and ORB-v1 thresholds are unchanged; production artwork/restart and fresh automatic resolver acceptance remain live checks.
+            - Preserves a generic fair artwork-acquisition frontier across unrelated library changes, rather than restarting unchanged waiting originals behind newly replaced entries.
+            - Cached-but-unprocessed artwork retains pending status when a generation is cancelled; cache binding and queueing are not mistaken for completed matching.
+            - Grid store badges mirror the compatibility label's top/side insets while preserving owned-copy actions and their accessible touch targets.
+            - Keeps current official updates through `e9d7f9ae6`, exact native/manual fences, immediate full-title grouping, read-only **Explain aggregation**, focused diagnostics and unchanged ORB-v1 thresholds.
+            - Host regression coverage is not live acceptance: actual production artwork, restart persistence and fresh automatic non-review resolver results remain the next Samsung checks.
           files: |
             release-assets/gamenative-${{ env.RELEASE_TAG }}-compat.apk
             release-assets/gamenative-${{ env.RELEASE_TAG }}-compat-legacy-xr.apk

@@ -193,15 +193,22 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
         val work: Deferred<ArtworkFeatures?>)
     private data class FailedOriginal(val owners: Set<ArtworkInput>, val atNanos: Long)
 
-    /** One observation-owned acquisition survives unrelated matching generations; no descriptor backlog. */
+    /** Observation-owned scheduling metadata and one acquisition; neither grants native evidence authority. */
     private inner class PendingAcquisition(private val scope: CoroutineScope) {
         private val lock = Mutex()
         private var pending: PendingOriginal? = null
         private val failures = mutableMapOf<ArtworkReference, FailedOriginal>()
+        private val frontier = linkedMapOf<ArtworkReference, Set<ArtworkInput>>()
+        private val needsConsumption = hashSetOf<ArtworkReference>()
 
         suspend fun retain(inputs: Set<ArtworkInput>) {
             val eligible = inputs.filterTo(hashSetOf()) { it.eligible }.takeIf { it.size >= 2 }.orEmpty()
             val cancelled = lock.withLock {
+                frontier.entries.removeAll { entry ->
+                    entry.setValue(entry.value.intersect(eligible))
+                    entry.value.isEmpty()
+                }
+                needsConsumption.retainAll(frontier.keys)
                 failures.entries.removeAll { (_, failure) ->
                     failure.owners.none { it in eligible } || System.nanoTime() - failure.atNanos >= ORIGINAL_RETRY_NANOS
                 }
@@ -214,6 +221,25 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
         }
 
         suspend fun failedReferences(): Set<ArtworkReference> = lock.withLock { failures.keys.toSet() }
+
+        suspend fun order(owners: Map<ArtworkReference, Set<ArtworkInput>>, bound: Set<ArtworkReference>): List<ArtworkReference> = lock.withLock {
+            // Only currently native-admitted references can retain a waiting position.
+            frontier.entries.removeAll { (reference, prior) -> owners[reference].orEmpty().none { it in prior } }
+            needsConsumption.retainAll(frontier.keys)
+            owners.forEach { (reference, current) -> frontier[reference] = current }
+            frontier.keys.sortedWith(compareBy({ it in bound && it !in needsConsumption }, { it in failures }))
+        }
+
+        suspend fun started(reference: ArtworkReference) = lock.withLock {
+            // Arm before cache writes: a cancelled channel must not turn unfinished work into warm tail work.
+            needsConsumption.add(reference)
+        }
+
+        suspend fun enqueued(reference: ArtworkReference) = lock.withLock {
+            frontier.remove(reference)?.let { frontier[reference] = it }
+        }
+
+        suspend fun consumed(reference: ArtworkReference) = lock.withLock { needsConsumption.remove(reference) }
 
         suspend fun original(reference: ArtworkReference, owners: Set<ArtworkInput>): ArtworkFeatures? {
             while (true) {
@@ -241,7 +267,9 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
         }
 
         suspend fun close() {
-            val work = lock.withLock { pending?.work.also { pending = null; failures.clear() } }
+            val work = lock.withLock {
+                pending?.work.also { pending = null; failures.clear(); frontier.clear(); needsConsumption.clear() }
+            }
             work?.cancelAndJoin()
         }
     }
@@ -395,11 +423,14 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
             for (pair in warm) compared(pair.first, pair.second, accepted = true, cached = true)
             emit(Evidence(project(warm), trace))
             val failed = acquisitions?.failedReferences().orEmpty()
-            val acquisitionOrder = byReference.entries.sortedWith(compareBy(
-                { contentByReference.containsKey(it.key) }, { it.key in failed }))
+            val inputs = inputKey(cards).associateBy { it.canonicalId }
+            val referenceOwners = byReference.mapValues { (_, sources) -> sources.map { inputs.getValue(it.canonicalId) }.toSet() }
+            val acquisitionOrder = acquisitions?.order(referenceOwners, contentByReference.keys)
+                ?: byReference.keys.sortedWith(compareBy({ contentByReference.containsKey(it) }, { it in failed }))
             scheduler.scheduled(acquisitionOrder.size)
-            acquisitionOrder.forEachIndexed { index, (reference, sources) ->
+            acquisitionOrder.forEachIndexed { index, reference ->
                 currentCoroutineContext().ensureActive()
+                val sources = byReference.getValue(reference)
                 val cacheState = when {
                     contentByReference.containsKey(reference) && reference in failed -> ArtworkScheduleCacheState.WARM_COOLDOWN
                     contentByReference.containsKey(reference) -> ArtworkScheduleCacheState.WARM
@@ -411,7 +442,6 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                         referenceCount = acquisitionOrder.size, acquisitionRank = index + 1, scheduleCacheState = cacheState))
                 }
             }
-            val inputs = inputKey(cards).associateBy { it.canonicalId }
             scheduler.preparing(SchedulerPhase.LOAD_FEATURE_HASHES)
             val indexedHashes = withContext(Dispatchers.IO) { cache.featureHashes() }
             scheduler.preparing(SchedulerPhase.DONE)
@@ -420,13 +450,14 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                 val acquired = Channel<AcquiredOriginal>(64)
                 val fetching = launch {
                     try {
-                        for ((index, entry) in acquisitionOrder.withIndex()) {
-                            val (reference, sources) = entry
+                        for ((index, reference) in acquisitionOrder.withIndex()) {
+                            val sources = byReference.getValue(reference)
                             val rank = index + 1
                             currentCoroutineContext().ensureActive()
                             scheduler.producing(SchedulerPhase.ACQUIRE, rank)
                             sources.map { it.canonicalId }.distinct().forEach { stage(it, ArtworkTraceStage.ORIGINAL_FETCHING, reference) }
-                            val owners = sources.map { inputs.getValue(it.canonicalId) }.toSet()
+                            val owners = referenceOwners.getValue(reference)
+                            acquisitions?.started(reference)
                             val image = if (acquisitions == null) original(reference) else acquisitions.original(reference, owners)
                             currentCoroutineContext().ensureActive()
                             scheduler.producing(SchedulerPhase.NATIVE_REVALIDATION, rank)
@@ -451,6 +482,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                             scheduler.producing(SchedulerPhase.QUEUE_SEND, rank)
                             acquired.send(AcquiredOriginal(reference, usable, stale, rank))
                             scheduler.enqueued(rank)
+                            acquisitions?.enqueued(reference)
                         }
                         scheduler.producing(SchedulerPhase.DONE, acquisitionOrder.size)
                     } catch (error: Exception) {
@@ -556,6 +588,7 @@ class CanonicalFamilyArtworkCorroborator internal constructor(
                                     .flatMap { listOf(it.first, it.second) }.toSet())
                                 scheduler.consuming(SchedulerPhase.PUBLISH)
                                 emit(Evidence(project(accepted), trace))
+                                if (completed && contentByReference[reference] == image.contentHash) acquisitions?.consumed(reference)
                                 scheduler.completed()
                                 scheduler.consuming(SchedulerPhase.RECEIVE)
                                 yield()

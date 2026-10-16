@@ -430,6 +430,158 @@ class ArtworkGroupingTraceTest {
         } finally { collector.cancelAndJoin() }
     }
 
+    @Test fun unchangedTailOriginalsPublishWhileEarlierNativeArtworkKeepsChanging() = runBlocking {
+        withTimeout(30_000) {
+            val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+            val target = listOf(card(13), card(14))
+            val targetRefs = target.map { ArtworkReference(GameSource.GOG, url(it.copies.single().key.stableSourceId)) }
+            val targetHashes = targetRefs.map { features(it).contentHash }.toSet()
+            every { matcher.compare(any(), any()) } answers {
+                val accepted = setOf(firstArg<ArtworkFeatures>().contentHash, secondArg<ArtworkFeatures>().contentHash) == targetHashes
+                ArtworkMatch(accepted, 30, if (accepted) 28 else 0, if (accepted) 0.93 else 0.0, 0.4, 10, 1.0)
+            }
+            fun snapshot(revision: Int) = (1L..12L).map { id ->
+                val card = card(id)
+                card.copy(copies = card.copies.map { it.copy(originalArtwork = listOf(
+                    ArtworkReference(GameSource.GOG, url("$id-revision-$revision")))) })
+            } + target
+            var current = snapshot(0)
+            val upstream = MutableSharedFlow<List<CanonicalLibraryCard>>(replay = 1)
+            val requests = Channel<Pair<ArtworkReference, CompletableDeferred<Unit>>>(Channel.UNLIMITED)
+            val cancelled = Channel<Unit>(Channel.UNLIMITED)
+            val consumed = Channel<Long>(Channel.UNLIMITED)
+            val consumedGenerations = mutableSetOf<Long>()
+            val acquired = mutableSetOf<ArtworkReference>()
+            val published = CompletableDeferred<Unit>()
+            val sink = object : CanonicalLibraryDiagnosticSink by diagnostics {
+                override fun artworkScheduler(snapshot: ArtworkSchedulerSnapshot) {
+                    if (snapshot.stage == ArtworkSchedulerStage.CANCELLED) cancelled.trySend(Unit)
+                    if (snapshot.completed >= 2 && consumedGenerations.add(snapshot.generation)) consumed.trySend(snapshot.generation)
+                }
+            }
+            val producer = CanonicalFamilyArtworkCorroborator(source { ref ->
+                val release = CompletableDeferred<Unit>()
+                requests.send(ref to release)
+                release.await()
+                acquired += ref
+                features(ref)
+            }, cache, matcher, { key ->
+                val card = current.single { it.copies.single().key == key }
+                val originals = card.copies.single().originalArtwork.map { it.url }.ifEmpty { listOf(url(key.stableSourceId)) }
+                OwnedCopyRuntimeResult.Available(runtime(card, originals))
+            }, sink)
+            val collector = launch {
+                producer.observe(upstream).collect { cards ->
+                    if (cards.any { family -> family.copies.map { it.key }.toSet() == target.map { it.copies.single().key }.toSet() })
+                        published.complete(Unit)
+                }
+            }
+            try {
+                upstream.emit(current)
+                repeat(8) { revision ->
+                    repeat(2) { requests.receive().second.complete(Unit) }
+                    val held = requests.receive()
+                    while (consumed.receive() != revision + 1L) { /* Await this generation's consumer, not producer speed. */ }
+                    current = snapshot(revision + 1)
+                    upstream.emit(current)
+                    cancelled.receive()
+                    held.second.complete(Unit)
+                }
+                // Keep the next acquisition blocked: no quiet final drain may make this assertion pass.
+                val held = requests.receive()
+                assertTrue("Unchanged tail originals must be acquired while earlier artwork continues changing",
+                    targetRefs.all { it in acquired })
+                published.await()
+                assertTrue("Publication must have actual accepted artwork support", cache.acceptedPairs().any {
+                    setOf(it.first, it.second) == targetHashes
+                })
+                assertFalse("The final acquisition remains gated", held.second.isCompleted)
+            } finally { collector.cancelAndJoin(); requests.cancel(); cancelled.cancel(); consumed.cancel() }
+        }
+    }
+
+    @Test fun cancelledQueuedOriginalsRemainPendingEvenAfterTheirCacheBindingsBecomeWarm() = runTest {
+        val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
+        val historical = ArtworkReference(GameSource.GOG, url("historical"))
+        cache.put(historical, features(historical))
+        val targets = listOf(card(13), card(14))
+        val targetRefs = targets.map { ArtworkReference(GameSource.GOG, url(it.copies.single().key.stableSourceId)) }
+        val targetHashes = targetRefs.map { features(it).contentHash }.toSet()
+        fun snapshot(revision: Int) = (1L..12L).map { id ->
+            val card = card(id)
+            card.copy(copies = card.copies.map { it.copy(originalArtwork = listOf(
+                ArtworkReference(GameSource.GOG, url("$id-revision-$revision")))) })
+        } + targets + card(15)
+        var current = snapshot(0)
+        val comparisonEntered = CountDownLatch(1)
+        val releaseComparison = CountDownLatch(1)
+        var firstComparison = true
+        every { matcher.compare(any(), any()) } answers {
+            if (firstComparison) {
+                firstComparison = false
+                comparisonEntered.countDown()
+                assertTrue("Test must release the blocked consumer", releaseComparison.await(10, TimeUnit.SECONDS))
+            }
+            val accepted = setOf(firstArg<ArtworkFeatures>().contentHash, secondArg<ArtworkFeatures>().contentHash) == targetHashes
+            ArtworkMatch(accepted, 30, if (accepted) 28 else 0, if (accepted) 0.93 else 0.0, 0.4, 10, 1.0)
+        }
+        val upstream = MutableSharedFlow<List<CanonicalLibraryCard>>(replay = 1)
+        val requests = Channel<Pair<ArtworkReference, CompletableDeferred<Unit>>>(Channel.UNLIMITED)
+        val cancelled = CompletableDeferred<Unit>()
+        val replacementRendered = CompletableDeferred<Unit>()
+        val published = CompletableDeferred<Unit>()
+        val sink = object : CanonicalLibraryDiagnosticSink by diagnostics {
+            override fun artworkScheduler(snapshot: ArtworkSchedulerSnapshot) {
+                if (snapshot.stage == ArtworkSchedulerStage.CANCELLED) cancelled.complete(Unit)
+            }
+        }
+        val producer = CanonicalFamilyArtworkCorroborator(source { ref ->
+            val release = CompletableDeferred<Unit>()
+            requests.send(ref to release)
+            release.await()
+            features(ref)
+        }, cache, matcher, { key ->
+            val card = current.single { it.copies.single().key == key }
+            val originals = card.copies.single().originalArtwork.map { it.url }.ifEmpty { listOf(url(key.stableSourceId)) }
+            OwnedCopyRuntimeResult.Available(runtime(card, originals))
+        }, sink)
+        val collector = launch {
+            producer.observe(upstream).collect { cards ->
+                if (cards.first().copies.first().originalArtwork.any { it.url == url("1-revision-1") })
+                    replacementRendered.complete(Unit)
+                if (cards.any { family -> family.copies.map { it.key }.toSet() == targets.map { it.copies.single().key }.toSet() })
+                    published.complete(Unit)
+            }
+        }
+        try {
+            upstream.emit(current)
+            requests.receive().second.complete(Unit)
+            assertTrue(withContext(Dispatchers.Default) { comparisonEntered.await(10, TimeUnit.SECONDS) })
+            repeat(13) { requests.receive().second.complete(Unit) }
+            val held = requests.receive() // Producer has sent both targets, while the consumer is still blocked.
+            assertEquals(url("15"), held.first.url)
+            assertTrue(targetRefs.all { cache.contentHash(it) != null })
+            assertTrue(cache.acceptedPairs().isEmpty())
+            current = snapshot(1)
+            upstream.emit(current)
+            replacementRendered.await()
+            testScheduler.runCurrent() // Drive cancellation into cancelAndJoin before releasing the Default worker.
+            releaseComparison.countDown()
+            cancelled.await()
+            held.second.complete(Unit)
+            assertTrue("The cancelled consumer must not have saved the target pair", cache.acceptedPairs().isEmpty())
+            for (target in targetRefs) {
+                val request = requests.receive()
+                assertEquals("Cached but unconsumed targets must precede freshly replaced missing prefixes", target, request.first)
+                request.second.complete(Unit)
+            }
+            val next = requests.receive()
+            published.await()
+            assertTrue(cache.acceptedPairs().any { setOf(it.first, it.second) == targetHashes })
+            assertFalse("No quiet final acquisition drain", next.second.isCompleted)
+        } finally { releaseComparison.countDown(); collector.cancelAndJoin(); requests.cancel() }
+    }
+
     @Test fun singletonFinishesWithoutAcquisitionOrInventedArtworkFailure() = runTest {
         val cache = ArtworkFeatureCache(temporary.newFolder(), MetadataClock { 100L })
         val acquired = mutableListOf<ArtworkReference>()
